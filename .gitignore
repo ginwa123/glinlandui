@@ -1,0 +1,21 @@
+# Zig build output and caches
+.zig-cache/
+zig-cache/
+zig-out/
+
+# Local package/cache data
+zig-pkg/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
