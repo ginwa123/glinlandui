@@ -5,7 +5,11 @@
 //! so a CPU-only platform can compile the same Clay/UI surface without
 //! pretending to present a Wayland window.
 const builtin = @import("builtin");
-const platform = if (builtin.os.tag == .linux)
+// Test builds select the portable window module on EVERY platform, so the
+// parity suite never analyzes the Linux Wayland module and its tests. That
+// keeps the cross-platform test count identical. Production on Linux still
+// uses wayland.zig; the native window module is tested in `native-test`.
+const platform = if (builtin.os.tag == .linux and !builtin.is_test)
     @import("wayland.zig")
 else
     @import("wayland_portable.zig");

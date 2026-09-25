@@ -558,7 +558,7 @@ fn seatCapabilities(data: ?*anyopaque, seat: ?*c.struct_wl_seat, capabilities: u
         const p = c.wl_seat_get_pointer(seat);
         win.pointer_obj = p;
         if (p) |ptr| {
-            const full = c.struct_wl_pointer_listener{
+            var full = c.struct_wl_pointer_listener{
                 .enter = pointerEnter,
                 .leave = pointerLeave,
                 .motion = pointerMotion,
@@ -569,8 +569,13 @@ fn seatCapabilities(data: ?*anyopaque, seat: ?*c.struct_wl_seat, capabilities: u
                 .axis_stop = pointerAxisStop,
                 .axis_discrete = pointerAxisDiscrete,
                 .axis_relative_direction = pointerAxisRelativeDirection,
-                .warp = pointerWarp,
             };
+            // `warp` was added to wl_pointer in Wayland 1.22 (seat v8). We
+            // bind v7, so the field is only present on newer headers — set it
+            // conditionally so this builds against older distro headers too.
+            if (comptime @hasField(c.struct_wl_pointer_listener, "warp")) {
+                full.warp = pointerWarp;
+            }
             _ = c.wl_pointer_add_listener(ptr, &full, win);
         }
     }

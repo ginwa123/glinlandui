@@ -1,21 +1,32 @@
-//! CPU-only text facade for platforms that do not ship the Pango/Cairo stack.
+//! Text facade.
 //!
-//! The native Linux path continues to use wayland/text.zig, which is backed by
-//! the pangocairo shim. This fallback intentionally exposes the same measurement
-//! contract using the historical deterministic estimator, so layouts and the
-//! headless test harness behave identically without native dependencies.
+//! Production on Linux uses wayland/text.zig (pangocairo). Every other host —
+//! and every TEST build, on every OS — uses text_portable.zig, the same
+//! deterministic estimator with no native dependencies.
+//!
+//! The test-build rule is what keeps the cross-platform test count identical:
+//! the parity suite must not pull in the native Pango-backed text module's
+//! tests on Linux but not on macOS. Selecting the portable backend under
+//! `builtin.is_test` makes both platforms analyze exactly the same text module,
+//! so both report the same tests. The native text module is still tested — in
+//! the Linux-only `native-test` step.
 const std = @import("std");
 const builtin = @import("builtin");
-const native = @import("text.zig");
 const portable = @import("text_portable.zig");
 
-pub const TextExtent = if (builtin.os.tag == .linux) native.TextExtent else portable.TextExtent;
-pub const ResolveFontError = if (builtin.os.tag == .linux) native.ResolveFontError else portable.ResolveFontError;
-pub const resolveFont = if (builtin.os.tag == .linux) native.resolveFont else portable.resolveFont;
-pub const estimatorExtent = if (builtin.os.tag == .linux) native.estimatorExtent else portable.estimatorExtent;
-pub const hashMeasureKey = if (builtin.os.tag == .linux) native.hashMeasureKey else portable.hashMeasureKey;
-pub const extentCacheReset = if (builtin.os.tag == .linux) native.extentCacheReset else portable.extentCacheReset;
-pub const pangoFamily = if (builtin.os.tag == .linux) native.pangoFamily else portable.pangoFamily;
-pub const measureText = if (builtin.os.tag == .linux) native.measureText else portable.measureText;
-pub const extent_hits = if (builtin.os.tag == .linux) native.extent_hits else portable.extent_hits;
-pub const extent_misses = if (builtin.os.tag == .linux) native.extent_misses else portable.extent_misses;
+const use_native = builtin.os.tag == .linux and !builtin.is_test;
+
+// Only the native module is imported when it is actually used, so a test or
+// non-Linux build never touches the Pango-backed shim at all.
+const native = if (use_native) @import("text.zig") else portable;
+
+pub const TextExtent = native.TextExtent;
+pub const ResolveFontError = native.ResolveFontError;
+pub const resolveFont = native.resolveFont;
+pub const estimatorExtent = native.estimatorExtent;
+pub const hashMeasureKey = native.hashMeasureKey;
+pub const extentCacheReset = native.extentCacheReset;
+pub const pangoFamily = native.pangoFamily;
+pub const measureText = native.measureText;
+pub const extent_hits = native.extent_hits;
+pub const extent_misses = native.extent_misses;

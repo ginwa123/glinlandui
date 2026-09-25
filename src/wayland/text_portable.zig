@@ -127,14 +127,10 @@ pub fn measureText(text_bytes: []const u8, font_size: u16) TextExtent {
     return ext;
 }
 
-test "resolveFont returns an existing macOS font path" {
-    const path = try resolveFont();
-    try std.testing.expect(path.len > 0);
-    const ok = std.mem.endsWith(u8, path, ".ttf") or
-        std.mem.endsWith(u8, path, ".otf") or
-        std.mem.endsWith(u8, path, ".ttc");
-    try std.testing.expect(ok);
-}
+// NOTE: there is deliberately NO `resolveFont` test here. That check asserts
+// a macOS system font exists, so it only passes on macOS and would break the
+// identical cross-platform test count that the parity suite guarantees. Font
+// resolution on the native Pango path is covered by text.zig in `native-test`.
 
 test "measureText returns positive extent for non-empty, zero width for empty" {
     const m = measureText("Settings", 18);

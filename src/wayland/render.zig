@@ -17,10 +17,14 @@ pub const scaledDims = common.scaledDims;
 pub const coverUv = common.coverUv;
 pub const containBox = common.containBox;
 
-/// The renderer the frame path drives. On Linux this is the GLES3 backend;
-/// everywhere else it is the software rasterizer, so the exact same Clay
-/// frame pipeline produces pixels on macOS too.
-pub const Renderer = if (builtin.os.tag == .linux)
+/// The renderer the frame path drives. Production on Linux is the GLES3
+/// backend; every other host — and every TEST build on any OS — is the
+/// portable software rasterizer, which produces real pixels and has no
+/// platform-specific tests. Selecting the portable backend under
+/// `builtin.is_test` is what keeps the cross-platform test count identical.
+/// The GLES3 backend itself is still tested, in the Linux-only `native-test`
+/// step.
+pub const Renderer = if (builtin.os.tag == .linux and !builtin.is_test)
     @import("render_gles3.zig").Renderer
 else
     soft.Renderer;
