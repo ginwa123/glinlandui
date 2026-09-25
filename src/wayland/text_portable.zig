@@ -27,8 +27,7 @@ const font_candidates: []const [:0]const u8 = &.{
 };
 
 fn fontExists(path: [:0]const u8) bool {
-    var file = std.fs.cwd().openFile(path, .{}) catch return false;
-    file.close();
+    std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), path, .{}) catch return false;
     return true;
 }
 
