@@ -15,9 +15,9 @@ concurrency:
 
 jobs:
   linux:
-    name: Linux / Zig 0.16.0
+    name: Linux / Zig 0.16.0 / native GLES3
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -46,50 +46,34 @@ jobs:
             libwayland-dev \
             pkg-config
 
-          # build.zig historically expects the Arch scanner path. Keep the
-          # workflow independent of distro-specific /usr/bin vs /usr/sbin.
           scanner="$(command -v wayland-scanner)"
           test -n "$scanner"
           sudo ln -sf "$scanner" /usr/sbin/wayland-scanner
 
-          # Ubuntu keeps glibconfig.h in the multiarch include directory,
-          # while the checked-in build flags mirror the Arch layout.
           echo "C_INCLUDE_PATH=/usr/lib/$(gcc -print-multiarch)/glib-2.0/include" >> "$GITHUB_ENV"
 
-          # The native renderer resolves the vendored stb headers from
-          # vendor/stb, so no distribution stb package is required.
           test -f vendor/stb/stb/stb_image_resize2.h
           test -f /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
 
       - name: Check formatting
-        run: >-
-          zig fmt --check
-          build.zig
-          src/root.zig
-          src/testing/root.zig
-          src/components
-          src/wayland/frame.zig
-          src/wayland/host.zig
-          src/wayland/render.zig
-          src/wayland/render_common.zig
-          src/wayland/text_backend.zig
-          src/wayland/text_portable.zig
-          src/wayland_portable.zig
-          src/wayland_api.zig
+        run: zig fmt --check build.zig src
 
-      - name: Run the full native test suite
-        run: zig build test --summary all
+      - name: Cross-platform parity test suite (count checked against tests.lock)
+        run: ./ci/check_test_parity.sh
+
+      - name: Linux-only native tests (Wayland/EGL/GLES3/Pango)
+        run: zig build native-test --summary all
 
       - name: Build the native executable (ReleaseSafe)
         run: zig build -Doptimize=ReleaseSafe
 
-      - name: Run the library smoke test
-        run: zig build run
+      - name: Run the demo (real Wayland window, 3 frames)
+        run: env QS_SETTINGS_TEST_FRAMES=3 zig build run
 
   macos:
-    name: macOS / CPU-only Clay surface
+    name: macOS / CPU rasterizer / headless pixels
     runs-on: macos-14
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -97,31 +81,18 @@ jobs:
         with:
           version: 0.16.0
 
-      # macOS has no native Wayland/EGL/GLES client stack. The library
-      # deliberately selects its CPU-only backend there, so this job runs the
-      # same components, frame scheduler, Host, and headless Driver tests
-      # without pretending that a Wayland window can be presented.
+      # macOS has no native Wayland/EGL/GLES client stack. The library selects
+      # its portable software rasterizer there and `zig build run` performs a
+      # REAL headless render (Clay layout -> rasterizer -> RGBA8 pixels), so
+      # this job proves the app genuinely draws without needing a GUI session.
       - name: Check formatting
-        run: >-
-          zig fmt --check
-          build.zig
-          src/root.zig
-          src/testing/root.zig
-          src/components
-          src/wayland/frame.zig
-          src/wayland/host.zig
-          src/wayland/render.zig
-          src/wayland/render_common.zig
-          src/wayland/text_backend.zig
-          src/wayland/text_portable.zig
-          src/wayland_portable.zig
-          src/wayland_api.zig
+        run: zig fmt --check build.zig src
 
-      - name: Run the full macOS test suite
-        run: zig build test --summary all
+      - name: Cross-platform parity test suite (count checked against tests.lock)
+        run: ./ci/check_test_parity.sh
 
-      - name: Build the CPU-only executable (ReleaseSafe)
+      - name: Build the CPU-rasterizer executable (ReleaseSafe)
         run: zig build -Doptimize=ReleaseSafe
 
-      - name: Run the library smoke test
+      - name: Run the demo (real headless render)
         run: zig build run

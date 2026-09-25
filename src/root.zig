@@ -62,20 +62,27 @@ pub const components = struct {
 };
 
 test {
-    // Portable CPU path: components, layout, Host, the test driver, and
-    // renderer-independent helpers are verified on every supported host.
+    // This aggregate test block is the PARITY contract: it imports exactly
+    // the same portable modules on every platform, so `zig build test` runs an
+    // identical set of tests on Linux and macOS with an identical count.
+    //
+    // The native Wayland/EGL/GLES3/Pango tests are NOT here — they live in the
+    // opt-in `native-test` step (Linux only) and never affect the default
+    // cross-platform count. Keep this list platform-independent.
     _ = @import("testing/root.zig");
     _ = @import("wayland/host.zig");
     _ = @import("wayland/frame.zig");
     _ = @import("wayland/render_common.zig");
-
-    // Linux additionally compiles the native Wayland/EGL/GLES3/Pango path.
-    // It is not built on hosts that do not provide those client libraries.
-    if (builtin.os.tag == .linux) {
-        _ = @import("wayland.zig");
-        _ = @import("wayland/render_gles3.zig");
-        _ = @import("wayland/text.zig");
-    }
+    _ = @import("wayland/render_software.zig");
+    _ = @import("wayland/render_pixels_test.zig");
+    _ = @import("platform/protocol_consts.zig");
+    _ = @import("platform/window_contract.zig");
+    // The portable window backend + its headless-render test. This file has no
+    // C imports and compiles identically everywhere, so its tests are part of
+    // the parity count on Linux AND macOS. (It is NOT the platform selected by
+    // wayland_api on Linux — that is wayland.zig — it is imported purely so
+    // its portable tests run everywhere.)
+    _ = @import("wayland_portable.zig");
 
     _ = @import("components/box.zig");
     _ = @import("components/button.zig");

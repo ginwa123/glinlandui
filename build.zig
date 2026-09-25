@@ -177,16 +177,23 @@ pub fn build(b: *std.Build) void {
     });
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
-    const test_step = b.step("test", "Run tests");
+    // `test` is the PARITY step. Its root module (src/root.zig) imports only
+    // portable modules, so Linux and macOS compile and run the IDENTICAL set
+    // of tests and report the IDENTICAL count. No OS branch lives in the
+    // aggregate test block, and the native standalone roots are NOT wired in
+    // here — that is what keeps the counts provably equal.
+    const test_step = b.step("test", "Run the cross-platform test suite (identical on every OS)");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+
+    // `native-test` runs the Linux-only Wayland/EGL/GLES3/Pango tests. These
+    // are a superset and deliberately excluded from the parity count; CI runs
+    // them on Linux as an extra job, never in place of the portable suite.
+    const native_test_step = b.step("native-test", "Run the Linux-only native (Wayland/EGL/GLES3/Pango) tests");
     if (native_protocols) |protocols| {
-        // Moved wayland tests as explicit standalone steps (mirrors the qs
-        // makeModuleTestStep/makeWaylandTestStep pattern) so `zig build test`
-        // here runs the native surface even if root re-exports change.
-        test_step.dependOn(makeModuleTestStep(b, target, "src/wayland/text.zig", zclay_mod));
-        test_step.dependOn(makeModuleTestStep(b, target, "src/wayland/render_gles3.zig", zclay_mod));
-        test_step.dependOn(makeWaylandTestStep(b, target, zclay_mod, protocols.xdg.header.dirname(), protocols.layer_shell.header.dirname(), protocols.cursor_shape.header.dirname()));
+        native_test_step.dependOn(makeModuleTestStep(b, target, "src/wayland/text.zig", zclay_mod));
+        native_test_step.dependOn(makeModuleTestStep(b, target, "src/wayland/render_gles3.zig", zclay_mod));
+        native_test_step.dependOn(makeWaylandTestStep(b, target, zclay_mod, protocols.xdg.header.dirname(), protocols.layer_shell.header.dirname(), protocols.cursor_shape.header.dirname()));
     }
     // Components are not standalone test roots: they import the shared
     // renderer contract relatively, which escapes a standalone root module.

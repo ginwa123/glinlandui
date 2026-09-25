@@ -706,41 +706,41 @@ pub const Renderer = struct {
         gl.glBindVertexArray(0);
     }
 
-/// Pure helper: Clay CornerRadius -> rect-shader u_radius vec4
-/// (TL, TR, BL, BR in px), clamped at zero (the shader additionally
-/// clamps to half the box size). Headless-testable.
-pub fn cornerRadiusVec4(r: cl.CornerRadius) [4]f32 {
-    return .{ @max(r.top_left, 0), @max(r.top_right, 0), @max(r.bottom_left, 0), @max(r.bottom_right, 0) };
-}
-
-/// Rounded-rect draw over the unit-quad VBO: like drawQuad plus the
-/// u_radius/u_mode/u_border uniforms (mode 0 = fill, 1 = border
-/// outline of width `border_w`). Radius 0 renders exactly the old
-/// square quad (SDF degenerates to the box), so square callers are
-/// pixel-identical.
-fn drawRoundBox(self: *Renderer, win_w: i32, win_h: i32, x: f32, y: f32, w: f32, h: f32, radius: [4]f32, mode: c_int, border_w: f32, color: [4]f32) void {
-    if (w <= 0 or h <= 0) return;
-    gl.glUseProgram(self.prog_rect);
-    gl.glBindVertexArray(self.vao);
-    const rw: f32 = @floatFromInt(win_w);
-    const rh: f32 = @floatFromInt(win_h);
-    if (self.loc_rect_res >= 0) gl.glUniform2f(self.loc_rect_res, rw, rh);
-    if (self.loc_rect_pos >= 0) gl.glUniform2f(self.loc_rect_pos, x, y);
-    if (self.loc_rect_size >= 0) gl.glUniform2f(self.loc_rect_size, w, h);
-    if (self.loc_rect_rad >= 0) gl.glUniform4f(self.loc_rect_rad, radius[0], radius[1], radius[2], radius[3]);
-    if (self.loc_rect_mode >= 0) gl.glUniform1i(self.loc_rect_mode, mode);
-    if (self.loc_rect_border >= 0) gl.glUniform1f(self.loc_rect_border, border_w);
-    if (self.loc_rect_col >= 0) {
-        const mx = @max(@max(color[0], color[1]), @max(color[2], color[3]));
-        if (mx <= 1.0) {
-            gl.glUniform4f(self.loc_rect_col, color[0], color[1], color[2], color[3]);
-        } else {
-            gl.glUniform4f(self.loc_rect_col, color[0] / 255.0, color[1] / 255.0, color[2] / 255.0, color[3] / 255.0);
-        }
+    /// Pure helper: Clay CornerRadius -> rect-shader u_radius vec4
+    /// (TL, TR, BL, BR in px), clamped at zero (the shader additionally
+    /// clamps to half the box size). Headless-testable.
+    pub fn cornerRadiusVec4(r: cl.CornerRadius) [4]f32 {
+        return .{ @max(r.top_left, 0), @max(r.top_right, 0), @max(r.bottom_left, 0), @max(r.bottom_right, 0) };
     }
-    gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4);
-    gl.glBindVertexArray(0);
-}
+
+    /// Rounded-rect draw over the unit-quad VBO: like drawQuad plus the
+    /// u_radius/u_mode/u_border uniforms (mode 0 = fill, 1 = border
+    /// outline of width `border_w`). Radius 0 renders exactly the old
+    /// square quad (SDF degenerates to the box), so square callers are
+    /// pixel-identical.
+    fn drawRoundBox(self: *Renderer, win_w: i32, win_h: i32, x: f32, y: f32, w: f32, h: f32, radius: [4]f32, mode: c_int, border_w: f32, color: [4]f32) void {
+        if (w <= 0 or h <= 0) return;
+        gl.glUseProgram(self.prog_rect);
+        gl.glBindVertexArray(self.vao);
+        const rw: f32 = @floatFromInt(win_w);
+        const rh: f32 = @floatFromInt(win_h);
+        if (self.loc_rect_res >= 0) gl.glUniform2f(self.loc_rect_res, rw, rh);
+        if (self.loc_rect_pos >= 0) gl.glUniform2f(self.loc_rect_pos, x, y);
+        if (self.loc_rect_size >= 0) gl.glUniform2f(self.loc_rect_size, w, h);
+        if (self.loc_rect_rad >= 0) gl.glUniform4f(self.loc_rect_rad, radius[0], radius[1], radius[2], radius[3]);
+        if (self.loc_rect_mode >= 0) gl.glUniform1i(self.loc_rect_mode, mode);
+        if (self.loc_rect_border >= 0) gl.glUniform1f(self.loc_rect_border, border_w);
+        if (self.loc_rect_col >= 0) {
+            const mx = @max(@max(color[0], color[1]), @max(color[2], color[3]));
+            if (mx <= 1.0) {
+                gl.glUniform4f(self.loc_rect_col, color[0], color[1], color[2], color[3]);
+            } else {
+                gl.glUniform4f(self.loc_rect_col, color[0] / 255.0, color[1] / 255.0, color[2] / 255.0, color[3] / 255.0);
+            }
+        }
+        gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4);
+        gl.glBindVertexArray(0);
+    }
 
     fn drawRectCmd(self: *Renderer, win_w: i32, win_h: i32, x: f32, y: f32, w: f32, h: f32, clay_color: [4]f32, radius: cl.CornerRadius) void {
         self.drawRoundBox(win_w, win_h, x, y, w, h, cornerRadiusVec4(radius), 0, 0, clay_color);

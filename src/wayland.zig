@@ -95,12 +95,12 @@ pub fn layerSize() LayerSize {
 /// OPENGL_ES3_BIT, terminated with EGL_NONE.
 pub fn eglConfigAttribs() [13]c.EGLint {
     return .{
-        c.EGL_RED_SIZE,           8,
-        c.EGL_GREEN_SIZE,         8,
-        c.EGL_BLUE_SIZE,          8,
-        c.EGL_ALPHA_SIZE,         8,
-        c.EGL_SURFACE_TYPE,       c.EGL_WINDOW_BIT,
-        c.EGL_RENDERABLE_TYPE,    c.EGL_OPENGL_ES3_BIT,
+        c.EGL_RED_SIZE,        8,
+        c.EGL_GREEN_SIZE,      8,
+        c.EGL_BLUE_SIZE,       8,
+        c.EGL_ALPHA_SIZE,      8,
+        c.EGL_SURFACE_TYPE,    c.EGL_WINDOW_BIT,
+        c.EGL_RENDERABLE_TYPE, c.EGL_OPENGL_ES3_BIT,
         c.EGL_NONE,
     };
 }
@@ -671,242 +671,242 @@ pub const Window = struct {
     /// Close intent (delegate on_close / on_key true) returns cleanly
     /// through the deferred disconnect below.
     pub fn run(self: *Window) !void {
-    // Headless tests never touch a compositor: pure logic above is what
-    // `zig build test` exercises. Pruned at comptime, so test binaries need
-    // no Wayland link.
-    if (builtin.is_test) return;
-    const display = c.wl_display_connect(null) orelse return error.NoWaylandDisplay;
-    defer c.wl_display_disconnect(display);
-    const registry = c.wl_display_get_registry(display) orelse return error.NoRegistry;
-    defer c.wl_registry_destroy(registry);
-    var reg: RegistryState = .{};
-    const listener = c.struct_wl_registry_listener{
-        .global = registryGlobalWithNames,
-        .global_remove = registryGlobalRemove,
-    };
-    _ = c.wl_registry_add_listener(registry, &listener, &reg);
-    if (c.wl_display_roundtrip(display) < 0) return error.RoundtripFailed;
-    std.log.info(
-        "wayland globals: compositor={} xdg_wm_base={} shm={} seat={}",
-        .{ reg.found.compositor, reg.found.xdg_wm_base, reg.found.shm, reg.found.seat },
-    );
-    if (reg.compositor_name == 0) return error.NoCompositor;
-    if (reg.xdg_wm_base_name == 0) return error.NoXdgWmBase;
-
-    const comp_ptr = c.wl_registry_bind(registry, reg.compositor_name, &c.wl_compositor_interface, 4) orelse
-        return error.BindFailed;
-    const compositor: *c.struct_wl_compositor = @ptrCast(@alignCast(comp_ptr));
-    defer c.wl_compositor_destroy(compositor);
-    const wm_ptr = c.wl_registry_bind(registry, reg.xdg_wm_base_name, &c.xdg_wm_base_interface, 1) orelse
-        return error.BindFailed;
-    const wm_base: *c.struct_xdg_wm_base = @ptrCast(@alignCast(wm_ptr));
-    defer c.xdg_wm_base_destroy(wm_base);
-
-    const surface = c.wl_compositor_create_surface(compositor) orelse return error.NoSurface;
-    defer c.wl_surface_destroy(surface);
-
-    const xdg_surface = c.xdg_wm_base_get_xdg_surface(wm_base, surface) orelse return error.NoXdgSurface;
-    defer c.xdg_surface_destroy(xdg_surface);
-    const toplevel = c.xdg_surface_get_toplevel(xdg_surface) orelse return error.NoToplevel;
-    defer c.xdg_toplevel_destroy(toplevel);
-
-    c.xdg_toplevel_set_app_id(toplevel, self.config.app_id);
-    c.xdg_toplevel_set_title(toplevel, self.config.title);
-
-    self.surface = surface;
-    self.win_w = self.config.width;
-    self.win_h = self.config.height;
-    const wm_listener = c.struct_xdg_wm_base_listener{
-        .ping = xdgWmBasePing,
-    };
-    _ = c.xdg_wm_base_add_listener(wm_base, &wm_listener, self);
-    const xs_listener = c.struct_xdg_surface_listener{
-        .configure = xdgSurfaceConfigure,
-    };
-    _ = c.xdg_surface_add_listener(xdg_surface, &xs_listener, self);
-    const xt_listener = c.struct_xdg_toplevel_listener{
-        .configure = xdgToplevelConfigure,
-        .close = xdgToplevelClose,
-    };
-    _ = c.xdg_toplevel_add_listener(toplevel, &xt_listener, self);
-    c.wl_surface_commit(surface);
-    if (c.wl_display_roundtrip(display) < 0) return error.RoundtripFailed;
-
-    // ---- Task B: optional seat input (pointer + keyboard) ----
-    var seat: ?*c.struct_wl_seat = null;
-    defer if (seat) |s| c.wl_seat_destroy(s);
-    defer {
-        if (self.shape_device) |d| c.wp_cursor_shape_device_v1_destroy(d);
-        self.shape_device = null;
-        if (self.cursor_shape_manager) |m| c.wp_cursor_shape_manager_v1_destroy(m);
-        self.cursor_shape_manager = null;
-        if (self.pointer_obj) |p| c.wl_pointer_destroy(p);
-        self.pointer_obj = null;
-        if (self.keyboard_obj) |k| c.wl_keyboard_destroy(k);
-        self.keyboard_obj = null;
-    }
-    if (reg.seat_name != 0) {
-        const seat_ptr = c.wl_registry_bind(registry, reg.seat_name, &c.wl_seat_interface, 7);
-        if (seat_ptr) |sp| {
-            seat = @ptrCast(@alignCast(sp));
-            const seat_listener = c.struct_wl_seat_listener{
-                .capabilities = seatCapabilities,
-                .name = seatName,
-            };
-            _ = c.wl_seat_add_listener(seat, &seat_listener, self);
-            if (c.wl_display_roundtrip(display) < 0) return error.RoundtripFailed;
-        } else {
-            std.log.warn("wl_seat bind failed; running without pointer/keyboard input", .{});
-        }
-    } else {
-        std.log.warn("no wl_seat global; running without pointer/keyboard input", .{});
-    }
-
-    // ---- cursor-shape manager (optional, version 1) ----
-    // Null-tolerant: older compositors don't advertise
-    // wp_cursor_shape_manager_v1 -> manager stays null and every cursor
-    // op below no-ops (today's arrow behavior preserved).
-    if (reg.cursor_shape_manager_name != 0) {
-        const mgr_ptr = c.wl_registry_bind(
-            registry,
-            reg.cursor_shape_manager_name,
-            &c.wp_cursor_shape_manager_v1_interface,
-            1,
+        // Headless tests never touch a compositor: pure logic above is what
+        // `zig build test` exercises. Pruned at comptime, so test binaries need
+        // no Wayland link.
+        if (builtin.is_test) return;
+        const display = c.wl_display_connect(null) orelse return error.NoWaylandDisplay;
+        defer c.wl_display_disconnect(display);
+        const registry = c.wl_display_get_registry(display) orelse return error.NoRegistry;
+        defer c.wl_registry_destroy(registry);
+        var reg: RegistryState = .{};
+        const listener = c.struct_wl_registry_listener{
+            .global = registryGlobalWithNames,
+            .global_remove = registryGlobalRemove,
+        };
+        _ = c.wl_registry_add_listener(registry, &listener, &reg);
+        if (c.wl_display_roundtrip(display) < 0) return error.RoundtripFailed;
+        std.log.info(
+            "wayland globals: compositor={} xdg_wm_base={} shm={} seat={}",
+            .{ reg.found.compositor, reg.found.xdg_wm_base, reg.found.shm, reg.found.seat },
         );
-        if (mgr_ptr) |mp| {
-            self.cursor_shape_manager = @ptrCast(@alignCast(mp));
+        if (reg.compositor_name == 0) return error.NoCompositor;
+        if (reg.xdg_wm_base_name == 0) return error.NoXdgWmBase;
+
+        const comp_ptr = c.wl_registry_bind(registry, reg.compositor_name, &c.wl_compositor_interface, 4) orelse
+            return error.BindFailed;
+        const compositor: *c.struct_wl_compositor = @ptrCast(@alignCast(comp_ptr));
+        defer c.wl_compositor_destroy(compositor);
+        const wm_ptr = c.wl_registry_bind(registry, reg.xdg_wm_base_name, &c.xdg_wm_base_interface, 1) orelse
+            return error.BindFailed;
+        const wm_base: *c.struct_xdg_wm_base = @ptrCast(@alignCast(wm_ptr));
+        defer c.xdg_wm_base_destroy(wm_base);
+
+        const surface = c.wl_compositor_create_surface(compositor) orelse return error.NoSurface;
+        defer c.wl_surface_destroy(surface);
+
+        const xdg_surface = c.xdg_wm_base_get_xdg_surface(wm_base, surface) orelse return error.NoXdgSurface;
+        defer c.xdg_surface_destroy(xdg_surface);
+        const toplevel = c.xdg_surface_get_toplevel(xdg_surface) orelse return error.NoToplevel;
+        defer c.xdg_toplevel_destroy(toplevel);
+
+        c.xdg_toplevel_set_app_id(toplevel, self.config.app_id);
+        c.xdg_toplevel_set_title(toplevel, self.config.title);
+
+        self.surface = surface;
+        self.win_w = self.config.width;
+        self.win_h = self.config.height;
+        const wm_listener = c.struct_xdg_wm_base_listener{
+            .ping = xdgWmBasePing,
+        };
+        _ = c.xdg_wm_base_add_listener(wm_base, &wm_listener, self);
+        const xs_listener = c.struct_xdg_surface_listener{
+            .configure = xdgSurfaceConfigure,
+        };
+        _ = c.xdg_surface_add_listener(xdg_surface, &xs_listener, self);
+        const xt_listener = c.struct_xdg_toplevel_listener{
+            .configure = xdgToplevelConfigure,
+            .close = xdgToplevelClose,
+        };
+        _ = c.xdg_toplevel_add_listener(toplevel, &xt_listener, self);
+        c.wl_surface_commit(surface);
+        if (c.wl_display_roundtrip(display) < 0) return error.RoundtripFailed;
+
+        // ---- Task B: optional seat input (pointer + keyboard) ----
+        var seat: ?*c.struct_wl_seat = null;
+        defer if (seat) |s| c.wl_seat_destroy(s);
+        defer {
+            if (self.shape_device) |d| c.wp_cursor_shape_device_v1_destroy(d);
+            self.shape_device = null;
+            if (self.cursor_shape_manager) |m| c.wp_cursor_shape_manager_v1_destroy(m);
+            self.cursor_shape_manager = null;
+            if (self.pointer_obj) |p| c.wl_pointer_destroy(p);
+            self.pointer_obj = null;
+            if (self.keyboard_obj) |k| c.wl_keyboard_destroy(k);
+            self.keyboard_obj = null;
+        }
+        if (reg.seat_name != 0) {
+            const seat_ptr = c.wl_registry_bind(registry, reg.seat_name, &c.wl_seat_interface, 7);
+            if (seat_ptr) |sp| {
+                seat = @ptrCast(@alignCast(sp));
+                const seat_listener = c.struct_wl_seat_listener{
+                    .capabilities = seatCapabilities,
+                    .name = seatName,
+                };
+                _ = c.wl_seat_add_listener(seat, &seat_listener, self);
+                if (c.wl_display_roundtrip(display) < 0) return error.RoundtripFailed;
+            } else {
+                std.log.warn("wl_seat bind failed; running without pointer/keyboard input", .{});
+            }
         } else {
-            std.log.warn("wp_cursor_shape_manager_v1 bind failed; running without cursor shapes", .{});
+            std.log.warn("no wl_seat global; running without pointer/keyboard input", .{});
         }
-    }
 
-    // ---- EGL bootstrap (initial size from config) ----
-    const egl_display = c.eglGetDisplay(@ptrCast(display));
-    if (egl_display == c.EGL_NO_DISPLAY) return error.EglNoDisplay;
-    var major: c.EGLint = 0;
-    var minor: c.EGLint = 0;
-    if (c.eglInitialize(egl_display, &major, &minor) == c.EGL_FALSE) return error.EglInitFailed;
-    defer _ = c.eglTerminate(egl_display);
-    if (c.eglBindAPI(c.EGL_OPENGL_ES_API) == c.EGL_FALSE) return error.EglBindFailed;
-    var attribs = eglConfigAttribs();
-    var egl_config: c.EGLConfig = null;
-    var nconfigs: c.EGLint = 0;
-    if (c.eglChooseConfig(egl_display, &attribs, &egl_config, 1, &nconfigs) == c.EGL_FALSE or nconfigs == 0)
-        return error.EglConfigFailed;
-    const ctx_attribs = [_]c.EGLint{ c.EGL_CONTEXT_MAJOR_VERSION, 3, c.EGL_NONE };
-    const egl_ctx = c.eglCreateContext(egl_display, egl_config, c.EGL_NO_CONTEXT, &ctx_attribs);
-    if (egl_ctx == c.EGL_NO_CONTEXT) return error.EglContextFailed;
-    defer _ = c.eglDestroyContext(egl_display, egl_ctx);
-
-    const egl_window = c.wl_egl_window_create(surface, @intCast(self.config.width), @intCast(self.config.height)) orelse
-        return error.EglWindowFailed;
-    defer c.wl_egl_window_destroy(egl_window);
-    const egl_surface = c.eglCreateWindowSurface(egl_display, egl_config, @ptrCast(egl_window), null);
-    if (egl_surface == c.EGL_NO_SURFACE) return error.EglSurfaceFailed;
-    defer _ = c.eglDestroySurface(egl_display, egl_surface);
-    if (c.eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_ctx) == c.EGL_FALSE)
-        return error.EglMakeCurrentFailed;
-
-    const cc = clearColor();
-    c.glClearColor(cc[0], cc[1], cc[2], cc[3]);
-    c.glClear(c.GL_COLOR_BUFFER_BIT);
-    _ = c.eglSwapBuffers(egl_display, egl_surface);
-
-    // ---- event loop: on-demand rendering (dirty-flag driven).
-    // A static window must not burn CPU: frames are drawn only when
-    // needs_draw is set (input, resize, configure, initial frame).
-    // frameStep() decides each iteration: draw on a dirty frame event,
-    // kick (request a frame + commit) when dirty with none outstanding,
-    // idle otherwise — idle blocks in dispatch at ~0% CPU and requests
-    // no further frames until input arrives. Drawing always waits for
-    // the frame event, so every present carries a fresh buffer (no
-    // stall, no tearing), and motion floods coalesce into one frame.
-    // QS_SETTINGS_TEST_FRAMES forces continuous drawing (old behavior)
-    // so the frame-count harness keeps working.
-    const frame_listener = c.struct_wl_callback_listener{
-        .done = frameDone,
-    };
-    const max_frames = testFramesFromEnv();
-    var frames: u32 = 0;
-    var frame_cb = c.wl_surface_frame(surface) orelse return error.NoFrameCallback;
-    _ = c.wl_callback_add_listener(frame_cb, &frame_listener, self);
-    self.frame_pending = true;
-    // The frame request is surface state: it needs a commit to take
-    // effect (the pre-loop eglSwapBuffers already happened, so without
-    // this commit dispatch would block forever waiting for a frame
-    // event the compositor was never asked to send).
-    c.wl_surface_commit(surface);
-    while (!self.quit) {
-        if (c.wl_display_dispatch(display) < 0) break;
-        // Test harness: every iteration is dirty (continuous drawing).
-        if (max_frames != null) self.needs_draw = true;
-        // Delegate-driven quit (e.g. a close-box click during dispatch
-        // set Shell.quit_requested): observe every iteration, not just
-        // on frames, so quit is prompt even when idle.
-        if (self.delegate) |d| {
-            if (d.is_quit(d.ptr)) self.quit = true;
+        // ---- cursor-shape manager (optional, version 1) ----
+        // Null-tolerant: older compositors don't advertise
+        // wp_cursor_shape_manager_v1 -> manager stays null and every cursor
+        // op below no-ops (today's arrow behavior preserved).
+        if (reg.cursor_shape_manager_name != 0) {
+            const mgr_ptr = c.wl_registry_bind(
+                registry,
+                reg.cursor_shape_manager_name,
+                &c.wp_cursor_shape_manager_v1_interface,
+                1,
+            );
+            if (mgr_ptr) |mp| {
+                self.cursor_shape_manager = @ptrCast(@alignCast(mp));
+            } else {
+                std.log.warn("wp_cursor_shape_manager_v1 bind failed; running without cursor shapes", .{});
+            }
         }
-        if (self.quit) break;
-        switch (frameStep(self.frame_done, self.needs_draw, self.frame_pending)) {
-            .draw => {
-                self.frame_done = false;
-                self.frame_pending = false;
-                self.needs_draw = false;
-                // Live resize: apply pending configure size once per draw.
-                if (self.pending_w != 0 and self.pending_h != 0 and
-                    (self.pending_w != self.win_w or self.pending_h != self.win_h))
-                {
-                    self.win_w = self.pending_w;
-                    self.win_h = self.pending_h;
-                    self.pending_w = 0;
-                    self.pending_h = 0;
-                    c.wl_egl_window_resize(egl_window, @intCast(self.win_w), @intCast(self.win_h), 0, 0);
-                    c.glViewport(0, 0, @intCast(self.win_w), @intCast(self.win_h));
-                    if (self.delegate) |d| d.on_resize(d.ptr, self.win_w, self.win_h);
-                }
-                c.glClear(c.GL_COLOR_BUFFER_BIT);
-                // Drawing happens in the delegate; Window swaps after it returns.
-                if (self.delegate) |d| d.on_frame(d.ptr, self.win_w, self.win_h);
-                // Per-frame cursor-shape apply (change-only): clayFrame
-                // resolved the contract Cursor -> shape AFTER endLayout
-                // into frame.currentShape(). Send set_shape only when the
-                // shape differs from last_shape, using the most recent
-                // enter serial. All null-guarded (null manager/device ->
-                // skip; absent manager preserves arrow behavior).
-                if (self.shape_device) |dev| {
-                    const shape = frame.currentShape();
-                    if (frame.shouldApplyShape(self.last_shape, shape)) {
-                        c.wp_cursor_shape_device_v1_set_shape(dev, self.enter_serial, shape);
-                        self.last_shape = shape;
+
+        // ---- EGL bootstrap (initial size from config) ----
+        const egl_display = c.eglGetDisplay(@ptrCast(display));
+        if (egl_display == c.EGL_NO_DISPLAY) return error.EglNoDisplay;
+        var major: c.EGLint = 0;
+        var minor: c.EGLint = 0;
+        if (c.eglInitialize(egl_display, &major, &minor) == c.EGL_FALSE) return error.EglInitFailed;
+        defer _ = c.eglTerminate(egl_display);
+        if (c.eglBindAPI(c.EGL_OPENGL_ES_API) == c.EGL_FALSE) return error.EglBindFailed;
+        var attribs = eglConfigAttribs();
+        var egl_config: c.EGLConfig = null;
+        var nconfigs: c.EGLint = 0;
+        if (c.eglChooseConfig(egl_display, &attribs, &egl_config, 1, &nconfigs) == c.EGL_FALSE or nconfigs == 0)
+            return error.EglConfigFailed;
+        const ctx_attribs = [_]c.EGLint{ c.EGL_CONTEXT_MAJOR_VERSION, 3, c.EGL_NONE };
+        const egl_ctx = c.eglCreateContext(egl_display, egl_config, c.EGL_NO_CONTEXT, &ctx_attribs);
+        if (egl_ctx == c.EGL_NO_CONTEXT) return error.EglContextFailed;
+        defer _ = c.eglDestroyContext(egl_display, egl_ctx);
+
+        const egl_window = c.wl_egl_window_create(surface, @intCast(self.config.width), @intCast(self.config.height)) orelse
+            return error.EglWindowFailed;
+        defer c.wl_egl_window_destroy(egl_window);
+        const egl_surface = c.eglCreateWindowSurface(egl_display, egl_config, @ptrCast(egl_window), null);
+        if (egl_surface == c.EGL_NO_SURFACE) return error.EglSurfaceFailed;
+        defer _ = c.eglDestroySurface(egl_display, egl_surface);
+        if (c.eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_ctx) == c.EGL_FALSE)
+            return error.EglMakeCurrentFailed;
+
+        const cc = clearColor();
+        c.glClearColor(cc[0], cc[1], cc[2], cc[3]);
+        c.glClear(c.GL_COLOR_BUFFER_BIT);
+        _ = c.eglSwapBuffers(egl_display, egl_surface);
+
+        // ---- event loop: on-demand rendering (dirty-flag driven).
+        // A static window must not burn CPU: frames are drawn only when
+        // needs_draw is set (input, resize, configure, initial frame).
+        // frameStep() decides each iteration: draw on a dirty frame event,
+        // kick (request a frame + commit) when dirty with none outstanding,
+        // idle otherwise — idle blocks in dispatch at ~0% CPU and requests
+        // no further frames until input arrives. Drawing always waits for
+        // the frame event, so every present carries a fresh buffer (no
+        // stall, no tearing), and motion floods coalesce into one frame.
+        // QS_SETTINGS_TEST_FRAMES forces continuous drawing (old behavior)
+        // so the frame-count harness keeps working.
+        const frame_listener = c.struct_wl_callback_listener{
+            .done = frameDone,
+        };
+        const max_frames = testFramesFromEnv();
+        var frames: u32 = 0;
+        var frame_cb = c.wl_surface_frame(surface) orelse return error.NoFrameCallback;
+        _ = c.wl_callback_add_listener(frame_cb, &frame_listener, self);
+        self.frame_pending = true;
+        // The frame request is surface state: it needs a commit to take
+        // effect (the pre-loop eglSwapBuffers already happened, so without
+        // this commit dispatch would block forever waiting for a frame
+        // event the compositor was never asked to send).
+        c.wl_surface_commit(surface);
+        while (!self.quit) {
+            if (c.wl_display_dispatch(display) < 0) break;
+            // Test harness: every iteration is dirty (continuous drawing).
+            if (max_frames != null) self.needs_draw = true;
+            // Delegate-driven quit (e.g. a close-box click during dispatch
+            // set Shell.quit_requested): observe every iteration, not just
+            // on frames, so quit is prompt even when idle.
+            if (self.delegate) |d| {
+                if (d.is_quit(d.ptr)) self.quit = true;
+            }
+            if (self.quit) break;
+            switch (frameStep(self.frame_done, self.needs_draw, self.frame_pending)) {
+                .draw => {
+                    self.frame_done = false;
+                    self.frame_pending = false;
+                    self.needs_draw = false;
+                    // Live resize: apply pending configure size once per draw.
+                    if (self.pending_w != 0 and self.pending_h != 0 and
+                        (self.pending_w != self.win_w or self.pending_h != self.win_h))
+                    {
+                        self.win_w = self.pending_w;
+                        self.win_h = self.pending_h;
+                        self.pending_w = 0;
+                        self.pending_h = 0;
+                        c.wl_egl_window_resize(egl_window, @intCast(self.win_w), @intCast(self.win_h), 0, 0);
+                        c.glViewport(0, 0, @intCast(self.win_w), @intCast(self.win_h));
+                        if (self.delegate) |d| d.on_resize(d.ptr, self.win_w, self.win_h);
                     }
-                }
-                _ = c.eglSwapBuffers(egl_display, egl_surface);
-                frames += 1;
-                if (max_frames) |n| {
-                    if (frames >= n) break;
-                }
-                if (self.quit) break;
-                // More work arrived mid-draw (or test harness): keep going.
-                if (self.needs_draw) {
+                    c.glClear(c.GL_COLOR_BUFFER_BIT);
+                    // Drawing happens in the delegate; Window swaps after it returns.
+                    if (self.delegate) |d| d.on_frame(d.ptr, self.win_w, self.win_h);
+                    // Per-frame cursor-shape apply (change-only): clayFrame
+                    // resolved the contract Cursor -> shape AFTER endLayout
+                    // into frame.currentShape(). Send set_shape only when the
+                    // shape differs from last_shape, using the most recent
+                    // enter serial. All null-guarded (null manager/device ->
+                    // skip; absent manager preserves arrow behavior).
+                    if (self.shape_device) |dev| {
+                        const shape = frame.currentShape();
+                        if (frame.shouldApplyShape(self.last_shape, shape)) {
+                            c.wp_cursor_shape_device_v1_set_shape(dev, self.enter_serial, shape);
+                            self.last_shape = shape;
+                        }
+                    }
+                    _ = c.eglSwapBuffers(egl_display, egl_surface);
+                    frames += 1;
+                    if (max_frames) |n| {
+                        if (frames >= n) break;
+                    }
+                    if (self.quit) break;
+                    // More work arrived mid-draw (or test harness): keep going.
+                    if (self.needs_draw) {
+                        frame_cb = c.wl_surface_frame(surface) orelse break;
+                        _ = c.wl_callback_add_listener(frame_cb, &frame_listener, self);
+                        self.frame_pending = true;
+                        c.wl_surface_commit(surface);
+                    }
+                },
+                .kick => {
                     frame_cb = c.wl_surface_frame(surface) orelse break;
                     _ = c.wl_callback_add_listener(frame_cb, &frame_listener, self);
                     self.frame_pending = true;
                     c.wl_surface_commit(surface);
-                }
-            },
-            .kick => {
-                frame_cb = c.wl_surface_frame(surface) orelse break;
-                _ = c.wl_callback_add_listener(frame_cb, &frame_listener, self);
-                self.frame_pending = true;
-                c.wl_surface_commit(surface);
-            },
-            .idle => {
-                // Consume a stale frame event (arrived with clean state);
-                // request nothing — the next input kick restarts us.
-                self.frame_done = false;
-            },
+                },
+                .idle => {
+                    // Consume a stale frame event (arrived with clean state);
+                    // request nothing — the next input kick restarts us.
+                    self.frame_done = false;
+                },
+            }
         }
-    }
     }
 };
 
