@@ -131,11 +131,65 @@ pub fn main() !void {
     });
     window.delegate = host.delegate();
 
-    // On a headless host (no compositor / no GUI session) run() completes a
-    // real render and returns; on a live compositor it opens a window and
-    // blocks until closed. Either way the same Clay layout was rasterized
-    // into real pixels by the platform renderer.
-    try window.run();
+    // On a live compositor (Linux desktop) this opens a real window and blocks
+    // until closed. On a headless host — no compositor, or a CI runner with no
+    // GUI session — the platform window cannot open; that is an expected
+    // environment, not a failure, so we fall back to a real headless software
+    // render. Either path lays out the same Clay tree and rasterizes it into
+    // real RGBA8 pixels, so the demo always proves the renderer draws.
+    window.run() catch |err| {
+        std.debug.print("window unavailable ({s}); rendering headless instead\n", .{@errorName(err)});
+        try renderHeadless(&host, 480, 360);
+    };
+}
+
+/// Render one real frame through the normal frame path into a software
+/// surface and report how many pixels were drawn. Used when no display is
+/// available, so the demo still exercises and proves the renderer.
+fn renderHeadless(host: *glinlandui.host.Host, w: u32, h: u32) !void {
+    const soft = glinlandui.software_render;
+    var renderer = try soft.Renderer.init(std.heap.page_allocator);
+    defer renderer.deinit();
+
+    var opt = glinlandui.frame.FrameOptions{};
+    const commands = try captureCommands(host, w, h, &opt);
+    renderer.surface.resize(w, h) catch return error.InvalidSize;
+    renderer.surface.clear();
+    renderer.surface.renderCommands(commands);
+
+    const clear = renderer.surface.clear_rgb;
+    var painted: usize = 0;
+    var i: usize = 0;
+    while (i + 3 < renderer.surface.pixels.len) : (i += 4) {
+        const r = @as(f32, @floatFromInt(renderer.surface.pixels[i]));
+        const g = @as(f32, @floatFromInt(renderer.surface.pixels[i + 1]));
+        const b = @as(f32, @floatFromInt(renderer.surface.pixels[i + 2]));
+        if (r != clear[0] or g != clear[1] or b != clear[2]) painted += 1;
+    }
+    std.debug.print(
+        "glinlandui rendered {d}x{d} headless ({d} painted pixels, no display available)\n",
+        .{ w, h, painted },
+    );
+}
+
+/// Run one frame and hand back the emitted render commands via the frame
+/// probe. The slice is owned by the Clay arena, valid for this frame only.
+fn captureCommands(
+    host: *glinlandui.host.Host,
+    w: u32,
+    h: u32,
+    opt: *glinlandui.frame.FrameOptions,
+) ![]const glinlandui.zclay.RenderCommand {
+    const Sink = struct {
+        var commands: []const glinlandui.zclay.RenderCommand = &.{};
+        fn probe(_: ?*anyopaque, cmds: []const glinlandui.zclay.RenderCommand, _: u32, _: u32) void {
+            commands = cmds;
+        }
+    };
+    opt.probe = Sink.probe;
+    opt.probe_user_data = null;
+    _ = host.frameWithOptions(w, h, opt);
+    return Sink.commands;
 }
 
 test "glinlandui surface resolves" {

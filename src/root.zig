@@ -20,6 +20,9 @@ pub const render = wayland.render;
 pub const text = wayland.text;
 pub const frame = wayland.frame;
 pub const host = @import("wayland/host.zig");
+/// Portable software rasterizer surface. Exposed so applications (and the
+/// demo's headless fallback) can render real pixels without a display.
+pub const software_render = @import("wayland/render_software.zig");
 /// Reusable, compositor-free UI test harness. Import this module from
 /// application tests to drive the same Host/Clay path used at runtime.
 pub const testing = @import("testing/root.zig");
