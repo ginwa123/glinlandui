@@ -1,11 +1,11 @@
 // Agnostic reusable Clay list (toolkit-style, library only).
 // Generic over the item type: callers pass any slice + a comptime render
 // callback. Selection is caller-owned by index (props.selected).
-// Imports: std + zclay + core/render_common + sibling components ONLY.
+// Imports: std + zclay + core/color + core/render_common + sibling components ONLY.
 // Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
-const render = @import("../render_common.zig");
+const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
 
@@ -42,11 +42,11 @@ pub const ListProps = struct {
     cell_w: u32 = 140,
     cell_h: u32 = 78,
     row_h: u32 = 40,
-    row_bg: u32 = 0x1e1e1e,
-    selected_bg: u32 = 0x3a3a3a,
-    row_fg: u32 = 0xe8e8e8,
-    selected_fg: u32 = 0xffffff,
-    hover_bg: u32 = 0x2d2d2d,
+    row_bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
+    selected_bg: Color = Color.rgb(0x3a, 0x3a, 0x3a),
+    row_fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
+    selected_fg: Color = Color.rgb(0xff, 0xff, 0xff),
+    hover_bg: Color = Color.rgb(0x2d, 0x2d, 0x2d),
     radius: u32 = 4,
     gap: u16 = 0,
     /// Container width clamps (grow axis, 0 = no constraint).
@@ -57,22 +57,22 @@ pub const ListProps = struct {
     row_max_h: f32 = 0,
     /// Uniform row border (0 = none) + color; emits a Clay BORDER per row.
     border_width: u16 = 0,
-    border_color: u32 = 0x000000,
+    border_color: Color = Color.rgb(0x00, 0x00, 0x00),
     /// Grid/horizontal cell fill (null = transparent, e.g. image grids).
     /// Vertical rows always use row_bg/selected_bg/hover_bg.
-    cell_bg: ?u32 = null,
+    cell_bg: ?Color = null,
     /// Grid/horizontal selected ring (0 = none; vertical rows show
     /// selected_bg instead and ignore these unless border_width is set).
     selected_border_width: u16 = 0,
-    selected_border_color: u32 = 0x7ab8ff,
+    selected_border_color: Color = Color.rgb(0x7a, 0xb8, 0xff),
     /// Grid/horizontal hover ring on enabled unselected cells (0 = none;
     /// vertical rows show hover_bg instead).
     hover_border_width: u16 = 0,
-    hover_border_color: u32 = 0x5a5a5a,
+    hover_border_color: Color = Color.rgb(0x5a, 0x5a, 0x5a),
     /// Disabled list: rows render `disabled_bg`, never take hover chrome,
     /// and register no clicks (declare never fires; owners must also check).
     disabled: bool = false,
-    disabled_bg: u32 = 0x1a1a1a,
+    disabled_bg: Color = Color.rgb(0x1a, 0x1a, 0x1a),
     selected: ?usize = null,
     on_select: ListSelectFn = null,
     ctx: ?*anyopaque = null,
@@ -211,7 +211,7 @@ fn listVertical(
     })({
         for (items, 0..) |item, i| {
             const is_sel: bool = if (props.selected) |sel| sel == i else false;
-            const base_bg: u32 = if (props.disabled) props.disabled_bg else if (is_sel) props.selected_bg else props.row_bg;
+            const base_bg: Color = if (props.disabled) props.disabled_bg else if (is_sel) props.selected_bg else props.row_bg;
             // NOTE: cl.hovered() must be evaluated INSIDE this row's UI()
             // config literal (while the row element is open) so it queries
             // this row — calling it beforehand would query the list
@@ -228,10 +228,10 @@ fn listVertical(
                     .child_alignment = .{ .x = .left, .y = .center },
                     .child_gap = 8,
                 },
-                .background_color = render.u32ToClayColor(if (!props.disabled and !is_sel and cl.hovered()) props.hover_bg else base_bg),
+                .background_color = (if (!props.disabled and !is_sel and cl.hovered()) props.hover_bg else base_bg).toClay(),
                 .corner_radius = .all(@floatFromInt(props.radius)),
                 .border = if (props.border_width > 0) .{
-                    .color = render.u32ToClayColor(props.border_color),
+                    .color = props.border_color.toClay(),
                     .width = .outside(props.border_width),
                 } else .{},
             })({
@@ -258,7 +258,7 @@ fn listHorizontal(
     })({
         for (items, 0..) |item, i| {
             const is_sel: bool = if (props.selected) |sel| sel == i else false;
-            const base_bg: u32 = if (props.disabled) props.disabled_bg else if (is_sel) props.selected_bg else props.row_bg;
+            const base_bg: Color = if (props.disabled) props.disabled_bg else if (is_sel) props.selected_bg else props.row_bg;
             cl.UI()(.{
                 .id = .IDI(props.id, @as(u32, @intCast(i + 1))),
                 .layout = .{
@@ -268,10 +268,10 @@ fn listHorizontal(
                     .child_alignment = .{ .x = .center, .y = .center },
                     .child_gap = 8,
                 },
-                .background_color = render.u32ToClayColor(if (!props.disabled and !is_sel and cl.hovered()) props.hover_bg else base_bg),
+                .background_color = (if (!props.disabled and !is_sel and cl.hovered()) props.hover_bg else base_bg).toClay(),
                 .corner_radius = .all(@floatFromInt(props.radius)),
                 .border = if (props.border_width > 0) .{
-                    .color = render.u32ToClayColor(props.border_color),
+                    .color = props.border_color.toClay(),
                     .width = .outside(props.border_width),
                 } else .{},
             })({
@@ -321,15 +321,15 @@ fn listGrid(
                             .sizing = .{ .w = .fixed(@floatFromInt(props.cell_w)), .h = .fixed(@floatFromInt(props.cell_h)) },
                             .child_alignment = .{ .x = .center, .y = .center },
                         },
-                        .background_color = if (props.cell_bg) |bg| render.u32ToClayColor(bg) else .{ 0, 0, 0, 0 },
+                        .background_color = if (props.cell_bg) |bg| bg.toClay() else .{ 0, 0, 0, 0 },
                         .corner_radius = .all(@floatFromInt(props.radius)),
                         // Selected ring wins; hover ring only on enabled
                         // unselected cells (evaluated inside the literal).
                         .border = if (is_sel and props.selected_border_width > 0) .{
-                            .color = render.u32ToClayColor(props.selected_border_color),
+                            .color = props.selected_border_color.toClay(),
                             .width = .outside(props.selected_border_width),
                         } else if (!props.disabled and !is_sel and props.hover_border_width > 0 and cl.hovered()) .{
-                            .color = render.u32ToClayColor(props.hover_border_color),
+                            .color = props.hover_border_color.toClay(),
                             .width = .outside(props.hover_border_width),
                         } else .{},
                     })({
@@ -359,19 +359,19 @@ const TitleItem = struct {
 };
 
 const CtxA = struct {
-    fg: u32,
+    fg: Color,
 };
 
 fn renderA(ctx: CtxA, item: TitleItem, index: usize) void {
     _ = index;
     cl.text(item.title, .{
         .font_size = 14,
-        .color = render.u32ToClayColor(ctx.fg),
+        .color = ctx.fg.toClay(),
     });
     if (item.subtitle) |sub| {
         cl.text(sub, .{
             .font_size = 12,
-            .color = render.u32ToClayColor(ctx.fg),
+            .color = ctx.fg.toClay(),
         });
     }
 }
@@ -389,7 +389,7 @@ const demo_items = [_]TitleItem{
 const demo_slice: []const TitleItem = &demo_items;
 
 fn declareList() void {
-    list(.{ .id = "test-list" }, demo_slice, CtxA{ .fg = 0xe8e8e8 }, renderA);
+    list(.{ .id = "test-list" }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 const sub_items = [_]TitleItem{
@@ -400,7 +400,7 @@ const sub_items = [_]TitleItem{
 const sub_slice: []const TitleItem = &sub_items;
 
 fn declareSubList() void {
-    list(.{ .id = "test-sub-list" }, sub_slice, CtxA{ .fg = 0xe8e8e8 }, renderA);
+    list(.{ .id = "test-sub-list" }, sub_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 /// Item type B: plain strings with a trailing chevron (content parity).
@@ -412,14 +412,14 @@ fn renderB(_: void, item: []const u8, index: usize) void {
     _ = index;
     cl.text(item, .{
         .font_size = 14,
-        .color = render.u32ToClayColor(0xe8e8e8),
+        .color = Color.rgb(0xe8, 0xe8, 0xe8).toClay(),
     });
     cl.UI()(.{
         .layout = .{ .sizing = .grow },
     })({});
     cl.text(">", .{
         .font_size = 14,
-        .color = render.u32ToClayColor(0xe8e8e8),
+        .color = Color.rgb(0xe8, 0xe8, 0xe8).toClay(),
     });
 }
 
@@ -484,11 +484,11 @@ test "generic list with string items renders title + trailing per row" {
 test "ListProps carries neutral dark defaults + null selection/callbacks" {
     const p = ListProps{ .id = "x" };
     try std.testing.expectEqual(@as(u32, 40), p.row_h);
-    try std.testing.expectEqual(@as(u32, 0x1e1e1e), p.row_bg);
-    try std.testing.expectEqual(@as(u32, 0x3a3a3a), p.selected_bg);
-    try std.testing.expectEqual(@as(u32, 0xe8e8e8), p.row_fg);
-    try std.testing.expectEqual(@as(u32, 0xffffff), p.selected_fg);
-    try std.testing.expectEqual(@as(u32, 0x2d2d2d), p.hover_bg);
+    try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.row_bg);
+    try std.testing.expectEqual(Color.rgb(0x3a, 0x3a, 0x3a), p.selected_bg);
+    try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.row_fg);
+    try std.testing.expectEqual(Color.rgb(0xff, 0xff, 0xff), p.selected_fg);
+    try std.testing.expectEqual(Color.rgb(0x2d, 0x2d, 0x2d), p.hover_bg);
     try std.testing.expectEqual(@as(u32, 4), p.radius);
     try std.testing.expectEqual(@as(u16, 0), p.gap);
     try std.testing.expect(p.selected == null);
@@ -544,7 +544,7 @@ const hover_items = [_]TitleItem{
 const hover_slice: []const TitleItem = &hover_items;
 
 fn declareHoverList() void {
-    list(.{ .id = "test-hover-list", .selected = 2 }, hover_slice, CtxA{ .fg = 0xe8e8e8 }, renderA);
+    list(.{ .id = "test-hover-list", .selected = 2 }, hover_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "generic list selected index uses selected_bg; hover hits one row" {
@@ -555,9 +555,9 @@ test "generic list selected index uses selected_bg; hover hits one row" {
     cl.setMeasureTextFunction(void, {}, stubMeasure);
 
     const props = ListProps{ .id = "test-hover-list", .selected = 2 };
-    const rest_c = render.u32ToClayColor(props.row_bg);
-    const hover_c = render.u32ToClayColor(props.hover_bg);
-    const sel_c = render.u32ToClayColor(props.selected_bg);
+    const rest_c = props.row_bg.toClay();
+    const hover_c = props.hover_bg.toClay();
+    const sel_c = props.selected_bg.toClay();
 
     // Frame 1: pointer parked offscreen — resting row_bg, nothing hovered.
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
@@ -625,11 +625,11 @@ const gap_items = [_]TitleItem{
 const gap_slice: []const TitleItem = &gap_items;
 
 fn declareGapList() void {
-    list(.{ .id = "test-gap-list", .gap = 8 }, gap_slice, CtxA{ .fg = 0xe8e8e8 }, renderA);
+    list(.{ .id = "test-gap-list", .gap = 8 }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 fn declareNoGapList() void {
-    list(.{ .id = "test-nogap-list" }, gap_slice, CtxA{ .fg = 0xe8e8e8 }, renderA);
+    list(.{ .id = "test-nogap-list" }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 fn pitchFor(declare_fn: *const fn () void, base: []const u8) !f32 {
@@ -648,7 +648,7 @@ test "list gap separates rows by row_h + gap" {
 }
 
 fn declareRadiusList() void {
-    list(.{ .id = "test-radius-list", .radius = 12 }, gap_slice, CtxA{ .fg = 0xe8e8e8 }, renderA);
+    list(.{ .id = "test-radius-list", .radius = 12 }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "list radius prop reaches row rects" {
@@ -692,7 +692,7 @@ test "list indexed rows declare IDI identities under the list id" {
 var select_rec = SelectCtx{};
 
 fn declareSelectList() void {
-    list(.{ .id = "test-select-list", .on_select = testOnSelect, .ctx = &select_rec }, demo_slice, CtxA{ .fg = 0xe8e8e8 }, renderA);
+    list(.{ .id = "test-select-list", .on_select = testOnSelect, .ctx = &select_rec }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "list self-registers on_select per row; dispatchClick fires index" {
@@ -716,7 +716,7 @@ test "list self-registers on_select per row; dispatchClick fires index" {
 }
 
 fn declareNoSelectList() void {
-    list(.{ .id = "test-noselect-list" }, demo_slice, CtxA{ .fg = 0xe8e8e8 }, renderA);
+    list(.{ .id = "test-noselect-list" }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "list without on_select registers nothing; dispatchClick returns false" {
@@ -762,14 +762,14 @@ fn declareClicksList() void {
         .{ .on_click = onClickA, .ctx = &clicks_a },
         .{ .on_click = onClickB, .ctx = &clicks_b },
     };
-    list(.{ .id = "test-clicks-list", .clicks = &clicks }, gap_slice, CtxA{ .fg = 0xe8e8e8 }, renderA);
+    list(.{ .id = "test-clicks-list", .clicks = &clicks }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 fn declareShortClicksList() void {
     const clicks = [_]registry.RowClick{
         .{ .on_click = onClickA, .ctx = &clicks_a },
     };
-    list(.{ .id = "test-short-clicks-list", .clicks = &clicks }, gap_slice, CtxA{ .fg = 0xe8e8e8 }, renderA);
+    list(.{ .id = "test-short-clicks-list", .clicks = &clicks }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "list clicks fires each row own fn once with own ctx" {
@@ -819,7 +819,7 @@ test "list clicks short slice leaves extra rows without entry" {
 }
 
 fn declareDisabledList() void {
-    list(.{ .id = "test-disabled-list", .disabled = true, .on_select = testOnSelect, .ctx = &disabled_rec }, demo_slice, CtxA{ .fg = 0xe8e8e8 }, renderA);
+    list(.{ .id = "test-disabled-list", .disabled = true, .on_select = testOnSelect, .ctx = &disabled_rec }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 var disabled_rec = SelectCtx{};
@@ -836,7 +836,7 @@ test "disabled list registers no clicks and dims rows" {
     cl.beginLayout();
     declareDisabledList();
     const cmds = cl.endLayout();
-    const dim = render.u32ToClayColor(0x1a1a1a);
+    const dim = Color.rgb(0x1a, 0x1a, 0x1a).toClay();
     const bg0 = rectColorForId(cmds, rowId("test-disabled-list", 0).id);
     try std.testing.expect(bg0 != null);
     try std.testing.expectEqual(dim, bg0.?);
@@ -885,7 +885,7 @@ const h_items = [_]TitleItem{
 const h_slice: []const TitleItem = &h_items;
 
 fn declareHList() void {
-    list(.{ .id = "test-h-list", .direction = .horizontal }, h_slice, CtxA{ .fg = 0xe8e8e8 }, renderA);
+    list(.{ .id = "test-h-list", .direction = .horizontal }, h_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "horizontal list lays cells in one row with advancing x" {
@@ -916,7 +916,7 @@ const g_items = [_]TitleItem{
 const g_slice: []const TitleItem = &g_items;
 
 fn declareGrid() void {
-    list(.{ .id = "test-grid", .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60 }, g_slice, CtxA{ .fg = 0xe8e8e8 }, renderA);
+    list(.{ .id = "test-grid", .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60 }, g_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "grid wraps 5 items in 3 cols with transparent cells" {
@@ -954,7 +954,7 @@ fn declareSelGrid() void {
     list(
         .{ .id = "test-sel-grid", .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60, .selected = 1, .selected_border_width = 2 },
         g_slice,
-        CtxA{ .fg = 0xe8e8e8 },
+        CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) },
         renderA,
     );
 }
@@ -967,7 +967,7 @@ test "grid selected cell draws the selected ring, others none" {
     for (cmds) |c| {
         if (c.command_type != .border) continue;
         borders += 1;
-        try std.testing.expectEqual(render.u32ToClayColor(0x7ab8ff), c.render_data.border.color);
+        try std.testing.expectEqual(Color.rgb(0x7a, 0xb8, 0xff).toClay(), c.render_data.border.color);
     }
     try std.testing.expectEqual(@as(usize, 1), borders);
 }
@@ -976,7 +976,7 @@ fn declareNoSelGrid() void {
     list(
         .{ .id = "test-nosel-grid", .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60, .selected_border_width = 2 },
         g_slice,
-        CtxA{ .fg = 0xe8e8e8 },
+        CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) },
         renderA,
     );
 }
@@ -1007,12 +1007,12 @@ test "grid hover draws the hover ring on one cell only" {
     _ = &hover_grid;
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
-    list(hover_grid, g_slice, CtxA{ .fg = 0xe8e8e8 }, renderA);
+    list(hover_grid, g_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
     _ = cl.endLayout();
     const bb = cl.getElementData(rowId("test-hov-grid", 0)).bounding_box;
     cl.setPointerState(.{ .x = bb.x + bb.width * 0.5, .y = bb.y + bb.height * 0.5 }, false);
     cl.beginLayout();
-    list(hover_grid, g_slice, CtxA{ .fg = 0xe8e8e8 }, renderA);
+    list(hover_grid, g_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
     const cmds = cl.endLayout();
     try std.testing.expect(cl.pointerOver(rowId("test-hov-grid", 0)));
     // One hover ring + the selected ring (matched by color: border
@@ -1021,8 +1021,8 @@ test "grid hover draws the hover ring on one cell only" {
     var sel_n: usize = 0;
     for (cmds) |c| {
         if (c.command_type != .border) continue;
-        if (std.meta.eql(c.render_data.border.color, render.u32ToClayColor(0x5a5a5a))) hov_n += 1;
-        if (std.meta.eql(c.render_data.border.color, render.u32ToClayColor(0x7ab8ff))) sel_n += 1;
+        if (std.meta.eql(c.render_data.border.color, Color.rgb(0x5a, 0x5a, 0x5a).toClay())) hov_n += 1;
+        if (std.meta.eql(c.render_data.border.color, Color.rgb(0x7a, 0xb8, 0xff).toClay())) sel_n += 1;
     }
     try std.testing.expectEqual(@as(usize, 1), hov_n);
     try std.testing.expectEqual(@as(usize, 1), sel_n);
@@ -1034,7 +1034,7 @@ fn declareClickGrid() void {
     list(
         .{ .id = "test-click-grid", .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60, .on_select = testOnSelect, .ctx = &grid_click_rec },
         g_slice,
-        CtxA{ .fg = 0xe8e8e8 },
+        CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) },
         renderA,
     );
 }

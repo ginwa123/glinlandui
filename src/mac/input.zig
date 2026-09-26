@@ -21,6 +21,7 @@
 //! re-derived inside the Objective-C shim where nothing can test it.
 
 const std = @import("std");
+const Color = @import("../core/color.zig").Color;
 const adapter = @import("adapter.zig");
 
 /// evdev button codes, matching `components.dispatch.BTN_LEFT`.
@@ -237,7 +238,7 @@ const App = struct {
             .direction = .column,
             .w = .grow,
             .h = .grow,
-            .bg = 0x334455,
+            .bg = Color.rgb(0x33, 0x44, 0x55),
         }, self, App.child);
     }
 

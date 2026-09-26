@@ -24,6 +24,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const text = @import("text.zig");
 const render_common = @import("../core/render_common.zig");
+const Color = @import("../core/color.zig").Color;
 const cl = @import("zclay");
 
 const egl = @cImport({
@@ -75,13 +76,14 @@ pub fn initGL() !void {
 // ---- Pure helpers (headless-testable) ----
 
 /// Convert 0xRRGGBB to a Clay color ([4]f32 in 0-255 range, alpha 255).
+///
+/// LEGACY SHIM — `Color` is the color type across the library and this
+/// exists so a pre-`Color` caller (and the tests below) keep compiling.
+/// It delegates to the shared `Color` rule rather than re-deriving the shift
+/// and masks, so the GLES3 backend and the CPU backend cannot disagree
+/// about what a color means.
 pub fn u32ToClayColor(hex: u32) [4]f32 {
-    return .{
-        @floatFromInt((hex >> 16) & 0xff),
-        @floatFromInt((hex >> 8) & 0xff),
-        @floatFromInt(hex & 0xff),
-        255,
-    };
+    return Color.argb(0xFF00_0000 | (hex & 0x00ff_ffff)).toClay();
 }
 
 /// Convert 0xRRGGBB to normalized GL RGBA floats (alpha 1.0).
@@ -983,7 +985,7 @@ pub const Renderer = struct {
     /// Per-frame decode budget (see img_decodes_this_frame).
     const img_decode_budget: u32 = 2;
     /// Placeholder fill while an image loads/fails (neutral dark).
-    const img_placeholder: u32 = 0x1a1a1a;
+    const img_placeholder = Color.rgb(0x1a, 0x1a, 0x1a);
 
     /// Decode path (NUL-terminated) via stb, downscale to max_dim, upload
     /// as an RGBA GL texture. Returns tex + decoded dims. Exe-only (the
@@ -1111,7 +1113,7 @@ pub const Renderer = struct {
         const path = ref.path_ptr[0..ref.path_len];
         const max_dim: u16 = if (ref.max_dim == 0) 256 else ref.max_dim;
         const t = self.imageTexture(path, max_dim) orelse {
-            self.drawRectCmd(win_w, win_h, bb_x, bb_y, bb_w, bb_h, u32ToClayColor(img_placeholder), .{});
+            self.drawRectCmd(win_w, win_h, bb_x, bb_y, bb_w, bb_h, img_placeholder.toClay(), .{});
             return;
         };
         const iw: f32 = @floatFromInt(t.w);
@@ -1122,7 +1124,7 @@ pub const Renderer = struct {
                 self.drawImageQuad(t.tex, win_w, win_h, bb_x, bb_y, bb_w, bb_h, uv);
             },
             .contain => {
-                self.drawRectCmd(win_w, win_h, bb_x, bb_y, bb_w, bb_h, u32ToClayColor(img_placeholder), .{});
+                self.drawRectCmd(win_w, win_h, bb_x, bb_y, bb_w, bb_h, img_placeholder.toClay(), .{});
                 const b = containBox(iw, ih, bb_w, bb_h);
                 self.drawImageQuad(t.tex, win_w, win_h, bb_x + b[0], bb_y + b[1], b[2], b[3], .{ 0, 0, 1, 1 });
             },

@@ -2,11 +2,11 @@
 // Composes the input field (search) + generic list (matches) from the
 // sibling components: one search box over a filtered string list with
 // owner-side selection dispatch (same stored-props pattern as list).
-// Imports: std + zclay + core/render_common + sibling components ONLY.
+// Imports: std + zclay + core/color + core/render_common + sibling components ONLY.
 // Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
-const render = @import("../render_common.zig");
+const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const list = @import("list.zig");
 const input = @import("input.zig");
@@ -72,20 +72,20 @@ pub const DropdownProps = struct {
     show_search: bool = true,
     font_size: u16 = 14,
     row_h: u32 = 40,
-    row_bg: u32 = 0x1e1e1e,
-    selected_bg: u32 = 0x3a3a3a,
-    row_fg: u32 = 0xe8e8e8,
-    hover_bg: u32 = 0x2d2d2d,
-    field_bg: u32 = 0x262626,
+    row_bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
+    selected_bg: Color = Color.rgb(0x3a, 0x3a, 0x3a),
+    row_fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
+    hover_bg: Color = Color.rgb(0x2d, 0x2d, 0x2d),
+    field_bg: Color = Color.rgb(0x26, 0x26, 0x26),
     radius: u32 = 4,
     gap: u16 = 8,
     /// Uniform border for the search field + rows (0 = none) + color.
     border_width: u16 = 0,
-    border_color: u32 = 0x000000,
+    border_color: Color = Color.rgb(0x00, 0x00, 0x00),
     /// Disabled dropdown: field dims + list takes no hover/clicks.
     disabled: bool = false,
-    disabled_bg: u32 = 0x1a1a1a,
-    disabled_fg: u32 = 0x777777,
+    disabled_bg: Color = Color.rgb(0x1a, 0x1a, 0x1a),
+    disabled_fg: Color = Color.rgb(0x77, 0x77, 0x77),
     /// Field sizing: fixed overrides (null = grow/fit) + min/max clamps.
     field_w: ?f32 = null,
     field_h: ?f32 = null,
@@ -100,7 +100,7 @@ pub const DropdownProps = struct {
     row_max_h: f32 = 0,
     /// Overlay card border (defaults to border_* when 0-width + default color).
     overlay_border_width: u16 = 0,
-    overlay_border_color: u32 = 0x000000,
+    overlay_border_color: Color = Color.rgb(0x00, 0x00, 0x00),
     /// Caret + keyboard selection for the search field (owner-held, one
     /// per draft). Null keeps the legacy caret-at-end render.
     query_edit: ?input.EditState = null,
@@ -130,7 +130,7 @@ pub const DropdownProps = struct {
     overlay_id: []const u8 = "dropdown-float",
     /// Opaque bg for the floating card so rows underneath don't show
     /// through the gaps. Agnostic default (callers pass theme bg).
-    overlay_bg: u32 = 0x222222,
+    overlay_bg: Color = Color.rgb(0x22, 0x22, 0x22),
     overlay_pad: u16 = 8,
     overlay_radius: u32 = 4,
     z_index: i16 = 10,
@@ -193,13 +193,13 @@ pub fn dropdown(
                 .padding = .all(props.overlay_pad),
                 .child_gap = props.gap,
             },
-            .background_color = render.u32ToClayColor(props.overlay_bg),
+            .background_color = props.overlay_bg.toClay(),
             .corner_radius = .all(@floatFromInt(props.overlay_radius)),
             .border = if (props.overlay_border_width > 0) .{
-                .color = render.u32ToClayColor(props.overlay_border_color),
+                .color = props.overlay_border_color.toClay(),
                 .width = .outside(props.overlay_border_width),
             } else if (props.border_width > 0) .{
-                .color = render.u32ToClayColor(props.border_color),
+                .color = props.border_color.toClay(),
                 .width = .outside(props.border_width),
             } else .{},
         })({
@@ -269,7 +269,7 @@ fn dropdownInner(
     if (props.footer) |f| {
         cl.text(f, .{
             .font_size = props.font_size,
-            .color = render.u32ToClayColor(props.row_fg),
+            .color = props.row_fg.toClay(),
         });
     }
 }
@@ -324,22 +324,22 @@ test "DropdownProps carries neutral dark defaults + null callbacks" {
     try std.testing.expect(p.show_search);
     try std.testing.expectEqual(@as(u16, 14), p.font_size);
     try std.testing.expectEqual(@as(u32, 40), p.row_h);
-    try std.testing.expectEqual(@as(u32, 0x1e1e1e), p.row_bg);
-    try std.testing.expectEqual(@as(u32, 0x262626), p.field_bg);
+    try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.row_bg);
+    try std.testing.expectEqual(Color.rgb(0x26, 0x26, 0x26), p.field_bg);
     try std.testing.expect(p.on_select == null);
     try std.testing.expect(p.ctx == null);
 }
 
 const Ctx = struct {
     kinds: []const RowKind,
-    fg: u32,
+    fg: Color,
 };
 
 fn renderRow(ctx: Ctx, item: []const u8, index: usize) void {
     const kind: RowKind = if (index < ctx.kinds.len) ctx.kinds[index] else .info;
     cl.text(item, .{
         .font_size = 14,
-        .color = render.u32ToClayColor(ctx.fg),
+        .color = ctx.fg.toClay(),
     });
     switch (kind) {
         .info, .back => {},
@@ -349,7 +349,7 @@ fn renderRow(ctx: Ctx, item: []const u8, index: usize) void {
             })({});
             cl.text(">", .{
                 .font_size = 14,
-                .color = render.u32ToClayColor(ctx.fg),
+                .color = ctx.fg.toClay(),
             });
         },
     }
@@ -363,14 +363,14 @@ const demo_kinds_slice: []const RowKind = &demo_kinds;
 fn declareDropdown() void {
     dropdown(.{ .field_id = "test-dd-field", .list_id = "test-dd-list" }, "a", demo_slice, Ctx{
         .kinds = demo_kinds_slice,
-        .fg = 0xe8e8e8,
+        .fg = Color.rgb(0xe8, 0xe8, 0xe8),
     }, renderRow);
 }
 
 fn declareNoSearch() void {
     dropdown(.{ .field_id = "test-dd-ns-field", .list_id = "test-dd-ns-list", .show_search = false }, "", demo_slice, Ctx{
         .kinds = demo_kinds_slice,
-        .fg = 0xe8e8e8,
+        .fg = Color.rgb(0xe8, 0xe8, 0xe8),
     }, renderRow);
 }
 
@@ -426,7 +426,7 @@ fn declareClickDropdown() void {
         .ctx = &click_rec,
     }, "", demo_slice, Ctx{
         .kinds = demo_kinds_slice,
-        .fg = 0xe8e8e8,
+        .fg = Color.rgb(0xe8, 0xe8, 0xe8),
     }, renderRow);
 }
 
@@ -477,7 +477,7 @@ fn declareDdClicksPassthrough() void {
         .clicks = &clicks,
     }, "", demo_slice[0..2], Ctx{
         .kinds = demo_kinds_slice,
-        .fg = 0xe8e8e8,
+        .fg = Color.rgb(0xe8, 0xe8, 0xe8),
     }, renderRow);
 }
 
@@ -562,7 +562,7 @@ fn declareOverlayFrame() void {
             .footer = "hint",
         }, "", demo_slice[0..2], Ctx{
             .kinds = demo_kinds_slice,
-            .fg = 0xe8e8e8,
+            .fg = Color.rgb(0xe8, 0xe8, 0xe8),
         }, renderRow);
         declareAfterRow();
     });

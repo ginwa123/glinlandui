@@ -1,9 +1,9 @@
 // Agnostic reusable Clay slider (toolkit-style, library only).
-// Imports: std + zclay + core/render_common + sibling components ONLY.
+// Imports: std + zclay + core/color + core/render_common + sibling components ONLY.
 // Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
-const render = @import("../render_common.zig");
+const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
 
@@ -43,13 +43,13 @@ pub const SliderProps = struct {
     h: u32 = 24,
     track_h: u32 = 4,
     radius: u32 = 2,
-    track_bg: u32 = 0x3a3a3a,
-    fill_bg: u32 = 0x4caf50,
+    track_bg: Color = Color.rgb(0x3a, 0x3a, 0x3a),
+    fill_bg: Color = Color.rgb(0x4c, 0xaf, 0x50),
     thumb_size: u32 = 16,
-    thumb_color: u32 = 0xffffff,
-    hover_fill: ?u32 = null,
+    thumb_color: Color = Color.rgb(0xff, 0xff, 0xff),
+    hover_fill: ?Color = null,
     disabled: bool = false,
-    disabled_bg: u32 = 0x2a2a2a,
+    disabled_bg: Color = Color.rgb(0x2a, 0x2a, 0x2a),
     on_change: ClickFn = null,
     ctx: ?*anyopaque = null,
 };
@@ -119,7 +119,7 @@ pub fn slider(props: SliderProps) void {
                 },
                 .child_alignment = .{ .x = .left, .y = .center },
             },
-            .background_color = render.u32ToClayColor(if (props.disabled) props.disabled_bg else props.track_bg),
+            .background_color = (if (props.disabled) props.disabled_bg else props.track_bg).toClay(),
             .corner_radius = .all(@floatFromInt(props.radius)),
         })({
             cl.UI()(.{
@@ -135,7 +135,7 @@ pub fn slider(props: SliderProps) void {
                 // NOTE: cl.hovered() stays INSIDE this UI() literal (while
                 // the fill is open) — hoisting it above would query the
                 // track/outer instead.
-                .background_color = render.u32ToClayColor(if (props.disabled) props.disabled_bg else if (cl.hovered()) (props.hover_fill orelse props.fill_bg) else props.fill_bg),
+                .background_color = (if (props.disabled) props.disabled_bg else if (cl.hovered()) (props.hover_fill orelse props.fill_bg) else props.fill_bg).toClay(),
                 .corner_radius = .all(@floatFromInt(props.radius)),
             })({
                 cl.UI()(.{
@@ -146,7 +146,7 @@ pub fn slider(props: SliderProps) void {
                             .h = .fixed(thumb_f),
                         },
                     },
-                    .background_color = render.u32ToClayColor(props.thumb_color),
+                    .background_color = props.thumb_color.toClay(),
                     .corner_radius = .all(thumb_f / 2.0),
                 })({});
             });
@@ -230,13 +230,13 @@ test "SliderProps carries neutral defaults" {
     try std.testing.expectEqual(@as(u32, 24), p.h);
     try std.testing.expectEqual(@as(u32, 4), p.track_h);
     try std.testing.expectEqual(@as(u32, 2), p.radius);
-    try std.testing.expectEqual(@as(u32, 0x3a3a3a), p.track_bg);
-    try std.testing.expectEqual(@as(u32, 0x4caf50), p.fill_bg);
+    try std.testing.expectEqual(Color.rgb(0x3a, 0x3a, 0x3a), p.track_bg);
+    try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50), p.fill_bg);
     try std.testing.expectEqual(@as(u32, 16), p.thumb_size);
-    try std.testing.expectEqual(@as(u32, 0xffffff), p.thumb_color);
+    try std.testing.expectEqual(Color.rgb(0xff, 0xff, 0xff), p.thumb_color);
     try std.testing.expect(p.hover_fill == null);
     try std.testing.expect(!p.disabled);
-    try std.testing.expectEqual(@as(u32, 0x2a2a2a), p.disabled_bg);
+    try std.testing.expectEqual(Color.rgb(0x2a, 0x2a, 0x2a), p.disabled_bg);
     try std.testing.expect(p.on_change == null);
     try std.testing.expect(p.ctx == null);
 }
@@ -279,9 +279,9 @@ test "slider track/fill/thumb colors match props" {
     try std.testing.expect(track_c != null);
     try std.testing.expect(fill_c != null);
     try std.testing.expect(thumb_c != null);
-    try std.testing.expectEqual(render.u32ToClayColor(0x3a3a3a), track_c.?);
-    try std.testing.expectEqual(render.u32ToClayColor(0x4caf50), fill_c.?);
-    try std.testing.expectEqual(render.u32ToClayColor(0xffffff), thumb_c.?);
+    try std.testing.expectEqual(Color.rgb(0x3a, 0x3a, 0x3a).toClay(), track_c.?);
+    try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50).toClay(), fill_c.?);
+    try std.testing.expectEqual(Color.rgb(0xff, 0xff, 0xff).toClay(), thumb_c.?);
 }
 
 fn declareClampedSlider() void {
@@ -373,7 +373,7 @@ test "disabled slider uses disabled_bg and registers no click" {
     const cmds = cl.endLayout();
     const track_bg = rectColorForId(cmds, cl.ElementId.IDI("test-disabled-slider", track_index).id);
     try std.testing.expect(track_bg != null);
-    try std.testing.expectEqual(render.u32ToClayColor(0x2a2a2a), track_bg.?);
+    try std.testing.expectEqual(Color.rgb(0x2a, 0x2a, 0x2a).toClay(), track_bg.?);
     const bb = cl.getElementData(cl.getElementId("test-disabled-slider")).bounding_box;
     try std.testing.expect(!registry.dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
     try std.testing.expectEqual(@as(usize, 0), click_rec.calls);

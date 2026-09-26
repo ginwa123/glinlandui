@@ -32,6 +32,7 @@ src/
 │   ├── window_portable.zig   headless/CPU backend — ALSO the test backend
 │   ├── select.zig            ← the one bridge from core to platform.zig
 │   ├── render.zig            renderer facade      (consumes select.zig)
+│   ├── color.zig            the Color type: every prop is one, not a u32
 │   ├── render_common.zig     the drawing contract the DRAWING widgets import
 │   │                         (click_registry + dispatch are logic-only)
 │   ├── render_software.zig   CPU rasterizer (real pixels, real RGBA8)
@@ -101,13 +102,13 @@ only calls the `Delegate`. That contract is the whole integration surface.
 
 ## 2. Invariants. Breaking these fails CI, not just a test
 
-### I1 — Test parity: `zig build test` must report exactly **440**
+### I1 — Test parity: `zig build test` must report exactly **458**
 
-`tests.lock` holds `440`; `ci/check_test_parity.sh` asserts it. The suite compiles
+`tests.lock` holds `458`; `ci/check_test_parity.sh` asserts it. The suite compiles
 a **fixed, platform-independent set** of test roots so Linux and macOS run the
 same tests, which is what makes the macOS path trustworthy without a Mac.
 
-The count is `386` (`root.zig` aggregate) + `1` (`main.zig`) + `36` (the
+The count is `404` (`root.zig` aggregate) + `1` (`main.zig`) + `36` (the
 calculator example) + `15` (`examples/calculator_e2e_test.zig`, the E2E suite).
 
 - **Adding or removing a `test` block changes the count.** Update `tests.lock` in
@@ -124,8 +125,15 @@ calculator example) + `15` (`examples/calculator_e2e_test.zig`, the E2E suite).
   `examples/calculator_e2e_test.zig` reaches the calculator through an imported
   module (`@import("calculator")`, wired in `build.zig`), **not** a relative
   `@import("calculator.zig")`. The relative form compiles and passes but makes the
-  count 476 instead of 440, by re-running the example's 36 tests in the E2E
+  count 494 instead of 458, by re-running the example's 36 tests in the E2E
   binary.
+
+`zig build native-test` is a SEPARATE count (`99`) and is not locked: it is one
+consolidated root (`src/native_test.zig`) that reaches the Linux backends, and
+it also pulls in whatever `core/` those backends import. That is why adding
+`core/color.zig` moved native from `83` to `99` as well as the parity count —
+its 16 tests are collected by both roots. A new `core/` file with tests is
+counted twice; that is expected, not double-counting to fix.
 
 ### I2 — The test build must select the portable backend on every OS
 
@@ -189,12 +197,12 @@ like a confusing type mismatch, not a missing import.
 ```bash
 # The full local gate. All four must pass.
 zig fmt --check build.zig src examples    # formatting is gate 1 in CI
-zig build test --summary all              # expect: 425/440 (15 skipped)  ← see I1 + §5
-./ci/check_test_parity.sh                 # expect: parity: 440 tests (matches tests.lock)
+zig build test --summary all              # expect: 443/458 (15 skipped)  ← see I1 + §5
+./ci/check_test_parity.sh                 # expect: parity: 458 tests (matches tests.lock)
 ./ci/check_layering.sh                    # expect: layering: ok
 
 # Linux native backends (Wayland/EGL/GLES3/pango). NOT part of the parity count.
-zig build native-test --summary all       # expect: 83/83
+zig build native-test --summary all       # expect: 99/99
 
 # Real build + a headless smoke test that proves pixels were painted.
 zig build -Doptimize=ReleaseSafe
@@ -255,10 +263,10 @@ them.
 In a **test** build, `text_impl` is `core/text_portable.zig` (invariant I2), and
 its `font_candidates` are **macOS paths** (`/System/Library/Fonts/…`). So:
 
-- on **macOS**, those paths exist → the 15 tests run → `440/440 passed`;
-- on **Linux/macOS-local without those paths** → 15 skip → `425/440 (15 skipped)`.
+- on **macOS**, those paths exist → the 15 tests run → `458/458 passed`;
+- on **Linux/macOS-local without those paths** → 15 skip → `443/458 (15 skipped)`.
 
-The count is still 440 either way, so parity holds and the gate passes. The real
+The count is still 458 either way, so parity holds and the gate passes. The real
 consequence is a **coverage gap: the glyph rasterizer is only exercised on
 macOS.** `linux/text.zig` *does* carry Linux font paths, but the parity suite never
 selects it. A useful, contained improvement would be to give
@@ -270,7 +278,7 @@ platforms. It is not done yet — do not mistake it for a passing test.
 ## 6. Recipes
 
 **Add a widget** — a file in `core/components/`. A *drawing* widget imports `std`,
-`zclay` and `../render_common.zig`; a logic-only one (`click_registry`,
+`zclay`, `../render_common.zig` and `../color.zig`; a logic-only one (`click_registry`,
 `dispatch`) needs only `std` + `zclay`. Then add it to the `components` struct in
 `root.zig` *and* to the aggregate test block there. If it has tests, `tests.lock`
 changes.

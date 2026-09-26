@@ -2,11 +2,11 @@
 // Vertical, horizontal, or both axes: a fixed-viewport Clay clip element
 // whose overflowing children scroll (wheel via updateScroll, drag via Clay)
 // with an automatic floating scrollbar thumb per scroll axis.
-// Imports: std + zclay + core/render_common + sibling box (Size) ONLY.
+// Imports: std + zclay + core/color + core/render_common + sibling box (Size) ONLY.
 // Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
-const render = @import("../render_common.zig");
+const Color = @import("../color.zig").Color;
 const box_mod = @import("box.zig");
 const semantics = @import("../semantics.zig");
 
@@ -43,19 +43,19 @@ pub const ScrollProps = struct {
     min_h: f32 = 0,
     max_w: f32 = 0,
     max_h: f32 = 0,
-    bg: ?u32 = null,
+    bg: ?Color = null,
     pad: u16 = 0,
     gap: u16 = 0,
     radius: u32 = 0,
     border_width: u16 = 0,
-    border_color: u32 = 0x000000,
+    border_color: Color = Color.rgb(0x00, 0x00, 0x00),
     disabled: bool = false,
     show_scrollbar: bool = true,
     scrollbar_width: u16 = 8,
     scrollbar_margin: f32 = 4,
-    track_bg: ?u32 = null,
-    thumb_bg: u32 = 0x5a5a5a,
-    thumb_hover_bg: u32 = 0x7a7a7a,
+    track_bg: ?Color = null,
+    thumb_bg: Color = Color.rgb(0x5a, 0x5a, 0x5a),
+    thumb_hover_bg: Color = Color.rgb(0x7a, 0x7a, 0x7a),
     thumb_radius: u32 = 4,
     min_thumb: f32 = 24,
     z_index: i16 = 10,
@@ -230,10 +230,10 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
             .child_gap = props.gap,
         },
         .clip = .{ .horizontal = axes.h, .vertical = axes.v, .child_offset = cl.getScrollOffset() },
-        .background_color = if (props.bg) |b| render.u32ToClayColor(b) else .{ 0, 0, 0, 0 },
+        .background_color = if (props.bg) |b| b.toClay() else .{ 0, 0, 0, 0 },
         .corner_radius = .all(@floatFromInt(props.radius)),
         .border = if (props.border_width > 0) .{
-            .color = render.u32ToClayColor(props.border_color),
+            .color = props.border_color.toClay(),
             .width = .outside(props.border_width),
         } else .{},
     })({
@@ -285,7 +285,7 @@ fn declareScrollbars(props: ScrollProps) void {
                             .pointer_capture_mode = .passthrough,
                         },
                         .layout = .{ .sizing = .{ .w = .fixed(w), .h = .fixed(track) } },
-                        .background_color = render.u32ToClayColor(tb),
+                        .background_color = tb.toClay(),
                         .corner_radius = .all(@floatFromInt(props.thumb_radius)),
                     })({});
                 }
@@ -302,7 +302,7 @@ fn declareScrollbars(props: ScrollProps) void {
                         .pointer_capture_mode = .passthrough,
                     },
                     .layout = .{ .sizing = .{ .w = .fixed(w), .h = .fixed(len) } },
-                    .background_color = render.u32ToClayColor(if (cl.hovered()) props.thumb_hover_bg else props.thumb_bg),
+                    .background_color = (if (cl.hovered()) props.thumb_hover_bg else props.thumb_bg).toClay(),
                     .corner_radius = .all(@floatFromInt(props.thumb_radius)),
                 })({});
             }
@@ -328,7 +328,7 @@ fn declareScrollbars(props: ScrollProps) void {
                             .pointer_capture_mode = .passthrough,
                         },
                         .layout = .{ .sizing = .{ .w = .fixed(track), .h = .fixed(w) } },
-                        .background_color = render.u32ToClayColor(tb),
+                        .background_color = tb.toClay(),
                         .corner_radius = .all(@floatFromInt(props.thumb_radius)),
                     })({});
                 }
@@ -343,7 +343,7 @@ fn declareScrollbars(props: ScrollProps) void {
                         .pointer_capture_mode = .passthrough,
                     },
                     .layout = .{ .sizing = .{ .w = .fixed(len), .h = .fixed(w) } },
-                    .background_color = render.u32ToClayColor(if (cl.hovered()) props.thumb_hover_bg else props.thumb_bg),
+                    .background_color = (if (cl.hovered()) props.thumb_hover_bg else props.thumb_bg).toClay(),
                     .corner_radius = .all(@floatFromInt(props.thumb_radius)),
                 })({});
             }
@@ -405,8 +405,8 @@ test "ScrollProps carries neutral defaults (scrollbar on)" {
     try std.testing.expect(p.show_scrollbar);
     try std.testing.expectEqual(@as(u16, 8), p.scrollbar_width);
     try std.testing.expect(p.track_bg == null);
-    try std.testing.expectEqual(@as(u32, 0x5a5a5a), p.thumb_bg);
-    try std.testing.expectEqual(@as(u32, 0x7a7a7a), p.thumb_hover_bg);
+    try std.testing.expectEqual(Color.rgb(0x5a, 0x5a, 0x5a), p.thumb_bg);
+    try std.testing.expectEqual(Color.rgb(0x7a, 0x7a, 0x7a), p.thumb_hover_bg);
     try std.testing.expectEqual(@as(f32, 24), p.min_thumb);
 }
 

@@ -2,11 +2,11 @@
 // Single-line ASCII input: prompt + query + block cursor, on a distinct
 // background so it reads as a field; optional Clay BORDER chrome
 // (border_width/color) is drawn by the GLES3 renderer — see renderer.zig.
-// Imports: std + zclay + core/render_common ONLY.
+// Imports: std + zclay + core/color + core/render_common ONLY.
 // Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
-const render = @import("../render_common.zig");
+const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
 
@@ -363,11 +363,11 @@ pub fn handleKey(buf: []u8, len: *usize, st: *EditState, mods: Mods, evdev: u32,
 pub const FieldProps = struct {
     id: []const u8,
     font_size: u16 = 14,
-    fg: u32 = 0xe8e8e8,
-    bg: u32 = 0x262626,
+    fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
+    bg: Color = Color.rgb(0x26, 0x26, 0x26),
     /// Selected-run text color for fieldEdit (text runs carry color only,
     /// no per-run bg at this renderer's fidelity).
-    sel_fg: u32 = 0x7ab8ff,
+    sel_fg: Color = Color.rgb(0x7a, 0xb8, 0xff),
     radius: u32 = 4,
     pad_tb: u16 = 8,
     pad_lr: u16 = 12,
@@ -381,10 +381,10 @@ pub const FieldProps = struct {
     min_h: f32 = 0,
     max_h: f32 = 0,
     border_width: u16 = 0,
-    border_color: u32 = 0x000000,
+    border_color: Color = Color.rgb(0x00, 0x00, 0x00),
     disabled: bool = false,
-    disabled_bg: u32 = 0x1a1a1a,
-    disabled_fg: u32 = 0x777777,
+    disabled_bg: Color = Color.rgb(0x1a, 0x1a, 0x1a),
+    disabled_fg: Color = Color.rgb(0x77, 0x77, 0x77),
 };
 
 fn fieldSizingW(props: FieldProps) cl.SizingAxis {
@@ -401,7 +401,7 @@ fn fieldSizingH(props: FieldProps) cl.SizingAxis {
 
 fn fieldBorder(props: FieldProps) cl.BorderElementConfig {
     if (props.border_width == 0) return .{};
-    return .{ .color = render.u32ToClayColor(props.border_color), .width = .outside(props.border_width) };
+    return .{ .color = props.border_color.toClay(), .width = .outside(props.border_width) };
 }
 
 /// Declare a text field: prompt + query + block cursor on the field bg.
@@ -411,8 +411,8 @@ fn fieldBorder(props: FieldProps) cl.BorderElementConfig {
 /// (.ID(props.id), the outer container) with .text. Disabled skips so
 /// hover stays .default; empty id skips (headless-safe).
 pub fn field(props: FieldProps, query: []const u8) void {
-    const bg: u32 = if (props.disabled) props.disabled_bg else props.bg;
-    const fg: u32 = if (props.disabled) props.disabled_fg else props.fg;
+    const bg: Color = if (props.disabled) props.disabled_bg else props.bg;
+    const fg: Color = if (props.disabled) props.disabled_fg else props.fg;
     cl.UI()(.{
         .id = .ID(props.id),
         .layout = .{
@@ -422,11 +422,11 @@ pub fn field(props: FieldProps, query: []const u8) void {
             .child_alignment = .{ .x = .left, .y = .center },
             .child_gap = 0,
         },
-        .background_color = render.u32ToClayColor(bg),
+        .background_color = bg.toClay(),
         .corner_radius = .all(@floatFromInt(props.radius)),
         .border = fieldBorder(props),
     })({
-        const fg_c = render.u32ToClayColor(fg);
+        const fg_c = fg.toClay();
         cl.text(">", .{
             .font_size = props.font_size,
             .color = fg_c,
@@ -471,8 +471,8 @@ pub fn field(props: FieldProps, query: []const u8) void {
 pub fn fieldEdit(props: FieldProps, query: []const u8, st: EditState) void {
     var s = st;
     clampEdit(&s, query.len);
-    const fg = render.u32ToClayColor(if (props.disabled) props.disabled_fg else props.fg);
-    const sel_fg = render.u32ToClayColor(if (props.disabled) props.disabled_fg else props.sel_fg);
+    const fg = (if (props.disabled) props.disabled_fg else props.fg).toClay();
+    const sel_fg = (if (props.disabled) props.disabled_fg else props.sel_fg).toClay();
     cl.UI()(.{
         .id = .ID(props.id),
         .layout = .{
@@ -482,7 +482,7 @@ pub fn fieldEdit(props: FieldProps, query: []const u8, st: EditState) void {
             .child_alignment = .{ .x = .left, .y = .center },
             .child_gap = 0,
         },
-        .background_color = render.u32ToClayColor(if (props.disabled) props.disabled_bg else props.bg),
+        .background_color = (if (props.disabled) props.disabled_bg else props.bg).toClay(),
         .corner_radius = .all(@floatFromInt(props.radius)),
         .border = fieldBorder(props),
     })({
@@ -600,8 +600,8 @@ test "insert appends until full, backspace drops bytes" {
 test "FieldProps carries neutral dark defaults" {
     const p = FieldProps{ .id = "x" };
     try std.testing.expectEqual(@as(u16, 14), p.font_size);
-    try std.testing.expectEqual(@as(u32, 0xe8e8e8), p.fg);
-    try std.testing.expectEqual(@as(u32, 0x262626), p.bg);
+    try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.fg);
+    try std.testing.expectEqual(Color.rgb(0x26, 0x26, 0x26), p.bg);
     try std.testing.expectEqual(@as(u32, 4), p.radius);
 }
 
@@ -879,7 +879,7 @@ test "fieldEdit declares a stable id for hit-testing" {
 
 test "FieldProps selection color has a neutral default" {
     const p = FieldProps{ .id = "x" };
-    try std.testing.expectEqual(@as(u32, 0x7ab8ff), p.sel_fg);
+    try std.testing.expectEqual(Color.rgb(0x7a, 0xb8, 0xff), p.sel_fg);
 }
 
 // ---- Mods + handleKey: component owns the event state machine ----
@@ -962,7 +962,7 @@ test "disabled field dims to disabled_bg" {
     var found = false;
     for (cmds) |c| {
         if (c.command_type == .rectangle and c.id == cl.getElementId("test-disabled-field").id) {
-            try std.testing.expectEqual(render.u32ToClayColor(0x1a1a1a), c.render_data.rectangle.background_color);
+            try std.testing.expectEqual(Color.rgb(0x1a, 0x1a, 0x1a).toClay(), c.render_data.rectangle.background_color);
             found = true;
         }
     }
@@ -970,7 +970,7 @@ test "disabled field dims to disabled_bg" {
 }
 
 fn declareBorderField() void {
-    field(.{ .id = "test-border-field", .border_width = 1, .border_color = 0xff0000 }, "hi");
+    field(.{ .id = "test-border-field", .border_width = 1, .border_color = Color.rgb(0xff, 0x00, 0x00) }, "hi");
 }
 
 test "field border emits a border command" {

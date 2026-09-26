@@ -4,7 +4,7 @@
 // lifetime like all declare props). The GLES3 renderer decodes (stb),
 // caches, and draws it, falling back to a placeholder rect while
 // loading. Headless tests observe the IMAGE command (no GL).
-// Imports: std + zclay + core/render_common + click_registry ONLY.
+// Imports: std + zclay + core/color + core/render_common + click_registry ONLY.
 // Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
