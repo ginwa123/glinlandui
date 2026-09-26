@@ -8,6 +8,7 @@ const std = @import("std");
 const cl = @import("zclay");
 const render = @import("../render_common.zig");
 const registry = @import("click_registry.zig");
+const semantics = @import("../semantics.zig");
 
 /// Raw evdev keycode → printable ASCII under the US layout.
 /// Returns null for non-printables (Escape/Backspace/Enter/Shift are
@@ -445,7 +446,18 @@ pub fn field(props: FieldProps, query: []const u8) void {
             .color = fg_c,
         });
     });
+    // Semantics: an editable field declares `set_text`, so
+    // `Interaction.performTextInput` can refuse to type into a non-editable
+    // node and `assertValueEquals` can read the committed query.
     if (!props.disabled and props.id.len > 0) {
+        semantics.register(.{
+            .id = cl.getElementId(props.id),
+            .tag = props.id,
+            .role = .text_field,
+            .value = query,
+            .flags = .{ .enabled = true },
+            .actions = .{ .set_text = true },
+        });
         registry.registerHover(cl.getElementId(props.id), .text);
     }
 }
@@ -500,7 +512,16 @@ pub fn fieldEdit(props: FieldProps, query: []const u8, st: EditState) void {
             }
         }
     });
+    // Same contract as field(): editable, so it declares set_text.
     if (!props.disabled and props.id.len > 0) {
+        semantics.register(.{
+            .id = cl.getElementId(props.id),
+            .tag = props.id,
+            .role = .text_field,
+            .value = query,
+            .flags = .{ .enabled = true },
+            .actions = .{ .set_text = true },
+        });
         registry.registerHover(cl.getElementId(props.id), .text);
     }
 }

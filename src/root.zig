@@ -28,6 +28,10 @@ pub const software_render = @import("core/render_software.zig");
 /// Reusable, compositor-free UI test harness. Import this module from
 /// application tests to drive the same Host/Clay path used at runtime.
 pub const testing = @import("core/testing/root.zig");
+/// Per-frame semantics model: the queryable node tree behind
+/// `testing.Driver.onNode*`, and the intended home for accessibility and the
+/// debug inspector. Resolve it per frame with `frame.FrameOptions.resolve_semantics`.
+pub const semantics = @import("core/semantics.zig");
 
 // Pure utils (geometry / input / EGL / test-frames + legacy helpers).
 pub const Placement = platform.Placement;
@@ -77,6 +81,16 @@ test {
     // opt-in `native-test` step (Linux only) and never affect the default
     // cross-platform count. Keep this list platform-independent.
     _ = @import("core/testing/root.zig");
+    // The semantics model and the E2E test surface built on it. They are
+    // already reachable through core/testing/root.zig, but they are listed
+    // here explicitly because this block IS the parity contract: every file
+    // named here is type-checked on BOTH platforms, so a typo in the
+    // Compose-style query/action/assertion layer fails on macOS too, not only
+    // in CI's Linux leg.
+    _ = @import("core/semantics.zig");
+    _ = @import("core/testing/finders.zig");
+    _ = @import("core/testing/assertions.zig");
+    _ = @import("core/testing/actions.zig");
     _ = @import("core/host.zig");
     _ = @import("core/frame.zig");
     _ = @import("core/render_common.zig");

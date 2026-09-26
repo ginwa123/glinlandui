@@ -8,6 +8,7 @@ const std = @import("std");
 const cl = @import("zclay");
 const render = @import("../render_common.zig");
 const box_mod = @import("box.zig");
+const semantics = @import("../semantics.zig");
 
 /// Scroll axes: vertical (column content, clips top-to-bottom),
 /// horizontal (row content, clips left-to-right), or both.
@@ -236,7 +237,21 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
             .width = .outside(props.border_width),
         } else .{},
     })({
+        // Clip ancestry for the semantics layer: every node registered inside
+        // this container records it, so resolve() can compute what is actually
+        // visible and performScrollTo() can find the container to nudge.
+        semantics.pushAncestor(cl.getElementId(props.id), true);
         children(ctx);
+        semantics.popAncestor();
+    });
+    // The container's own node is registered AFTER the pop, so it does not
+    // list itself as an ancestor.
+    semantics.register(.{
+        .id = cl.getElementId(props.id),
+        .tag = props.id,
+        .role = .scroll,
+        .actions = .{ .scroll = true },
+        .flags = .{ .enabled = !props.disabled },
     });
     if (!props.show_scrollbar or props.disabled) return;
     declareScrollbars(props);

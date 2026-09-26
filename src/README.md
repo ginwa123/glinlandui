@@ -25,6 +25,7 @@ src/
 ├── main.zig          demo app (dogfoods the public surface).
 │
 ├── core/             platform-agnostic. Compiles identically everywhere.
+│   ├── semantics.zig         per-frame semantics model (E2E + future a11y)
 │   ├── host.zig              Clay arena, input routing, frame scheduler
 │   ├── frame.zig             per-frame boilerplate + command stream
 │   ├── window_contract.zig   WindowConfig · Delegate · WindowState · geometry
@@ -40,7 +41,11 @@ src/
 │   ├── text_portable.zig     deterministic text estimator
 │   ├── protocol_consts.zig   evdev codes + Wayland enum constants
 │   ├── components/           15 widgets (box, button, input, scroll, …)
-│   ├── testing/root.zig      headless test harness (Host driver)
+│   ├── testing/              the E2E test layer
+│   │   ├── root.zig              Driver + Interaction (onNode, performClick…)
+│   │   ├── finders.zig           Query matchers
+│   │   ├── actions.zig           gesture / scroll planning math
+│   │   └── assertions.zig        node assertions
 │   └── stb_{truetype,image}_impl.c   vendored library TUs
 │
 ├── linux/            the Linux backend.  9 files, mirrored 1:1 with mac/
@@ -96,14 +101,14 @@ only calls the `Delegate`. That contract is the whole integration surface.
 
 ## 2. Invariants. Breaking these fails CI, not just a test
 
-### I1 — Test parity: `zig build test` must report exactly **376**
+### I1 — Test parity: `zig build test` must report exactly **438**
 
-`tests.lock` holds `376`; `ci/check_test_parity.sh` asserts it. The suite compiles
+`tests.lock` holds `438`; `ci/check_test_parity.sh` asserts it. The suite compiles
 a **fixed, platform-independent set** of test roots so Linux and macOS run the
 same tests, which is what makes the macOS path trustworthy without a Mac.
 
-The count is `339` (`root.zig` aggregate) + `1` (`main.zig`) + `36` (the
-calculator example).
+The count is `386` (`root.zig` aggregate) + `1` (`main.zig`) + `36` (the
+calculator example) + `15` (`examples/calculator_e2e_test.zig`, the E2E suite).
 
 - **Adding or removing a `test` block changes the count.** Update `tests.lock` in
   the same commit, deliberately. Never "fix" a parity failure by editing the lock
@@ -112,6 +117,15 @@ calculator example).
   file has no `test` blocks, the count is unchanged and the file merely gets
   type-checked — that is a deliberate, useful trick used for `mac/renderer.zig`,
   `mac/text.zig` and `linux/{keymap,input,adapter}.zig`.
+- **Test collection crosses FILE imports but not MODULE imports.** A test root
+  runs the tests of every file it reaches by relative `@import`, but it does not
+  descend into `addImport`ed modules — which is why `exe_tests` has never
+  re-counted the library. This matters concretely:
+  `examples/calculator_e2e_test.zig` reaches the calculator through an imported
+  module (`@import("calculator")`, wired in `build.zig`), **not** a relative
+  `@import("calculator.zig")`. The relative form compiles and passes but makes the
+  count 474 instead of 438, by re-running the example's 36 tests in the E2E
+  binary.
 
 ### I2 — The test build must select the portable backend on every OS
 
@@ -175,8 +189,8 @@ like a confusing type mismatch, not a missing import.
 ```bash
 # The full local gate. All four must pass.
 zig fmt --check build.zig src examples    # formatting is gate 1 in CI
-zig build test --summary all              # expect: 363/376 (13 skipped)  ← see I1 + §5
-./ci/check_test_parity.sh                 # expect: parity: 376 tests (matches tests.lock)
+zig build test --summary all              # expect: 425/438 (13 skipped)  ← see I1 + §5
+./ci/check_test_parity.sh                 # expect: parity: 438 tests (matches tests.lock)
 ./ci/check_layering.sh                    # expect: layering: ok
 
 # Linux native backends (Wayland/EGL/GLES3/pango). NOT part of the parity count.
@@ -241,10 +255,10 @@ them.
 In a **test** build, `text_impl` is `core/text_portable.zig` (invariant I2), and
 its `font_candidates` are **macOS paths** (`/System/Library/Fonts/…`). So:
 
-- on **macOS**, those paths exist → the 13 tests run → `376/376 passed`;
-- on **Linux/macOS-local without those paths** → 13 skip → `363/376 (13 skipped)`.
+- on **macOS**, those paths exist → the 13 tests run → `438/438 passed`;
+- on **Linux/macOS-local without those paths** → 13 skip → `425/438 (13 skipped)`.
 
-The count is still 376 either way, so parity holds and the gate passes. The real
+The count is still 438 either way, so parity holds and the gate passes. The real
 consequence is a **coverage gap: the glyph rasterizer is only exercised on
 macOS.** `linux/text.zig` *does* carry Linux font paths, but the parity suite never
 selects it. A useful, contained improvement would be to give
@@ -314,10 +328,14 @@ Deliberate, and each is a good first task:
 
 ## 8. Reading order
 
-1. `root.zig` — the public surface. Its 23 exports ARE the whole API.
+1. `root.zig` — the public surface. Its exports ARE the whole API.
 2. `platform.zig` — how a platform is chosen, and the `is_test` rule.
 3. `core/window_contract.zig` — `Delegate`, `WindowConfig`, `WindowState`, geometry.
 4. `core/host.zig` → `core/frame.zig` — how a frame is driven.
 5. `linux/window.zig` **next to** `mac/window.zig` — the real difference between
    the platforms, in two files you can read side by side.
 6. `core/testing/root.zig` — how to drive the whole stack headlessly in a test.
+7. `core/semantics.zig` — the per-frame node model, and the `register` →
+   `endLayout` → `resolve` ordering that immediate mode forces on it.
+8. `examples/calculator_e2e_test.zig` — the worked E2E example. The design
+   rationale for this layer lives in `../E2E_TESTING_PLAN.md`.

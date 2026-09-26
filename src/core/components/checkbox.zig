@@ -5,6 +5,7 @@ const std = @import("std");
 const cl = @import("zclay");
 const render = @import("../render_common.zig");
 const registry = @import("click_registry.zig");
+const semantics = @import("../semantics.zig");
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
 /// Same shape as button.ClickFn. Stored in CheckboxProps (declare-only
@@ -89,6 +90,14 @@ pub fn checkbox(props: CheckboxProps) void {
                 .corner_radius = .all(2),
             })({});
         }
+    });
+    // Semantics: `checked` is the state a test asserts on, and the node is
+    // registered even when disabled so `assertIsDisabled` can find it.
+    semantics.register(.{
+        .id = cl.getElementId(props.id),
+        .tag = props.id,
+        .role = .checkbox,
+        .flags = .{ .enabled = !props.disabled, .checked = props.checked },
     });
     if (!props.disabled) {
         if (props.on_click) |cb| {

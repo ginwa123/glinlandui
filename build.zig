@@ -257,6 +257,7 @@ pub fn build(b: *std.Build) void {
     // can depend on it: the example's tests are portable, so they belong in
     // the cross-platform count, not in the Linux-only `native-test` step.
     var calc_test: ?*std.Build.Step.Compile = null;
+    var calc_e2e_test: ?*std.Build.Step.Compile = null;
     if (calc_supported) {
         const calc_mod = b.createModule(.{
             .root_source_file = b.path("examples/calculator.zig"),
@@ -290,6 +291,30 @@ pub fn build(b: *std.Build) void {
                 .optimize = optimize,
                 .imports = &.{
                     .{ .name = "glinlandui", .module = mod },
+                },
+            }),
+        });
+
+        // The E2E suite for the same example. A separate test root, so it is a
+        // separate binary: it drives the calculator through the public
+        // `glinlandui.testing` surface rather than through the app's own tests,
+        // which is exactly what makes it a usage example for the E2E layer.
+        //
+        // The calculator arrives as an IMPORTED MODULE, not as a relative
+        // `@import("calculator.zig")`. That distinction is load-bearing: Zig's
+        // test collector walks file-path imports inside the module under test,
+        // so a relative import would collect calculator.zig's own 36 tests into
+        // this binary too — running them a second time and inflating the
+        // locked parity count. It does not walk into imported modules, so
+        // `calc_test` above stays the single home for those 36.
+        calc_e2e_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/calculator_e2e_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "glinlandui", .module = mod },
+                    .{ .name = "calculator", .module = calc_mod },
                 },
             }),
         });
@@ -352,6 +377,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_exe_tests.step);
     if (calc_test) |calc| {
         test_step.dependOn(&b.addRunArtifact(calc).step);
+    }
+    if (calc_e2e_test) |e2e| {
+        test_step.dependOn(&b.addRunArtifact(e2e).step);
     }
 
     // `native-test` runs the Linux-only Wayland/EGL/GLES3/Pango tests. These

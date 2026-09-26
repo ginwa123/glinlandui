@@ -150,6 +150,34 @@ pub fn hoverCursorAt(x: f32, y: f32) Cursor {
     return if (best) |hit| hit.cursor else .default;
 }
 
+// ---- Read-only view for consumers that need "what is clickable this frame"
+// without owning the dispatch logic (the semantics layer).
+
+/// One hit-target entry, stripped of its callback pointers. `clickable` is
+/// false for hover-only entries (those carry a cursor but never fire), so
+/// consumers cannot mistake "has a cursor" for "has an action".
+pub const Hit = struct {
+    id: cl.ElementId,
+    z: i16,
+    cursor: Cursor,
+    clickable: bool,
+};
+
+pub fn hitCount() usize {
+    return count;
+}
+
+pub fn hitAt(i: usize) ?Hit {
+    if (i >= count) return null;
+    const e = entries[i];
+    return .{
+        .id = e.id,
+        .z = e.z,
+        .cursor = e.cursor,
+        .clickable = (e.cb_row != null or e.cb_click != null),
+    };
+}
+
 // Stub text estimator for headless tests (no font backend needed).
 fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions {
     return .{

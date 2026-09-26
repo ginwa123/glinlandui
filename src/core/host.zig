@@ -18,6 +18,7 @@ const registry = @import("components/click_registry.zig");
 const image_widgets = @import("components/image.zig");
 const cl = @import("zclay");
 const scroll_mod = @import("components/scroll.zig");
+const semantics = @import("semantics.zig");
 
 /// App declare callback: builds the Clay tree for a w x h window.
 /// ctx is the app owner (e.g. *Shell); Host supplies dims + plumbing.
@@ -60,14 +61,27 @@ pub const Host = struct {
         self.clay_ready = false;
     }
 
-    fn declareThunk(ctx: *anyopaque, w: u32, h: u32) void {
-        const self: *Host = @ptrCast(@alignCast(ctx));
+    /// The per-frame declare phase: reset the per-frame registries, then run
+    /// the app's root callback.
+    ///
+    /// PUBLIC on purpose. The headless test Driver must drive THIS, not
+    /// `root_fn` directly: the resets are what stop click_registry entries and
+    /// semantics nodes from accumulating across frames. Bypassing them makes a
+    /// tag lookup ambiguous ("TooManyNodes") after the second frame, which is
+    /// exactly the bug this indirection exists to prevent.
+    pub fn declareFrame(self: *Host, w: u32, h: u32) void {
         // Fresh registries per frame (components self-register during
         // declare; stale boxes must never ghost-fire).
         registry.beginFrame();
         scroll_mod.beginScrollFrame();
         image_widgets.beginFrame();
+        semantics.beginFrame();
         self.root_fn(self.root_ctx, w, h);
+    }
+
+    fn declareThunk(ctx: *anyopaque, w: u32, h: u32) void {
+        const self: *Host = @ptrCast(@alignCast(ctx));
+        self.declareFrame(w, h);
     }
 
     pub fn frame(self: *Host, w: u32, h: u32) void {

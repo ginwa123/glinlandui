@@ -1,5 +1,11 @@
 # Refactor Plan — `glinlandui` → `core/` + `linux/` + `mac/`
 
+> **Number moved since.** This log is a record of a completed refactor and its
+> `376` test count was correct at the time. `tests.lock` is now `438` (the E2E
+> test layer added 62 tests). See `E2E_TESTING_PLAN.md` §13 and `README.md`.
+> The *invariants* below (parity enforced by a lock file, the `is_test` backend
+> rule, R1–R6) all still hold; only the literal count changed.
+
 Status: **EXECUTED** — all 8 phases landed on `main` (working tree). See the
 Execution Log at the end for the deviations that execution forced.
 Scope: reorganise ~16.5k lines of Zig + 5 C shims into a layering where the

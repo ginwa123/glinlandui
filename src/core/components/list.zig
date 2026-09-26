@@ -7,6 +7,7 @@ const std = @import("std");
 const cl = @import("zclay");
 const render = @import("../render_common.zig");
 const registry = @import("click_registry.zig");
+const semantics = @import("../semantics.zig");
 
 /// Selection callback: plain fn pointer + opaque ctx (no closures).
 /// Stored in ListProps (declare-only list never fires it); the owner
@@ -153,6 +154,13 @@ pub fn list(
     const ItemsT = @TypeOf(items);
     const ti = @typeInfo(ItemsT);
     if (ti != .pointer or ti.pointer.size != .slice) @compileError("list: items must be a slice");
+    // Semantics: the container is a list; each cell registers itself below.
+    semantics.register(.{
+        .id = cl.getElementId(props.id),
+        .tag = props.id,
+        .role = .list,
+        .flags = .{ .enabled = !props.disabled },
+    });
     switch (props.direction) {
         .vertical => listVertical(props, items, item_ctx, renderItem),
         .horizontal => listHorizontal(props, items, item_ctx, renderItem),
@@ -164,6 +172,19 @@ pub fn list(
 /// legacy on_select; disabled registers nothing so hover stays .default).
 /// Rows that register use the .pointer cursor.
 fn registerCell(props: ListProps, i: usize) void {
+    // Semantics FIRST, before the disabled early-return: a disabled row must
+    // still be discoverable so `assertIsDisabled` has something to assert on.
+    // Rows carry no label of their own (the text comes from the caller's
+    // renderItem), so tests select them by container plus index:
+    //     onNodeWithIndex(.{ .role = .list_item }, 3)
+    semantics.register(.{
+        .id = rowId(props.id, i),
+        .role = .list_item,
+        .flags = .{
+            .enabled = !props.disabled,
+            .selected = (props.selected != null and props.selected.? == i),
+        },
+    });
     if (props.disabled) return;
     if (props.clicks) |clicks| {
         if (i < clicks.len) {

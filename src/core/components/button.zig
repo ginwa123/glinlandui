@@ -5,6 +5,7 @@ const std = @import("std");
 const cl = @import("zclay");
 const render = @import("../render_common.zig");
 const registry = @import("click_registry.zig");
+const semantics = @import("../semantics.zig");
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
 /// Stored in ButtonProps (declare-only button never fires it); the owner
@@ -100,6 +101,22 @@ pub fn button(props: ButtonProps) void {
             .font_size = props.font_size,
             .color = render.u32ToClayColor(fg),
         });
+    });
+    // Semantics: registered for EVERY button, not only the ones with a click
+    // callback. The calculator example passes `on_click = null` and registers
+    // its 20 keys externally with `registerZCursor`, so keying off `on_click`
+    // would make every keypad key invisible to `onNodeWithText("7")`.
+    //
+    // `actions.click` is deliberately NOT set here: `semantics.resolve` folds
+    // it in from click_registry, the one authoritative record of what dispatch
+    // will actually fire. That is what lets an externally-registered button
+    // report `hasClickAction` correctly.
+    semantics.register(.{
+        .id = cl.getElementId(props.id),
+        .tag = props.id,
+        .role = .button,
+        .label = props.label,
+        .flags = .{ .enabled = !props.disabled },
     });
     if (!props.disabled) {
         if (props.on_click) |cb| {

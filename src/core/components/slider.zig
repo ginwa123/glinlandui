@@ -5,6 +5,7 @@ const std = @import("std");
 const cl = @import("zclay");
 const render = @import("../render_common.zig");
 const registry = @import("click_registry.zig");
+const semantics = @import("../semantics.zig");
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
 /// Same shape as toggle.ClickFn / button.ClickFn. Stored in SliderProps
@@ -150,6 +151,16 @@ pub fn slider(props: SliderProps) void {
                 })({});
             });
         });
+    });
+    // Semantics: a slider is draggable, so it reports `drag` rather than a
+    // plain click. The numeric value is not mirrored into `value` (a []const u8
+    // would need a per-frame buffer); assert on it through the app's own state.
+    semantics.register(.{
+        .id = cl.getElementId(props.id),
+        .tag = props.id,
+        .role = .slider,
+        .flags = .{ .enabled = !props.disabled },
+        .actions = .{ .drag = true },
     });
     if (!props.disabled) {
         if (props.on_change) |cb| {

@@ -10,6 +10,7 @@ const render = @import("../render_common.zig");
 const registry = @import("click_registry.zig");
 const list = @import("list.zig");
 const input = @import("input.zig");
+const semantics = @import("../semantics.zig");
 
 /// Selection callback: plain fn pointer + opaque ctx (no closures).
 /// Stored in DropdownProps (declare-only dropdown never fires it); the
@@ -166,6 +167,14 @@ pub fn dropdown(
     item_ctx: anytype,
     comptime renderItem: fn (@TypeOf(item_ctx), []const u8, usize) void,
 ) void {
+    // Semantics: the closed field is the dropdown's identity; the expanded
+    // rows come from list.zig and register themselves as list items.
+    semantics.register(.{
+        .id = cl.getElementId(props.field_id),
+        .tag = props.field_id,
+        .role = .dropdown,
+        .flags = .{ .enabled = !props.disabled },
+    });
     if (props.overlay and props.anchor_id != null) {
         const aid = props.anchor_id.?;
         const parent_id = cl.ElementId.IDI(aid, @as(u32, @intCast(props.anchor_index + 1))).id;

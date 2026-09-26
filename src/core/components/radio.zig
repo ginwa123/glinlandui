@@ -5,6 +5,7 @@ const std = @import("std");
 const cl = @import("zclay");
 const render = @import("../render_common.zig");
 const registry = @import("click_registry.zig");
+const semantics = @import("../semantics.zig");
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
 /// Same shape as button.ClickFn. Stored in RadioProps (declare-only radio
@@ -86,6 +87,13 @@ pub fn radio(props: RadioProps) void {
                 .corner_radius = .all(@as(f32, @floatFromInt(props.size)) / 4.0),
             })({});
         }
+    });
+    // Semantics: radios report SELECTED, not checked.
+    semantics.register(.{
+        .id = cl.getElementId(props.id),
+        .tag = props.id,
+        .role = .radio,
+        .flags = .{ .enabled = !props.disabled, .selected = props.selected },
     });
     if (!props.disabled) {
         if (props.on_click) |cb| {

@@ -14,6 +14,7 @@ const cl = @import("zclay");
 const render = @import("render.zig");
 const text = @import("text_backend.zig");
 const click_registry = @import("components/click_registry.zig");
+const semantics = @import("semantics.zig");
 
 // ---- Wayland cursor-shape (wp_cursor_shape_manager_v1) ----
 // Contract (registry crew owns components/click_registry.zig):
@@ -260,6 +261,16 @@ pub const FrameOptions = struct {
     measure_user_data: ?*anyopaque = null,
     probe: ?FrameProbeFn = null,
     probe_user_data: ?*anyopaque = null,
+    /// Resolve the semantics tree (core/semantics.zig) immediately after
+    /// layout, once Clay has computed every bounding box.
+    ///
+    /// OFF by default, and deliberately so: resolving walks a
+    /// `getElementData` per node plus one per clipping ancestor, so production
+    /// pays nothing until a consumer actually needs the tree — the E2E driver
+    /// sets this, and an accessibility bridge would too. The registry is still
+    /// CLEARED every frame by Host.declareThunk, so leaving this off cannot
+    /// leak a stale tree into a later frame.
+    resolve_semantics: bool = false,
 };
 
 const default_frame_options: FrameOptions = .{};
@@ -367,6 +378,12 @@ pub fn clayFrameWithOptions(
     cl.beginLayout();
     declare(ctx, w, h);
     const commands = cl.endLayout();
+    // Semantics resolve AFTER layout (that is when Clay has bounding boxes)
+    // and BEFORE the probe, so a probe that inspects the tree sees resolved
+    // geometry rather than zeros.
+    if (options.resolve_semantics) {
+        semantics.resolve(@floatFromInt(w), @floatFromInt(h));
+    }
     invokeProbe(options, commands, w, h);
     // Registries are populated by declare above — resolve the cursor now.
     const shape = hoverCursorShape(pointer_x, pointer_y);

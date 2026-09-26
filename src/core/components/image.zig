@@ -10,6 +10,7 @@ const std = @import("std");
 const cl = @import("zclay");
 const render = @import("../render_common.zig");
 const registry = @import("click_registry.zig");
+const semantics = @import("../semantics.zig");
 
 /// Image fit re-export (renderer owns the enum + math).
 pub const Fit = render.ImageFit;
@@ -82,6 +83,12 @@ pub fn image(props: ImageProps) void {
         .corner_radius = .all(@floatFromInt(props.radius)),
         .image = .{ .image_data = slot },
     })({});
+    // Semantics: an image is a leaf with no state and no text.
+    semantics.register(.{
+        .id = cl.getElementId(props.id),
+        .tag = props.id,
+        .role = .image,
+    });
     if (props.on_click) |cb| {
         // Pointer cursor: clickable image. Display-only images (null
         // on_click) register nothing so hover stays .default.

@@ -5,6 +5,7 @@ const std = @import("std");
 const cl = @import("zclay");
 const render = @import("../render_common.zig");
 const registry = @import("click_registry.zig");
+const semantics = @import("../semantics.zig");
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
 /// Same shape as button.ClickFn. Stored in ToggleProps (declare-only toggle
@@ -83,6 +84,13 @@ pub fn toggle(props: ToggleProps) void {
             .background_color = render.u32ToClayColor(props.knob_color),
             .corner_radius = .all(@floatFromInt(knob_d / 2)),
         })({});
+    });
+    // Semantics: `.on` is the toggle's checked state.
+    semantics.register(.{
+        .id = cl.getElementId(props.id),
+        .tag = props.id,
+        .role = .toggle,
+        .flags = .{ .enabled = !props.disabled, .checked = props.on },
     });
     if (!props.disabled) {
         if (props.on_click) |cb| {

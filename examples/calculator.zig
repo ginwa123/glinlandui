@@ -102,7 +102,7 @@ const KEYS_BY_INDEX: [Key.count]Key = blk: {
 
 /// Grid labels, ASCII only: the keymap is US-ASCII and a unicode glyph
 /// would render as a fallback box in a stub font.
-const KEY_LABELS: [Key.count][]const u8 = .{
+pub const KEY_LABELS: [Key.count][]const u8 = .{
     "C", "DEL", ".", "/",
     "7", "8",   "9", "*",
     "4", "5",   "6", "-",
@@ -113,7 +113,7 @@ const KEY_LABELS: [Key.count][]const u8 = .{
 /// Stable element ids. Clay resolves `.ID(ptr)` by string, so these must
 /// be distinct literals that outlive every frame — a per-frame buffer
 /// would rehash the layout tree on each rebuild.
-const KEY_IDS: [Key.count][]const u8 = .{
+pub const KEY_IDS: [Key.count][]const u8 = .{
     "calc-k-clear", "calc-k-backspace", "calc-k-dot",     "calc-k-divide",
     "calc-k-7",     "calc-k-8",         "calc-k-9",       "calc-k-times",
     "calc-k-4",     "calc-k-5",         "calc-k-6",       "calc-k-minus",
@@ -405,7 +405,7 @@ fn tint(key: Key) struct { bg: u32, hover_bg: u32 } {
 
 // ---- App ----
 
-const App = struct {
+pub const App = struct {
     m: Machine = Machine.init(),
 
     /// Press one key and report it as consumed.
@@ -417,7 +417,7 @@ const App = struct {
     /// Host KeyChain handler (see `dispatch.handleKey`): returns true when
     /// the key was consumed. Escape is deliberately NOT consumed — the
     /// toolkit's own `keyToClose` contract uses it to quit the window.
-    fn onKey(ctx: ?*anyopaque, mods: components.input.Mods, keycode: u32) bool {
+    pub fn onKey(ctx: ?*anyopaque, mods: components.input.Mods, keycode: u32) bool {
         const self: *App = @ptrCast(@alignCast(ctx.?));
 
         if (components.input.keyChar(keycode, mods.shift)) |c| {
@@ -438,7 +438,7 @@ const App = struct {
     }
 
     /// The Clay declare callback: everything drawing happens here.
-    fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
+    pub fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
         const self: *App = @ptrCast(@alignCast(ctx.?));
         components.box.box(.{
             .id = "calc-root",
