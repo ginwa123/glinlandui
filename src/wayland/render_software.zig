@@ -23,6 +23,7 @@
 //!   - No V-flip: texture row 0 is the top row and maps to the top of a quad.
 const std = @import("std");
 const cl = @import("zclay");
+const glyphs = @import("glyphs.zig");
 const common = @import("render_common.zig");
 
 pub const ImageFit = common.ImageFit;
@@ -427,10 +428,81 @@ pub const Surface = struct {
         }
     }
 
+    /// Rasterize a text run with real glyphs.
+    ///
+    /// Uses the stb_truetype path (see glyphs.zig) so the software backend
+    /// draws the same characters as the GLES3 backend. The font is loaded once
+    /// and cached; if the host has no usable font, or stb refuses one, this
+    /// falls back to `drawTextRunFallback` below — the portable per-byte bars.
+    /// Degrading to bars is deliberate: a machine with no font must still
+    /// render, and must still pass the shared pixel suite.
+    pub fn drawTextRun(
+        self: *Surface,
+        bbox_x: f32,
+        bbox_y: f32,
+        text_bytes: []const u8,
+        font_size: u16,
+        color: [4]f32,
+    ) void {
+        if (text_bytes.len == 0) return;
+        const n = normalizeColor(color);
+        if (!hasGlyphFont()) {
+            self.drawTextRunFallback(bbox_x, bbox_y, text_bytes, font_size, color);
+            return;
+        }
+        const font = textBytes.?;
+        const fs: u16 = if (font_size == 0) 16 else font_size;
+        // Centre the run vertically in the box the layout gave it, the same way
+        // the fallback does, so switching paths does not shift the baseline.
+        const m = glyphs.measure(&font, text_bytes, fs);
+        if (m.width <= 0) {
+            self.drawTextRunFallback(bbox_x, bbox_y, text_bytes, font_size, color);
+            return;
+        }
+        const box_h = @min(@as(f32, @floatFromInt(fs)), 24);
+        const baseline = bbox_y + (box_h + m.ascent) / 2;
+
+        var pen = bbox_x;
+        var i: usize = 0;
+        while (i < text_bytes.len) {
+            const cp = glyphs.nextCodepoint(text_bytes, &i);
+            const gm = font.glyphMetrics(cp, fs);
+            if (font.glyphBitmap(cp, fs)) |mask_g| {
+                var mask = mask_g;
+                defer glyphs.freeMask(&mask);
+                const gx: isize = @intFromFloat(@floor(pen + mask.xoff));
+                // stb's yoff is measured from the TOP of the line going down,
+                // so the mask's top row sits at (baseline - ascent) + yoff.
+                const top = baseline - m.ascent + mask.yoff;
+                const gy: isize = @intFromFloat(@floor(top));
+                for (0..mask.h) |row| {
+                    for (0..mask.w) |col| {
+                        const coverage = @as(f32, @floatFromInt(mask.data[row * mask.w + col])) / 255.0;
+                        if (coverage <= 0) continue;
+                        const x: isize = gx + @as(isize, @intCast(col));
+                        const y: isize = gy + @as(isize, @intCast(row));
+                        if (x < 0 or y < 0) continue;
+                        if (x >= @as(isize, @intCast(self.width)) or
+                            y >= @as(isize, @intCast(self.height))) continue;
+                        // Glyph coverage multiplies the colour's alpha, so a
+                        // dim label stays dim.
+                        self.blend(
+                            @intCast(x),
+                            @intCast(y),
+                            .{ n[0], n[1], n[2] },
+                            coverage * n[3],
+                        );
+                    }
+                }
+            }
+            pen += gm.advance;
+        }
+    }
+
     /// The deterministic per-byte rect fallback used for text when no glyph
     /// backend is available. One AA'd box per UTF-8 *byte*; this is the
     /// portable, glyph-free text rendering the shared pixel suite verifies.
-    pub fn drawTextRun(
+    pub fn drawTextRunFallback(
         self: *Surface,
         bbox_x: f32,
         bbox_y: f32,
@@ -542,6 +614,20 @@ pub const Renderer = struct {
         self.surface.renderCommands(commands);
     }
 };
+
+/// Process-global font, loaded once on first text and reused after. A single
+/// engine owns one window, so there is no reason to load per frame — and
+/// per-frame loading would be visibly slow on every redraw.
+///
+/// `null` means "not tried yet"; a failed load also leaves it null so the
+/// per-byte fallback is used, which keeps a font-less host rendering.
+var textBytes: ?glyphs.Font = null;
+
+/// True once a glyph-bearing font is available, so the fallback can be skipped.
+pub fn hasGlyphFont() bool {
+    if (textBytes == null) textBytes = glyphs.Font.loadDefault();
+    return textBytes != null;
+}
 
 /// The surface the most recent `drawCommands` wrote to. The engine is a
 /// single-window design, so a window backend reads this immediately after the

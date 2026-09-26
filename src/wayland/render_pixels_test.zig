@@ -284,12 +284,21 @@ test "pixel: a second scissor_start replaces (does not intersect) the region" {
 }
 
 // ---- text ----
+//
+// `drawTextRun` draws REAL glyphs when the host has a font it can parse, and
+// falls back to one box per byte when it does not. Both paths are covered
+// here: the fallback is deterministic and font-independent, so its pixel
+// expectations are exact; the glyph path can only be asserted where a font
+// exists, so it checks shape (ink present, above the baseline, none below) and
+// lets the glyph unit tests in glyphs.zig pin the exact metrics.
 
-test "pixel: text draws one deterministic box per byte" {
+test "pixel: the fallback path draws one deterministic box per byte" {
     var s = try surface(64, 32);
     defer s.deinit();
+    // Calls the fallback DIRECTLY so these exact expectations hold whether or
+    // not this host has a font — that is what keeps the pixel suite portable.
     // "OK" is 2 bytes => 2 boxes. font_size 18 => adv 10.8, box 7.56 wide.
-    s.drawTextRun(10, 10, "OK", 18, .{ 255, 255, 255, 255 });
+    s.drawTextRunFallback(10, 10, "OK", 18, .{ 255, 255, 255, 255 });
     // First box spans x in [10, 17.56) and y in [10, 28) (height min(18,24)).
     try expectPx(s, 12, 15, .{ 255, 255, 255, 255 });
     try expectPx(s, 10, 12, .{ 255, 255, 255, 255 });
@@ -297,6 +306,87 @@ test "pixel: text draws one deterministic box per byte" {
     try expectPx(s, 18, 15, .{ 0, 0, 0, 255 });
     // Second box starts at x = 10 + 10.8 = 20.8.
     try expectPx(s, 22, 15, .{ 255, 255, 255, 255 });
+}
+
+test "pixel: the fallback caps box height at 24 even for large font sizes" {
+    var s = try surface(64, 64);
+    defer s.deinit();
+    // font_size 40 => box height min(40,24) = 24, so the box occupies y in
+    // [10, 34) and nothing below it is painted.
+    s.drawTextRunFallback(4, 10, "I", 40, .{ 255, 255, 255, 255 });
+    try expectPx(s, 6, 20, .{ 255, 255, 255, 255 });
+    try expectPx(s, 6, 40, .{ 0, 0, 0, 255 });
+}
+
+test "pixel: the real glyph path paints ink above the baseline and none below" {
+    if (!soft.hasGlyphFont()) return error.SkipZigTest;
+    var s = try surface(96, 64);
+    defer s.deinit();
+    s.drawTextRun(4, 4, "8", 32, .{ 255, 255, 255, 255 });
+
+    var inked: usize = 0;
+    var below_baseline: usize = 0;
+    for (0..64) |y| {
+        for (0..96) |x| {
+            const p = s.px(@intCast(x), @intCast(y));
+            if (p[0] == 255 and p[1] == 255 and p[2] == 255) {
+                inked += 1;
+                // The run is vertically centred in a min(32,24)=24px box, so
+                // ink must not spill far past the box's lower edge.
+                if (y >= 44) below_baseline += 1;
+            }
+        }
+    }
+    // A glyph-free bar is a solid block; a real glyph has holes and a much
+    // lower ink ratio, so require a plausible amount rather than "any".
+    try std.testing.expect(inked > 0);
+    try std.testing.expect(inked < 96 * 24);
+    // And it must stay inside the vertical band the layout reserved.
+    try std.testing.expect(below_baseline == 0);
+}
+
+test "pixel: glyph text respects the text colour, not a hard-coded white" {
+    if (!soft.hasGlyphFont()) return error.SkipZigTest;
+    var s = try surface(96, 64);
+    defer s.deinit();
+    s.drawTextRun(4, 4, "8", 32, .{ 255, 0, 0, 255 });
+    var red: usize = 0;
+    var wrong: usize = 0;
+    for (0..64) |y| {
+        for (0..96) |x| {
+            const p = s.px(@intCast(x), @intCast(y));
+            if (p[0] == 255 and p[1] == 0 and p[2] == 0) red += 1;
+            if (p[0] == 255 and p[1] == 255 and p[2] == 255) wrong += 1;
+        }
+    }
+    try std.testing.expect(red > 0);
+    try std.testing.expectEqual(@as(usize, 0), wrong);
+}
+
+test "pixel: a longer run paints more ink than a single glyph" {
+    if (!soft.hasGlyphFont()) return error.SkipZigTest;
+    var one = try surface(96, 64);
+    defer one.deinit();
+    one.drawTextRun(4, 4, "8", 32, .{ 255, 255, 255, 255 });
+    var two = try surface(96, 64);
+    defer two.deinit();
+    two.drawTextRun(4, 4, "88", 32, .{ 255, 255, 255, 255 });
+
+    const ink = struct {
+        fn count(s2: *soft.Surface) usize {
+            var n: usize = 0;
+            for (0..64) |y| {
+                for (0..96) |x| {
+                    const p = s2.px(@intCast(x), @intCast(y));
+                    if (p[0] == 255 and p[1] == 255 and p[2] == 255) n += 1;
+                }
+            }
+            return n;
+        }
+    }.count;
+    // Proves the pen actually advances per codepoint: if every glyph drew at
+    // the same x, both counts would be equal and labels would overlap.
+    try std.testing.expect(ink(&two) > ink(&one));
 }
 
 test "pixel: empty text draws nothing" {
@@ -310,14 +400,18 @@ test "pixel: empty text draws nothing" {
     }
 }
 
-test "pixel: text box height is capped at 24 even for large font sizes" {
-    var s = try surface(64, 64);
+test "pixel: a space paints nothing" {
+    if (!soft.hasGlyphFont()) return error.SkipZigTest;
+    var s = try surface(64, 48);
     defer s.deinit();
-    // font_size 40 => box height min(40,24) = 24, so the box occupies y in
-    // [10, 34) and nothing below it is painted.
-    s.drawTextRun(4, 10, "I", 40, .{ 255, 255, 255, 255 });
-    try expectPx(s, 6, 20, .{ 255, 255, 255, 255 });
-    try expectPx(s, 6, 40, .{ 0, 0, 0, 255 });
+    // A blank glyph must not draw ink even though it DOES advance the pen —
+    // conflating the two would put a black box where a space belongs.
+    s.drawTextRun(4, 4, " ", 32, .{ 255, 255, 255, 255 });
+    for (0..48) |y| {
+        for (0..64) |x| {
+            try expectPx(s, @intCast(x), @intCast(y), .{ 0, 0, 0, 255 });
+        }
+    }
 }
 
 // ---- images ----

@@ -55,6 +55,13 @@ pub fn resolveFont() ResolveFontError![]const u8 {
     return error.FontNotFound;
 }
 
+/// Every candidate path. The CPU renderer walks the whole list and keeps the
+/// first file that actually PARSES, not merely the first that exists: a `.ttc`
+/// is a TrueType collection and stb_truetype cannot load it directly.
+pub fn fontCandidates() []const [:0]const u8 {
+    return font_candidates;
+}
+
 /// Pure-Zig fallback: deterministic, no C deps. Used when Pango fails
 /// (headless without fontconfig, oversized text, or C null returns).
 pub fn estimatorExtent(text: []const u8, font_size: u16) TextExtent {

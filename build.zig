@@ -82,6 +82,12 @@ pub fn build(b: *std.Build) void {
     });
     mod.addImport("zclay", zclay_mod);
     addVendoredStbInclude(b, mod);
+    // stb_truetype implementation TU: exactly one translation unit defines
+    // STB_TRUETYPE_IMPLEMENTATION, and the CPU software renderer needs it to
+    // draw real glyphs (see wayland/glyphs.zig). It is NOT Linux-only: the
+    // macOS/CPU backend renders text through it too, which is what makes that
+    // build look like the GLES3 one instead of drawing a bar per byte.
+    mod.addCSourceFile(.{ .file = b.path("src/stb_truetype_impl.c") });
     // Every backend resolves the Cocoa shim header, so the include path is
     // unconditional. Only the .m source and the frameworks are macOS-gated
     // (below) — a path with no consumers costs nothing and keeps the
@@ -148,8 +154,6 @@ pub fn build(b: *std.Build) void {
         // link chain, including the parent qs-settings-zig test binaries).
         // get_tablet_tool_v2 is never called, so the empty table stays dead.
         addTabletToolStub(b, mod);
-        // stb_truetype implementation TU kept as fallback (headless / NoDisplay).
-        mod.addCSourceFile(.{ .file = b.path("src/stb_truetype_impl.c") });
         // stb_image + resize2 implementation TU (wallpaper thumbnails/preview).
         mod.addCSourceFile(.{ .file = b.path("src/stb_image_impl.c") });
 

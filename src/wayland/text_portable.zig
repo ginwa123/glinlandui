@@ -19,10 +19,19 @@ pub const ResolveFontError = error{
 // macOS ships these system fonts, so a no-dependency test can still prove the
 // public font-resolution contract. Keep this list separate from the Linux
 // pangocairo candidates in text.zig.
-const font_candidates: []const [:0]const u8 = &.{
-    "/System/Library/Fonts/Menlo.ttc",
+//
+// `resolveFont` returns the first path that merely EXISTS, which is not the
+// same as the first one a rasterizer can actually parse: a `.ttc` is a
+// TrueType *collection* and stb_truetype's stbtt_InitFont rejects it. So
+// `resolveFont` stays existence-based (its tests depend on that), and
+// `glyphs.Font.loadDefault` walks this list and keeps the first one that
+// genuinely loads. Entries are ordered best-looking-first: monospace UI faces
+// before the monospaced-with-glyph-fallback option last.
+pub const font_candidates: []const [:0]const u8 = &.{
     "/System/Library/Fonts/SFNSMono.ttf",
-    "/System/Library/Fonts/Monaco.dfont",
+    "/System/Library/Fonts/Menlo.ttc",
+    "/System/Library/Fonts/Monaco.ttf",
+    "/System/Library/Fonts/Geneva.ttf",
     "/Library/Fonts/Arial Unicode.ttf",
 };
 
@@ -37,6 +46,13 @@ pub fn resolveFont() ResolveFontError![]const u8 {
         if (fontExists(path)) return path;
     }
     return error.FontNotFound;
+}
+
+/// Every candidate path, for callers that must try more than one (e.g. a
+/// rasterizer that has to keep going until a file actually parses, since a
+/// `.ttc` collection exists but cannot be loaded directly).
+pub fn fontCandidates() []const [:0]const u8 {
+    return font_candidates;
 }
 
 /// Pure-Zig fallback: deterministic, no C deps.

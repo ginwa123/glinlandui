@@ -84,34 +84,77 @@ struct GlinCocoaWindow {
     return YES;
 }
 
+/// Pointer event kinds, mirroring platform/input_macos.zig.
+enum {
+    GlinPointerMotion = 0,
+    GlinPointerDown = 1,
+    GlinPointerUp = 2,
+};
+
 - (void)mouseDown:(NSEvent *)event {
-    GlinCocoaWindow *o = _owner;
+    // Reclaim key focus: a click can leave the window with no key window, and
+    // the keyboard path then dies silently.
     [self.window makeFirstResponder:self];
-    if (!o || !o->on_pointer) return;
-    NSPoint p = [event locationInView:self];
-    o->on_pointer(o->user, p.x, p.y, 1, 0);
+    [self glinForward:event kind:GlinPointerDown];
 }
 
 - (void)mouseDragged:(NSEvent *)event {
-    GlinCocoaWindow *o = _owner;
-    if (!o || !o->on_pointer) return;
-    NSPoint p = [event locationInView:self];
-    // A button is still held, so this is motion with `pressed` set.
-    o->on_pointer(o->user, p.x, p.y, 1, 0);
+    // A drag is MOTION with the button held. It must NOT be reported as a
+    // fresh press: the dispatcher would re-arm the press on every move,
+    // resetting the drag anchor so a drag could never start.
+    [self glinForward:event kind:GlinPointerMotion];
 }
 
 - (void)mouseUp:(NSEvent *)event {
-    GlinCocoaWindow *o = _owner;
-    if (!o || !o->on_pointer) return;
-    NSPoint p = [event locationInView:self];
-    o->on_pointer(o->user, p.x, p.y, 0, 0);
+    [self glinForward:event kind:GlinPointerUp];
+}
+
+- (void)rightMouseDown:(NSEvent *)event {
+    [self.window makeFirstResponder:self];
+    [self glinForward:event kind:GlinPointerDown];
+}
+
+- (void)rightMouseUp:(NSEvent *)event {
+    [self glinForward:event kind:GlinPointerUp];
+}
+
+- (void)rightMouseDragged:(NSEvent *)event {
+    [self glinForward:event kind:GlinPointerMotion];
+}
+
+- (void)otherMouseDown:(NSEvent *)event {
+    [self glinForward:event kind:GlinPointerDown];
+}
+
+- (void)otherMouseUp:(NSEvent *)event {
+    [self glinForward:event kind:GlinPointerUp];
+}
+
+- (void)otherMouseDragged:(NSEvent *)event {
+    [self glinForward:event kind:GlinPointerMotion];
 }
 
 - (void)mouseMoved:(NSEvent *)event {
+    [self glinForward:event kind:GlinPointerMotion];
+}
+
+- (void)mouseEntered:(NSEvent *)event {
+    // Crossing into the window is motion; without this a pointer that entered
+    // without moving would leave the hover state stale.
+    [self glinForward:event kind:GlinPointerMotion];
+}
+
+- (void)mouseExited:(NSEvent *)event {
+    (void)event;
+}
+
+/// Forward one AppKit mouse event. The y axis (bottom-left origin) and the
+/// button code are translated by the host, not here, so both are unit-tested.
+- (void)glinForward:(NSEvent *)event kind:(int)kind {
     GlinCocoaWindow *o = _owner;
     if (!o || !o->on_pointer) return;
     NSPoint p = [event locationInView:self];
-    o->on_pointer(o->user, p.x, p.y, 0, 0);
+    o->on_pointer(o->user, kind, (int)event.buttonNumber, p.x, p.y, 0);
 }
 
 - (void)scrollWheel:(NSEvent *)event {
@@ -324,6 +367,16 @@ void glin_cocoa_present(GlinCocoaWindow *win, const unsigned char *bgra, int w, 
         if (win->max_frames > 0 && win->frames_drawn >= win->max_frames) {
             [NSApp terminate:nil];
         }
+    }
+}
+
+void glin_cocoa_invalidate(GlinCocoaWindow *win) {
+    if (!win || !win->view) return;
+    @autoreleasepool {
+        // setNeedsDisplay only marks it dirty; the run loop does the draw on
+        // the next pass. Without this an event that changes state would never
+        // reach the screen.
+        [(GlinView *)win->view setNeedsDisplay:YES];
     }
 }
 

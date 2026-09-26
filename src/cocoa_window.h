@@ -33,12 +33,25 @@ typedef struct GlinCocoaWindow GlinCocoaWindow;
 /// whether a frame was produced.
 typedef void (*GlinCocoaOnFrame)(void *user);
 
-/// Pointer event in the view's own coordinate space. AppKit's origin is
-/// bottom-left; the host is responsible for flipping to the toolkit's
-/// top-left origin (see platform/macos_adapter.zig).
-/// `pressed` is 0 for motion, 1 for a button-down/up transition.
-/// `button` is 0 for the primary button.
-typedef void (*GlinCocoaOnPointer)(void *user, double x, double y, int pressed, int button);
+/// Pointer event. `kind` distinguishes MOTION from a button transition, which
+/// the toolkit's dispatcher treats completely differently: motion carries a
+/// button code of 0 (so it lands in the drag arm), while a transition carries
+/// the evdev code the host translates to. Collapsing the two is what made
+/// every click a silent no-op, so the distinction is explicit in the ABI.
+/// `x`/`y` are in the view's own space, bottom-left origin.
+/// `pressed` is 1 on a button-down transition, 0 on release, and MOTION's
+/// `pressed` is filled in by the host (it means "is the left button held").
+/// `button_number` is NSEvent.buttonNumber: 0 left, 1 right, 2+ other.
+typedef void (*GlinCocoaOnPointer)(void *user, int kind, int button_number,
+                                   double x, double y, int pressed);
+
+/// Ask the shim to redraw the window's content on the next pass. The host MUST
+/// call this after any event that changes what should be displayed: unlike
+/// Wayland (where the event loop polls a dirty flag and decides to redraw),
+/// AppKit only calls `-drawRect:` when something asks it to. Without this a
+/// click updates the state machine and nothing is ever painted, so the UI
+/// looks completely inert.
+void glin_cocoa_invalidate(GlinCocoaWindow *win);
 
 /// Raw scroll deltas in AppKit's sign convention (positive dy = content moving
 /// up). The host clamps and negates them.

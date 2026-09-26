@@ -27,6 +27,7 @@ const builtin = @import("builtin");
 const contract = @import("platform/window_contract.zig");
 const keymap = @import("platform/keymap_macos.zig");
 const adapter = @import("platform/macos_adapter.zig");
+const input_macos = @import("platform/input_macos.zig");
 const blit = @import("platform/blit.zig");
 const soft = @import("wayland/render_software.zig");
 
@@ -76,6 +77,9 @@ pub const Window = struct {
     handle: ?*c.GlinCocoaWindow = null,
     /// The blit destination, allocated on first use and reused every frame.
     blit_buf: []u8 = &.{},
+    /// Is the primary button currently held? Motion reports `pressed` as this,
+    /// because the dispatcher uses it to enter its drag arm.
+    left_held: bool = false,
     /// Frames composited so far. Used to report only the first one, so a
     /// long interactive run does not spam the log.
     diag_frames: u32 = 0,
@@ -181,10 +185,13 @@ pub const Window = struct {
         if (self.blit_buf.len < need) {
             self.blit_buf = std.heap.c_allocator.alloc(u8, need) catch return;
         }
-        // The channel swap and the row flip both live in the tested helper.
-        blit.rgba8ToBgraFlipped(surface.pixels, self.blit_buf, surface.width, surface.height);
+        // The hand-off contract (NO channel swap, NO vertical flip) lives in
+        // the tested helper; see platform/blit.zig for how that was measured.
+        blit.identityRgba8(surface.pixels, self.blit_buf, surface.width, surface.height);
         self.diag_frames += 1;
         if (self.diag_frames == 1) reportFirstFrame(self.blit_buf, surface);
+        if (std.c.getenv("GLIN_DUMP_SURFACE")) |p| dumpRaw(p, surface.pixels);
+        if (std.c.getenv("GLIN_DUMP_BGRA")) |p| dumpRaw(p, self.blit_buf);
         c.glin_cocoa_present(handle, self.blit_buf.ptr, @intCast(surface.width), @intCast(surface.height));
     }
 
@@ -199,16 +206,38 @@ pub const Window = struct {
     /// oversight.
     fn onResized(_: *Window) void {}
 
-    fn onPointer(p: ?*anyopaque, x: f64, y: f64, pressed: c_int, button: c_int) callconv(.c) void {
+    fn onPointer(
+        p: ?*anyopaque,
+        kind: c_int,
+        button_number: c_int,
+        x: f64,
+        y: f64,
+        _: c_int,
+    ) callconv(.c) void {
         const self = ctx(p);
         const d = self.delegate orelse return;
         const w = self.state.win_w;
         const h = self.state.win_h;
-        // AppKit's y is bottom-left; the toolkit's is top-left. This flip is
-        // the difference between a working keypad and a mirrored one.
-        const pt = adapter.toToolkitPoint(w, h, @floatCast(x), @floatCast(y));
+
+        // Translate to the Delegate's contract: evdev button code on a
+        // transition, 0 on motion, and the y axis flipped. Both halves live in
+        // input_macos.zig because getting either wrong is silent — a wrong
+        // button code means clicks never fire at all, and a wrong y axis means
+        // they fire on the mirrored row.
+        const t = input_macos.translate(w, h, .{
+            .kind = @intCast(kind),
+            .button_number = button_number,
+            .x = @floatCast(x),
+            .y = @floatCast(y),
+        }, self.left_held);
+        if (t.pressed and kind == input_macos.DOWN) self.left_held = true;
+        if (!t.pressed and kind == input_macos.UP) self.left_held = false;
+
         self.state.needs_draw = true;
-        d.on_pointer(d.ptr, pt.x, pt.y, pressed != 0, @intCast(button));
+        d.on_pointer(d.ptr, t.x, t.y, t.pressed, t.button);
+        // AppKit only redraws when asked, so ask. Without this the state
+        // machine advances but the screen never changes.
+        c.glin_cocoa_invalidate(self.handle);
     }
 
     fn onScroll(p: ?*anyopaque, dx: f64, dy: f64) callconv(.c) void {
@@ -218,6 +247,8 @@ pub const Window = struct {
         const s = adapter.scrollDelta(@floatCast(dx), @floatCast(dy));
         self.state.needs_draw = true;
         delta(d.ptr, s.dx, s.dy);
+        // Scrolling moves the view; AppKit must be told or nothing repaints.
+        c.glin_cocoa_invalidate(self.handle);
     }
 
     fn onKey(p: ?*anyopaque, mac_keycode: c_int, pressed: c_int) callconv(.c) c_int {
@@ -229,6 +260,10 @@ pub const Window = struct {
         if (ev == keymap.KEY_NONE) return 0;
         self.state.needs_draw = true;
         const consumed = d.on_key(d.ptr, ev, pressed != 0);
+        // Typing changes the display; without this the keystroke is consumed
+        // but the window keeps showing the old value.
+        c.glin_cocoa_invalidate(self.handle);
+        if (adapter.resolveQuit(&self.state)) c.glin_cocoa_quit(self.handle);
         return if (consumed) 1 else 0;
     }
 
@@ -274,7 +309,14 @@ pub const Window = struct {
     }
 };
 
-/// Report the first composited frame.
+/// Write raw bytes to a file. Debug aid for eyeballing a frame on a machine
+/// where `screencapture` cannot see our window.
+fn dumpRaw(path: [*:0]const u8, bytes: []const u8) void {
+    const f = std.c.fopen(path, "wb") orelse return;
+    _ = std.c.fwrite(bytes.ptr, 1, bytes.len, f);
+    _ = std.c.fclose(f);
+    std.log.info("wrote {d} raw bytes to {s}", .{ bytes.len, std.mem.span(path) });
+}
 ///
 /// macOS will NOT let an automated test screenshot this app's window without
 /// Screen Recording permission (`screencapture` then captures only the

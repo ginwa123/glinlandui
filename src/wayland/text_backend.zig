@@ -23,6 +23,10 @@ const native = if (use_native) @import("text.zig") else portable;
 pub const TextExtent = native.TextExtent;
 pub const ResolveFontError = native.ResolveFontError;
 pub const resolveFont = native.resolveFont;
+/// Every candidate font path. The CPU glyph rasterizer needs the whole list
+/// because the first file that merely EXISTS may be a TrueType collection,
+/// which no rasterizer can load; it keeps the first that actually parses.
+pub const fontCandidates = native.fontCandidates;
 pub const estimatorExtent = native.estimatorExtent;
 pub const hashMeasureKey = native.hashMeasureKey;
 pub const extentCacheReset = native.extentCacheReset;

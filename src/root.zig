@@ -77,6 +77,11 @@ test {
     _ = @import("wayland/frame.zig");
     _ = @import("wayland/render_common.zig");
     _ = @import("wayland/render_software.zig");
+    // Real glyph rasterization for the CPU renderer (stb_truetype). Tests that
+    // need a font no-op where none is installed, so the COUNT stays identical
+    // on every platform while the behaviour is still asserted wherever a font
+    // exists.
+    _ = @import("wayland/glyphs.zig");
     _ = @import("wayland/render_pixels_test.zig");
     _ = @import("platform/protocol_consts.zig");
     _ = @import("platform/window_contract.zig");
@@ -93,6 +98,10 @@ test {
     // normalisation. Pure, so the translations AppKit needs are tested here
     // rather than only observable in a running window.
     _ = @import("platform/macos_adapter.zig");
+    // The macOS pointer/button translation into the Delegate contract. The evdev
+    // button code is what dispatch keys on, so a backend that reports 0 makes
+    // every click a silent no-op; these tests drive the real dispatcher.
+    _ = @import("platform/input_macos.zig");
     // The portable window backend + its headless-render test. This file has no
     // C imports and compiles identically everywhere, so its tests are part of
     // the parity count on Linux AND macOS. (It is NOT the platform selected by
