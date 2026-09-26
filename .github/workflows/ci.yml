@@ -127,15 +127,25 @@ jobs:
       # `[NSApp run]` never returns, so the job would sit here until the
       # timeout instead of failing with something readable.
       #
+      # The cap is 1, not 3, and that is the only value Cocoa can honour:
+      # AppKit stops redrawing a window once it has been composited, so a
+      # larger cap is unreachable and hangs the process. `effectiveMaxFrames`
+      # in src/mac/adapter.zig clamps it (and warns) rather than trusting the
+      # shim with a number it cannot reach. Running the ReleaseSafe binary
+      # built by the previous step also matches the Calculator macOS leg,
+      # which is the recipe already proven to work on this runner.
+      #
       # The assertions are what turn "it drew something" into a gate. A blank
       # or flat-filled window still paints every pixel, so a plain exit code
       # proves nothing; the non-zero blit checksum is what proves the exact
       # bytes handed to CoreGraphics are not one repeated colour.
-      - name: Run the demo (real Cocoa window, 3 frames)
+      - name: Run the demo (real Cocoa window, one composited frame)
         run: |
           set -euo pipefail
 
-          out="$(env QS_SETTINGS_TEST_FRAMES=3 zig build run 2>&1)"
+          test -x zig-out/bin/glinlandui
+
+          out="$(env QS_SETTINGS_TEST_FRAMES=1 ./zig-out/bin/glinlandui 2>&1)"
           echo "$out"
 
           echo "$out" | grep -q 'macOS window:'

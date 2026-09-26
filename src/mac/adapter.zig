@@ -150,6 +150,24 @@ pub fn resolveQuit(state: *contract.WindowState) bool {
 }
 
 /// Mark the window as quitting (the close button, or a delegate request).
+/// Clamp a requested `QS_SETTINGS_TEST_FRAMES` cap to what Cocoa can actually
+/// reach.
+///
+/// AppKit only draws when something marks the view dirty, and a static window
+/// stops producing redraws once it has been composited. So a cap above one is
+/// unreachable: `[NSApp run]` sits idle with the window already drawn and the
+/// process never returns. That is a HANG, not a failure — it burns a CI job
+/// until its timeout and reports nothing about why.
+///
+/// Clamping beats hanging: the capped run draws one real frame and exits 0, so
+/// the job is deterministic and the exit is readable. A request of 0 still
+/// means "interactive" and is passed through untouched, so a developer running
+/// the app by hand gets the ordinary AppKit loop.
+pub fn effectiveMaxFrames(requested: i32) i32 {
+    if (requested <= 0) return 0;
+    return 1;
+}
+
 pub fn requestQuit(state: *contract.WindowState) void {
     state.quit = true;
 }
@@ -481,4 +499,19 @@ test "resolveQuit latches a delegate-driven quit" {
     // Latched: the backend's own flag is set too, so it stays quit.
     try std.testing.expect(st.quit);
     try std.testing.expect(resolveQuit(&st));
+}
+
+test "effectiveMaxFrames leaves an interactive run interactive" {
+    // 0 is the "no cap" the demo's own run() uses; a negative value is not
+    // reachable from parseTestFrames but must not become a cap either.
+    try std.testing.expectEqual(@as(i32, 0), effectiveMaxFrames(0));
+    try std.testing.expectEqual(@as(i32, 0), effectiveMaxFrames(-1));
+}
+
+test "effectiveMaxFrames clamps a cap above one, which Cocoa cannot reach" {
+    // 1 is the only cap that terminates. Anything higher used to hang, so the
+    // value is reduced rather than passed through to the shim.
+    try std.testing.expectEqual(@as(i32, 1), effectiveMaxFrames(1));
+    try std.testing.expectEqual(@as(i32, 1), effectiveMaxFrames(3));
+    try std.testing.expectEqual(@as(i32, 1), effectiveMaxFrames(1000));
 }

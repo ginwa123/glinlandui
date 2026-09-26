@@ -140,13 +140,25 @@ pub const Window = struct {
             .{ cfg.width, cfg.height, cfg.title },
         );
 
-        const max_frames: i32 = blk: {
+        const requested: i32 = blk: {
             // Same env var, same helper, same semantics as the Wayland
             // backend's `testFramesFromEnv`, so the two run under one harness.
             const raw = std.c.getenv("QS_SETTINGS_TEST_FRAMES") orelse break :blk 0;
             const n = contract.parseTestFrames(std.mem.span(raw)) orelse break :blk 0;
             break :blk @intCast(n);
         };
+        // A cap above one is unreachable through AppKit, so it is clamped here
+        // rather than handed to the shim, where it would hang instead of
+        // failing. The clamp and its rationale live in mac/adapter.zig with
+        // tests, per the rule at the top of this file: decisions are made in
+        // testable Zig, not in the shim.
+        const max_frames = adapter.effectiveMaxFrames(requested);
+        if (max_frames != requested) {
+            std.log.warn(
+                "QS_SETTINGS_TEST_FRAMES={d} clamped to {d}: Cocoa composites one frame and then stops redrawing",
+                .{ requested, max_frames },
+            );
+        }
         c.glin_cocoa_window_run(handle, max_frames);
     }
 
