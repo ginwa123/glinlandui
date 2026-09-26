@@ -101,9 +101,9 @@ only calls the `Delegate`. That contract is the whole integration surface.
 
 ## 2. Invariants. Breaking these fails CI, not just a test
 
-### I1 — Test parity: `zig build test` must report exactly **438**
+### I1 — Test parity: `zig build test` must report exactly **440**
 
-`tests.lock` holds `438`; `ci/check_test_parity.sh` asserts it. The suite compiles
+`tests.lock` holds `440`; `ci/check_test_parity.sh` asserts it. The suite compiles
 a **fixed, platform-independent set** of test roots so Linux and macOS run the
 same tests, which is what makes the macOS path trustworthy without a Mac.
 
@@ -124,7 +124,7 @@ calculator example) + `15` (`examples/calculator_e2e_test.zig`, the E2E suite).
   `examples/calculator_e2e_test.zig` reaches the calculator through an imported
   module (`@import("calculator")`, wired in `build.zig`), **not** a relative
   `@import("calculator.zig")`. The relative form compiles and passes but makes the
-  count 474 instead of 438, by re-running the example's 36 tests in the E2E
+  count 476 instead of 440, by re-running the example's 36 tests in the E2E
   binary.
 
 ### I2 — The test build must select the portable backend on every OS
@@ -189,12 +189,12 @@ like a confusing type mismatch, not a missing import.
 ```bash
 # The full local gate. All four must pass.
 zig fmt --check build.zig src examples    # formatting is gate 1 in CI
-zig build test --summary all              # expect: 425/438 (13 skipped)  ← see I1 + §5
-./ci/check_test_parity.sh                 # expect: parity: 438 tests (matches tests.lock)
+zig build test --summary all              # expect: 425/440 (15 skipped)  ← see I1 + §5
+./ci/check_test_parity.sh                 # expect: parity: 440 tests (matches tests.lock)
 ./ci/check_layering.sh                    # expect: layering: ok
 
 # Linux native backends (Wayland/EGL/GLES3/pango). NOT part of the parity count.
-zig build native-test --summary all       # expect: 82/82
+zig build native-test --summary all       # expect: 83/83
 
 # Real build + a headless smoke test that proves pixels were painted.
 zig build -Doptimize=ReleaseSafe
@@ -240,13 +240,13 @@ them.
    before committing; it is the cheapest failure to avoid.
 
 6. **The parity script reads the test *set* size, not the pass count** — a
-   `(13 skipped)` suffix is normal and must not fail the gate. If you see
+   `(15 skipped)` suffix is normal and must not fail the gate. If you see
    `could not parse test count`, the summary format changed again; fix the regex
    in `ci/check_test_parity.sh`, do not weaken the check.
 
 ---
 
-## 5. Why 13 tests skip locally (and why that is not a bug to fix)
+## 5. Why 15 tests skip locally (and why that is not a bug to fix)
 
 `core/glyphs.zig`'s font-dependent tests do
 `requireFont() orelse return error.SkipZigTest`, and `Font.loadDefault()` walks
@@ -255,10 +255,10 @@ them.
 In a **test** build, `text_impl` is `core/text_portable.zig` (invariant I2), and
 its `font_candidates` are **macOS paths** (`/System/Library/Fonts/…`). So:
 
-- on **macOS**, those paths exist → the 13 tests run → `438/438 passed`;
-- on **Linux/macOS-local without those paths** → 13 skip → `425/438 (13 skipped)`.
+- on **macOS**, those paths exist → the 15 tests run → `440/440 passed`;
+- on **Linux/macOS-local without those paths** → 15 skip → `425/440 (15 skipped)`.
 
-The count is still 438 either way, so parity holds and the gate passes. The real
+The count is still 440 either way, so parity holds and the gate passes. The real
 consequence is a **coverage gap: the glyph rasterizer is only exercised on
 macOS.** `linux/text.zig` *does* carry Linux font paths, but the parity suite never
 selects it. A useful, contained improvement would be to give

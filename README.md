@@ -66,8 +66,8 @@ env WAYLAND_DISPLAY= ./zig-out/bin/glinlandui-calculator
 
 # The full gate — all of these must pass before pushing.
 zig fmt --check build.zig src examples
-zig build test --summary all     # 425/438 tests passed (13 skipped)
-./ci/check_test_parity.sh        # parity: 438 tests (matches tests.lock)
+zig build test --summary all     # 425/440 tests passed (15 skipped)
+./ci/check_test_parity.sh        # parity: 440 tests (matches tests.lock)
 ./ci/check_layering.sh           # layering: ok
 ```
 
@@ -225,16 +225,17 @@ different from Compose's.
 
 ## Testing
 
-Five gates. They are cheap, and each one catches a class of mistake the others
+Six gates. They are cheap, and each one catches a class of mistake the others
 cannot.
 
 | gate | command | expectation |
 |---|---|---|
 | formatting | `zig fmt --check build.zig src examples` | silent |
-| unit + parity suite | `zig build test --summary all` | `425/438 tests passed (13 skipped)` |
-| locked test count | `./ci/check_test_parity.sh` | `parity: 438 tests (matches tests.lock)` |
+| unit + parity suite | `zig build test --summary all` | `425/440 tests passed (15 skipped)` |
+| locked test count | `./ci/check_test_parity.sh` | `parity: 440 tests (matches tests.lock)` |
 | architecture | `./ci/check_layering.sh` | `layering: ok` |
-| native backends (Linux only) | `zig build native-test --summary all` | `82/82 tests passed` |
+| native backends (Linux only) | `zig build native-test --summary all` | `83/83 tests passed` |
+| macOS colour hand-off (macOS only) | `zig build check-colors` | `skipped` off macOS |
 
 ### 1. `zig build test` — the cross-platform suite
 
@@ -247,10 +248,10 @@ test layer.
 
 It needs no display, no GPU and no font.
 
-> **Why 13 tests skip.** `core/glyphs.zig`'s font-dependent tests call
+> **Why 15 tests skip.** `core/glyphs.zig`'s font-dependent tests call
 > `requireFont() orelse return error.SkipZigTest`, and in a test build the font
 > candidates come from the portable backend (macOS paths). On macOS all 13 run;
-> elsewhere 13 skip. The *total* is 438 either way, so parity holds — but it
+> elsewhere 15 skip. The *total* is 440 either way, so parity holds — but it
 > means the glyph rasterizer is only really exercised on macOS. This is known
 > debt, tracked in `src/README.md` §5.
 
@@ -653,7 +654,7 @@ vendor/
 
 Honest list; each is a reasonable next task.
 
-- **Glyph rasterization is only exercised on macOS** (13 skipped tests). See
+- **Glyph rasterization is only exercised on macOS** (15 skipped tests). See
   `src/README.md` §5.
 - **List rows carry no label** — the text comes from the caller's `renderItem`
   callback, so E2E tests select rows with

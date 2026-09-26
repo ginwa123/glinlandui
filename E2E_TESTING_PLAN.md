@@ -9,8 +9,8 @@ Scope: add a declarative, semantics-based end-to-end UI testing layer
 (`onNodeWithText`, `performClick`, `performScrollToNode`, `assertIsDisplayed`,
 `waitForIdle`) on top of the existing Clay/Host engine.
 
-Result: `zig build test` **425/438 (13 skipped)** · `parity: 438 tests` ·
-`layering: ok` · `fmt` clean · `native-test` 82/82 · ReleaseSafe builds.
+Result: `zig build test` **425/440 (15 skipped)** · `parity: 440 tests` ·
+`layering: ok` · `fmt` clean · `native-test` 83/83 · ReleaseSafe builds.
 
 Companion: `REFACTOR_PLAN.md` (the `core/` + `linux/` + `mac/` split and the
 R1–R6 layering rules this plan must obey).
@@ -703,7 +703,7 @@ then add `register` calls component-by-component as tests need
    `zig build test --summary all` and compares it to `tests.lock`. **Every test
    added must bump `tests.lock` in the same commit**, or CI fails on *both*
    platforms. Baseline when this plan was written: `363/376 passed (13 skipped)`.
-   It is `425/438` now — see §13.
+   It is `425/440 (15 skipped)` now — see §13.
 2. **R6: parity-suite modules must be C-free.** `ci/check_layering.sh` greps
    the new files for `@cImport(`. `semantics.zig`, `finders.zig` and
    `assertions.zig` must stay pure Zig (they will — `zclay` is a Zig module,
@@ -781,12 +781,15 @@ warm build.
 Plus 10 E2E tests inside `testing/root.zig` (synthetic scrollable list) and
 `examples/calculator_e2e_test.zig` (15 tests against the real calculator).
 
-**Final state:** `zig build test` **425/438 (13 skipped)** · `parity: 438 tests
+**Final state:** `zig build test` **425/440 (15 skipped)** · `parity: 440 tests
 (matches tests.lock)` · `layering: ok` (R1–R6) · `zig fmt --check` clean ·
-`native-test` **82/82** (unchanged) · `-Doptimize=ReleaseSafe` builds.
+`native-test` **83/83** · `-Doptimize=ReleaseSafe` builds.
 
-`tests.lock`: **376 → 438** = +37 library tests (semantics/finders/assertions/
-actions) + 10 `testing/root.zig` E2E tests + 15 calculator E2E tests.
+`tests.lock`: **376 → 440**. This work added **62** (37 library: semantics /
+finders / assertions / actions, + 10 `testing/root.zig` E2E tests, + 15
+calculator E2E tests); a parallel macOS/font change added the other **2**, which
+is why the merged count is 440 and the skip count moved 13 → 15 (both new tests
+are font-dependent and skip where the fonts are absent).
 
 ### Deviations from the plan (each forced by something the plan could not see)
 
@@ -830,7 +833,7 @@ report "clickable" when dispatch would ignore it, or vice versa.
 #### 3. The E2E suite must import the calculator as a MODULE, not a file
 
 First attempt used `@import("calculator.zig")`. That compiled and passed, but
-the count came out at 474 instead of 438 — **36 too many, exactly the
+the count came out at 476 instead of 440 — **36 too many, exactly the
 calculator's own test count**. Zig's test collector walks file-path `@import`s
 inside the module under test, so the E2E binary re-collected and re-ran the
 example's tests. It does *not* walk into imported *modules* (which is why
