@@ -61,9 +61,9 @@ jobs:
       - name: Cross-platform parity test suite (count checked against tests.lock)
         run: ./ci/check_test_parity.sh
 
-      # native-test also carries the Linux-only calculator example's tests:
-      # examples/calculator.zig has its own test root, wired in under the
-      # same `is_linux` gate as the executable. See the `calculator` job.
+      # native-test is the Linux-only Wayland/EGL/GLES3/Pango superset. The
+      # calculator example's tests are NOT here: they are portable, so they
+      # run in the parity `test` step above on every platform.
       - name: Linux-only native tests (Wayland/EGL/GLES3/Pango)
         run: zig build native-test --summary all
 
@@ -105,18 +105,17 @@ jobs:
   #
   # The example is the reference consumer for the toolkit: a 20-key button
   # grid, indexed click dispatch, and real keyboard input through the Host's
-  # KeyChain. Today it targets the Linux-only Wayland/EGL/GLES3/pangocairo
-  # backend, so only the Linux leg can actually run it.
+  # KeyChain. It is written against the PUBLIC surface only, so it is NOT
+  # Linux-only any more: `Window` is the platform indirection. On Linux it is
+  # the real Wayland/EGL/GLES3/pangocairo runtime; on macOS it is the portable
+  # CPU backend, which renders a real headless frame and prints the painted
+  # pixel count. Its 36 tests are part of the cross-platform parity count, so
+  # `./ci/check_test_parity.sh` now covers the example on both platforms.
   #
-  # The macOS and Windows legs are wired now, before their backends exist, so
-  # the migration has a destination and the Linux-only contract stays
-  # enforced in the meantime: each of those legs ASSERTS THE EXAMPLE IS ABSENT
-  # (no `run-calculator` step, no installed binary). That is a real, passing
-  # check today — it is exactly what keeps `is_linux` honest.
-  #
-  # When a macOS/Windows window backend lands, promote that leg by flipping
-  # its `expect` to `present` and moving its assertions into the run branch.
-  # The Linux leg is the base every other leg is expected to grow into.
+  # Windows is the one host that keeps the example ABSENT: it would resolve the
+  # same portable module, but nothing has verified that path, and the `absent`
+  # leg is what keeps the gate honest. Promote it by adding .windows to
+  # `calc_supported` in build.zig and flipping that leg to `present`.
   # ---------------------------------------------------------------------------
   calculator:
     name: Calculator / ${{ matrix.label }}
@@ -133,8 +132,8 @@ jobs:
             label: Linux (Wayland/EGL/GLES3/pangocairo)
             expect: present
           - os: macos-14
-            label: macOS (backend not implemented yet)
-            expect: absent
+            label: macOS (portable CPU rasterizer)
+            expect: present
           - os: windows-2022
             label: Windows (backend not implemented yet)
             expect: absent
@@ -153,7 +152,7 @@ jobs:
 
       # The example links the real native stack, exactly like the main demo.
       - name: Install native Linux dependencies
-        if: matrix.expect == 'present'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -188,30 +187,40 @@ jobs:
             echo "run-calculator step: absent"
           fi
 
-      # ---- Linux: the base. Build it, install it, run it, prove pixels. ----
+      # ---- Linux: the native Wayland/EGL/GLES3/Pango superset. ----
+      # `native-test` is Linux-only by construction (it wires the generated
+      # protocol C TUs and the pango shim), so it belongs to this leg alone.
+      - name: Linux-only native tests (Wayland/EGL/GLES3/Pango)
+        if: runner.os == 'Linux'
+        run: zig build native-test --summary all
+
+      # ---- The other `present` leg: the example's own tests are portable,
+      # so they are part of the parity count and the lock must cover them. ----
+      - name: Parity suite (covers the example's 36 tests)
+        if: runner.os != 'Linux'
+        run: ./ci/check_test_parity.sh
+
+      # ---- present: build it, install it, run it, prove pixels. ----
       - name: Build and run the calculator (real pixels)
         if: matrix.expect == 'present'
         run: |
           set -euo pipefail
 
           # `zig build` installs both executables; assert the artifact
-          # really exists so a silent regression in the is_linux gate
-          # cannot pass this job.
+          # really exists so a silent regression in the `calc_supported`
+          # gate cannot pass this job.
           zig build -Doptimize=ReleaseSafe
           test -x zig-out/bin/glinlandui-calculator
           test -x zig-out/bin/glinlandui
 
-          # The example's own tests (36 of them: the arithmetic Machine plus
-          # the view-reactivity checks) run under native-test, which is
-          # Linux-only and therefore excluded from the parity count.
-          zig build native-test --summary all
-
-          # A CI runner has no compositor, so Window.run() reports
-          # NoWaylandDisplay and the example falls back to a REAL software
-          # rasterization of the same Clay tree. Assert on the painted
-          # pixel count rather than the exit code alone: that proves the
-          # layout ran AND the rasterizer wrote pixels, so this step cannot
-          # pass on a build that renders nothing.
+          # Neither leg has a display. Linux has no compositor, so
+          # Window.run() reports NoWaylandDisplay and the example falls back
+          # to a REAL software rasterization of the same Clay tree; macOS
+          # has no display surface at all, so the portable backend renders
+          # one headless frame. Assert on the painted pixel count rather
+          # than the exit code alone: that proves the layout ran AND the
+          # rasterizer wrote pixels, so this step cannot pass on a build
+          # that renders nothing.
           out="$(env QS_SETTINGS_TEST_FRAMES=3 WAYLAND_DISPLAY= ./zig-out/bin/glinlandui-calculator 2>&1)"
           echo "$out"
           echo "$out" | grep -q 'headless'
@@ -220,8 +229,9 @@ jobs:
           test "$painted" -gt 0
           echo "calculator painted $painted pixels"
 
-      # ---- Not-Linux: the Linux-only gate must still hold. ----
-      - name: Linux-only gate holds (example must not be wired here yet)
+      # ---- Windows: the example must stay unwired there (calc_supported
+      # lists only Linux and macOS). This is what keeps that gate honest. ----
+      - name: calc_supported gate holds (example must not be wired here)
         if: matrix.expect == 'absent'
         run: |
           set -euo pipefail
@@ -236,9 +246,9 @@ jobs:
           zig build >/dev/null 2>&1 || echo "note: plain 'zig build' does not succeed on this host yet; checking artifacts only"
           for f in zig-out/bin/glinlandui-calculator zig-out/bin/glinlandui-calculator.exe; do
             if [ -e "$f" ]; then
-              echo "::error::$f was installed on ${{ matrix.label }} but the example is Linux-only" >&2
+              echo "::error::$f was installed on ${{ matrix.label }} but calc_supported excludes this host" >&2
               exit 1
             fi
           done
 
-          echo "Linux-only gate holds on ${{ matrix.label }}: no run-calculator step, no calculator binary"
+          echo "calc_supported gate holds on ${{ matrix.label }}: no run-calculator step, no calculator binary"

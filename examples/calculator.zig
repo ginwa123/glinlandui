@@ -1,13 +1,17 @@
-//! glinlandui example: a four-function calculator (LINUX ONLY).
+//! glinlandui example: a four-function calculator.
 //!
-//! This example is deliberately gated to Linux. The runtime it targets —
-//! Wayland + EGL + GLES3 + pangocairo — is native to Linux in this
-//! repository, and the example exercises that real backend. `build.zig`
-//! only ever creates the `glinlandui-calculator` executable, the
-//! `run-calculator` step and the example's tests when the target OS is
-//! Linux; on macOS and every other host none of those artifacts exist, so
-//! nothing about this file can affect the cross-platform test-parity
-//! contract in `ci/check_test_parity.sh` / `tests.lock`.
+//! The example is written against the toolkit's PUBLIC surface only —
+//! `glinlandui.Window`, `glinlandui.host.Host`, the `components.*` widget
+//! set and `glinlandui.render` — so it builds and runs on every host the
+//! library supports. `Window` is the platform indirection: on Linux it is
+//! the real Wayland/EGL/GLES3/pangocairo runtime and a window opens; on
+//! macOS it is the portable backend, which drives the same Clay layout and
+//! software rasterizer to produce a real frame of pixels and reports the
+//! painted pixel count, because there is no display surface to present to.
+//! `build.zig` therefore creates the `glinlandui-calculator` executable and
+//! the `run-calculator` step on every host with a window backend (Linux and
+//! macOS; see `calc_supported`), and the example's own tests are part of the
+//! cross-platform parity count (`ci/check_test_parity.sh` / `tests.lock`).
 //!
 //! What it demonstrates, in order of interest:
 //!   1. A button grid. Clay has no wrap layout, so the keypad is a column
@@ -27,25 +31,16 @@
 //!      the UI layer only ever reads `display()` / `expression()`.
 //!
 //! Run it with `zig build run-calculator`. Escape closes the window (the
-//! toolkit's own contract). On a headless host with no compositor the
-//! window cannot open, so the example falls back to a real software
-//! rasterization of the same tree and reports the painted pixel count.
+//! toolkit's own contract). On a headless host — no compositor on Linux, no
+//! display surface on macOS — the window cannot open, so the toolkit renders
+//! the same tree through the software rasterizer and reports the painted
+//! pixel count instead.
 const std = @import("std");
-const builtin = @import("builtin");
 const glinlandui = @import("glinlandui");
 
 const components = glinlandui.components;
 const registry = components.click_registry;
 const cl = glinlandui.zclay;
-
-// Linux-only tripwire. The build already refuses to wire this example on
-// other hosts; this turns an accidental future reference into a clear
-// message instead of a confusing Wayland/link failure.
-comptime {
-    if (builtin.os.tag != .linux) {
-        @compileError("examples/calculator.zig is Linux-only (Wayland/EGL/GLES3/pangocairo); it is wired into build.zig under the `is_linux` branch only.");
-    }
-}
 
 // ---- Palette (app-local; components stay theme-neutral) ----
 
@@ -639,9 +634,13 @@ fn captureCommands(
 
 // ---- Tests ----
 //
-// These run in the Linux-only `native-test` step (wired from build.zig),
-// never in the cross-platform parity `test` step — adding a test to the
-// parity roots would change the count in tests.lock on every platform.
+// These are part of the cross-platform PARITY suite: they compile and run
+// identically on Linux and macOS, so `ci/check_test_parity.sh` counts them
+// on both and `tests.lock` covers them. The arithmetic `Machine` is pure
+// Zig, and the view-reactivity checks below read the real render commands
+// off the Host's normal frame path — the text backend resolves to the
+// deterministic estimator in every test build, so the command stream is the
+// same on both platforms.
 
 test "example keypad grid covers every key exactly once" {
     try std.testing.expectEqual(@as(usize, 20), Key.count);

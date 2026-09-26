@@ -41,6 +41,11 @@ pub fn build(b: *std.Build) void {
     // backend that the project does not yet have.
     const is_linux = target.result.os.tag == .linux;
 
+    // Hosts the calculator example is wired for: a real native windowing
+    // runtime (Linux) or the portable CPU backend (macOS). Windows is
+    // intentionally NOT listed — see the example block below for why.
+    const calc_supported = is_linux or target.result.os.tag == .macos;
+
     // ---- vendored zclay Zig bindings (moved from qs build.zig) ----
     const zclay_mod = b.createModule(.{
         .root_source_file = b.path("vendor/clay-zig-bindings/src/root.zig"),
@@ -160,19 +165,27 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    // ---- Linux-only example app: the calculator ----
+    // ---- Example app: the calculator ----
     //
-    // The example targets the real Wayland/EGL/GLES3/pangocairo backend, so
-    // BOTH the executable and its run step are created inside the same
-    // `is_linux` gate as the native protocol graph. On macOS and every other
-    // host `calc` / `run_calc_step` stay null, so `zig build
-    // run-calculator` does not exist there and the example cannot be built,
-    // run or tested. The example's own tests go to `native-test` below —
-    // never to the parity `test` step — so tests.lock stays valid on every
-    // platform.
-    var run_calc_step: ?*std.Build.Step = null;
+    // The example drives the toolkit through its PUBLIC surface (`Window`,
+    // `host.Host`, `components.*`), so it is NOT Linux-only any more: on
+    // Linux `Window` is the real Wayland/EGL/GLES3/pangocairo runtime and a
+    // window opens, and on macOS it is the portable backend, which renders a
+    // real headless frame and reports the painted pixel count.
+    //
+    // `calc_supported` is the explicit list of hosts with a window backend the
+    // example has actually been exercised on. Windows deliberately stays off
+    // it: it would resolve the same portable module, but nothing has verified
+    // that path and the CI `calculator` matrix still asserts the example is
+    // ABSENT there. Promoting Windows is a one-line change to this list plus
+    // flipping that matrix leg from `absent` to `present` — do not widen this
+    // gate casually.
+    //
+    // `calc_test` is hoisted out of the block so the parity `test` step below
+    // can depend on it: the example's tests are portable, so they belong in
+    // the cross-platform count, not in the Linux-only `native-test` step.
     var calc_test: ?*std.Build.Step.Compile = null;
-    if (is_linux) {
+    if (calc_supported) {
         const calc_mod = b.createModule(.{
             .root_source_file = b.path("examples/calculator.zig"),
             .target = target,
@@ -187,9 +200,9 @@ pub fn build(b: *std.Build) void {
         });
         b.installArtifact(calc);
 
-        run_calc_step = b.step("run-calculator", "Run the calculator example (Linux only)");
+        const run_calc_step = b.step("run-calculator", "Run the calculator example");
         const run_calc = b.addRunArtifact(calc);
-        run_calc_step.?.dependOn(&run_calc.step);
+        run_calc_step.dependOn(&run_calc.step);
         run_calc.step.dependOn(b.getInstallStep());
         if (b.args) |args| {
             run_calc.addArgs(args);
@@ -225,9 +238,19 @@ pub fn build(b: *std.Build) void {
     // of tests and report the IDENTICAL count. No OS branch lives in the
     // aggregate test block, and the native standalone roots are NOT wired in
     // here — that is what keeps the counts provably equal.
+    //
+    // The calculator example's own test root is wired in here too, and that is
+    // a parity statement, not a convenience: the example is written against the
+    // public surface, its `Machine` is pure Zig, its view assertions read the
+    // software rasterizer's command stream, and the text backend resolves to
+    // the deterministic estimator in EVERY test build. So it must report the
+    // same count on both platforms — which is what makes it a useful guard.
     const test_step = b.step("test", "Run the cross-platform test suite (identical on every OS)");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+    if (calc_test) |calc| {
+        test_step.dependOn(&b.addRunArtifact(calc).step);
+    }
 
     // `native-test` runs the Linux-only Wayland/EGL/GLES3/Pango tests. These
     // are a superset and deliberately excluded from the parity count; CI runs
@@ -238,13 +261,9 @@ pub fn build(b: *std.Build) void {
         native_test_step.dependOn(makeModuleTestStep(b, target, "src/wayland/render_gles3.zig", zclay_mod));
         native_test_step.dependOn(makeWaylandTestStep(b, target, zclay_mod, protocols));
     }
-    // Linux-only example tests live here, NOT in the parity `test` step: the
-    // calculator targets the native backend, so folding its count into the
-    // parity step would invalidate tests.lock on macOS. Same reasoning as
-    // every other entry above.
-    if (calc_test) |calc| {
-        native_test_step.dependOn(&b.addRunArtifact(calc).step);
-    }
+    // The calculator example's tests are NOT here: they are portable and run
+    // in the parity `test` step above on every platform. `native-test` is now
+    // purely the native-backend superset, and is empty off Linux.
     // Components are not standalone test roots: they import the shared
     // renderer contract relatively, which escapes a standalone root module.
     // They are covered by src/root.zig's aggregate test on every platform.
