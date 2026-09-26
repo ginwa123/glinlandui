@@ -108,7 +108,7 @@ const App = struct {
 
 pub fn main() !void {
     // The Clay arena outlives run() and is process-lifetime, so the page
-    // allocator matches the harness convention (see testing/root.zig).
+    // allocator matches the harness convention (see core/testing/root.zig).
     const alloc = std.heap.page_allocator;
 
     // Reference the surface so the build proves the re-exports resolve.

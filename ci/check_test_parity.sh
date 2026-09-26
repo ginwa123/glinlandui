@@ -15,7 +15,12 @@ EXPECTED="$(tr -d '[:space:]' < tests.lock)"
 OUT="$(zig build test --summary all 2>&1)"
 echo "$OUT" | grep -E "tests passed" || true
 
-ACTUAL="$(printf '%s' "$OUT" | sed -nE 's#^Build Summary: [0-9]+/[0-9]+ steps succeeded; ([0-9]+)/([0-9]+) tests passed$#\2#p' | head -n1)"
+# `zig build --summary all` appends a ` (N skipped)` suffix when any test
+# opted out (e.g. the glyph tests no-op without an installed font), so the
+# total must be read with a trailing-anything match. The captured group is the
+# TOTAL, not the pass count: tests.lock locks the size of the test set, and a
+# skip is a legitimate outcome of the same set.
+ACTUAL="$(printf '%s' "$OUT" | sed -nE 's#^Build Summary: [0-9]+/[0-9]+ steps succeeded; ([0-9]+)/([0-9]+) tests passed.*$#\2#p' | head -n1)"
 
 if [ -z "$ACTUAL" ]; then
   echo "parity: could not parse test count from build summary" >&2

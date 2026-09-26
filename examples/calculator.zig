@@ -547,7 +547,7 @@ fn onKeyPress(ctx: ?*anyopaque, index: usize) void {
 
 pub fn main() !void {
     // The Clay arena outlives run() and is process-lifetime, so the page
-    // allocator matches the harness convention (see testing/root.zig).
+    // allocator matches the harness convention (see core/testing/root.zig).
     const alloc = std.heap.page_allocator;
 
     var app = App{};
@@ -954,7 +954,7 @@ test "declaring the app emits the display, every key and the row boxes" {
     // into the arena that deinit frees, so the next Host.init() would read
     // a dangling currentContext and segfault in Clay_MinMemorySize. The
     // page-allocator arena is intentionally left alive for the rest of the
-    // test process — exactly what testing/root.zig's Driver.deinit does.
+    // test process — exactly what core/testing/root.zig's Driver.deinit does.
     var host = try glinlandui.host.Host.init(alloc, &app, App.root);
     host.keys.register(App.onKey, &app);
 
@@ -978,7 +978,7 @@ test "a click on a declared key fires its indexed handler" {
     // into the arena that deinit frees, so the next Host.init() would read
     // a dangling currentContext and segfault in Clay_MinMemorySize. The
     // page-allocator arena is intentionally left alive for the rest of the
-    // test process — exactly what testing/root.zig's Driver.deinit does.
+    // test process — exactly what core/testing/root.zig's Driver.deinit does.
     var host = try glinlandui.host.Host.init(alloc, &app, App.root);
     host.keys.register(App.onKey, &app);
     host.frame(360, 440);
@@ -1009,7 +1009,7 @@ test "the keypad lays out as five rows of four, without overlap" {
     // into the arena that deinit frees, so the next Host.init() would read
     // a dangling currentContext and segfault in Clay_MinMemorySize. The
     // page-allocator arena is intentionally left alive for the rest of the
-    // test process — exactly what testing/root.zig's Driver.deinit does.
+    // test process — exactly what core/testing/root.zig's Driver.deinit does.
     var host = try glinlandui.host.Host.init(alloc, &app, App.root);
     host.frame(360, 440);
 

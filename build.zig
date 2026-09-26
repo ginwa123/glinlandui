@@ -1,10 +1,35 @@
 const std = @import("std");
 
-// glinlandui: agnostic Wayland GUI library (moved from qs-settings-zig
-// src/wayland.zig + src/wayland/ + protocols/*.xml + stb impl).
+// glinlandui: platform-agnostic Clay GUI library.
+//
+// Layout (see REFACTOR_PLAN.md §4 and §14):
+//   src/core/     platform-agnostic: components, host, frame, renderer
+//                 contract + CPU rasterizer, text estimator, window contract,
+//                 and the two vendored stb implementation TUs. Compiles
+//                 identically on every OS; no platform @cImport.
+//   src/linux/    the Wayland/EGL/GLES3/pangocairo backend.
+//   src/mac/      the Cocoa/CoreGraphics backend.
+//   src/platform.zig  the ONLY file that branches on builtin.os.tag.
+//
+// The two platform folders are a 1:1 ROLE MIRROR — same nine file names, so
+// they can be read side by side:
+//
+//   window.zig   bootstrap, event loop, frame loop
+//   input.zig    native events -> the Delegate's input contract
+//   keymap.zig   native keycode -> evdev
+//   adapter.zig  coords / scroll / resize / quit
+//   present.zig  finished frame -> screen
+//   renderer.zig renderer for this OS   (GPU on Linux, CPU on macOS)
+//   text.zig     text engine for this OS (pangocairo on Linux, shared on macOS)
+//   shim.h       this platform's C shim header
+//   shim.c/.m    this platform's C shim TU (ObjC requires .m)
+//
+// "Mirror" means the same roles at the same paths, NOT the same functions: each
+// file documents what the other platform has that it does not, and why.
+//
 // Owns: wayland-scanner codegen, protocol + stb + pango-shim C sources,
-// clay static lib + zclay wiring, system links, and `zig build test` for
-// the moved wayland tests. ZERO ui/* imports by design.
+// clay static lib + zclay wiring, system links, and `zig build test` for the
+// parity suite. ZERO ui/* imports by design.
 //
 // zclay wiring: build.zig.zon declares `.zclay = .{ .path =
 // "vendor/clay-zig-bindings" }` (path dependency, no network). The module
@@ -15,11 +40,11 @@ const std = @import("std");
 // fetch (zclay's own build.zig would fetch clay from a URL dep) and
 // keeps the vendored clay.h source identical to pre-move behavior.
 //
-// Text engine: pangocairo via src/pango_text.h/.c shim.
+// Text engine: pangocairo via src/linux/shim.h/.c shim.
 // Zig @cImport parses ONLY the shim header (plain C types) — real
 // pango/cairo/glib headers stay inside the .c TU (system compiler) so we
 // never hit G_GNUC_BEGIN_IGNORE_DEPRECATIONS translation failures.
-// wayland/text.zig measures via shim, wayland/render_gles3.zig renders
+// linux/text.zig measures via shim, linux/renderer.zig renders
 // via shim ARGB32 image -> GL_RGBA texture. stb TU kept as fallback.
 
 /// Generated Wayland protocol artifacts (client header + private-code TU).
@@ -82,17 +107,16 @@ pub fn build(b: *std.Build) void {
     });
     mod.addImport("zclay", zclay_mod);
     addVendoredStbInclude(b, mod);
-    // stb_truetype implementation TU: exactly one translation unit defines
-    // STB_TRUETYPE_IMPLEMENTATION, and the CPU software renderer needs it to
-    // draw real glyphs (see wayland/glyphs.zig). It is NOT Linux-only: the
-    // macOS/CPU backend renders text through it too, which is what makes that
-    // build look like the GLES3 one instead of drawing a bar per byte.
-    mod.addCSourceFile(.{ .file = b.path("src/stb_truetype_impl.c") });
-    // Every backend resolves the Cocoa shim header, so the include path is
-    // unconditional. Only the .m source and the frameworks are macOS-gated
-    // (below) — a path with no consumers costs nothing and keeps the
-    // `addCocoaShim` helper to one call.
-    mod.addIncludePath(b.path("src"));
+    // Vendored-library implementation TUs, both unconditional and both in
+    // core/: exactly one TU may define each STB_*_IMPLEMENTATION macro, and
+    // neither is platform-specific — the CPU software renderer needs
+    // stb_truetype on EVERY host (that is what makes the macOS build look like
+    // the GLES3 one instead of drawing a bar per byte), and stb_image is the
+    // image decoder the image widget uses. They live in core/ rather than in a
+    // platform folder for the same reason: they are third-party TUs, not
+    // platform shims. Each platform folder owns exactly ONE C TU — its shim.
+    mod.addCSourceFile(.{ .file = b.path("src/core/stb_truetype_impl.c") });
+    mod.addCSourceFile(.{ .file = b.path("src/core/stb_image_impl.c") });
 
     // ---- macOS-only native windowing graph ----
     //
@@ -103,10 +127,17 @@ pub fn build(b: *std.Build) void {
     //
     // The shim is deliberately the only untestable part of the macOS backend.
     // Every decision it would otherwise make (keycodes, the y-axis flip, the
-    // BGRA byte order, resize coalescing) lives in `src/platform/` as pure,
+    // BGRA byte order, resize coalescing) lives in `src/mac/` as pure,
     // cross-platform, unit-tested Zig.
+    //
+    // The include path is GATED, not unconditional. Both platform folders now
+    // expose a header called `shim.h` with different contents, so leaving
+    // src/mac on Linux's include path would let linux/text.zig's
+    // @cInclude("shim.h") resolve to the COCOA header. One platform's include
+    // path is on at a time, which is what makes the shared header name safe.
     if (is_macos) {
-        mod.addCSourceFile(.{ .file = b.path("src/cocoa_window.m") });
+        mod.addIncludePath(b.path("src/mac"));
+        mod.addCSourceFile(.{ .file = b.path("src/mac/shim.m") });
         mod.linkFramework("AppKit", .{});
         mod.linkFramework("Foundation", .{});
         mod.linkFramework("CoreGraphics", .{});
@@ -150,12 +181,10 @@ pub fn build(b: *std.Build) void {
         // a tablet-tool object) but tablet input is never bound or used, so
         // no tablet protocol TU is generated. A generated C TU provides the
         // symbol (a Zig `export` would only land in binaries that analyze
-        // wayland.zig; C sources propagate to every consumer via the module
+        // linux/window.zig; C sources propagate to every consumer via the module
         // link chain, including the parent qs-settings-zig test binaries).
         // get_tablet_tool_v2 is never called, so the empty table stays dead.
         addTabletToolStub(b, mod);
-        // stb_image + resize2 implementation TU (wallpaper thumbnails/preview).
-        mod.addCSourceFile(.{ .file = b.path("src/stb_image_impl.c") });
 
         // Pangocairo shim TU + includes + system libs.
         addPangoShim(b, mod);
@@ -285,9 +314,7 @@ pub fn build(b: *std.Build) void {
     // them on Linux as an extra job, never in place of the portable suite.
     const native_test_step = b.step("native-test", "Run the Linux-only native (Wayland/EGL/GLES3/Pango) tests");
     if (native_protocols) |protocols| {
-        native_test_step.dependOn(makeModuleTestStep(b, target, "src/wayland/text.zig", zclay_mod));
-        native_test_step.dependOn(makeModuleTestStep(b, target, "src/wayland/render_gles3.zig", zclay_mod));
-        native_test_step.dependOn(makeWaylandTestStep(b, target, zclay_mod, protocols));
+        native_test_step.dependOn(makeNativeTestStep(b, target, zclay_mod, protocols));
     }
     // The calculator example's tests are NOT here: they are portable and run
     // in the parity `test` step above on every platform. `native-test` is now
@@ -303,15 +330,18 @@ fn addVendoredStbInclude(b: *std.Build, m: *std.Build.Module) void {
     m.addIncludePath(b.path("vendor/stb"));
 }
 
-/// Pangocairo shim: compiles src/pango_text.c (real pango/cairo includes)
-/// and exposes src/ for @cImport("pango_text.h"). Include flags mirror
+/// Pangocairo shim: compiles src/linux/shim.c (real pango/cairo includes)
+/// and exposes src/linux/ for @cImport("shim.h"). Include flags mirror
 /// `pkg-config --cflags pangocairo pango cairo fontconfig freetype2
 /// harfbuzz` on Arch (verified 2026-09-06). Zig @cImport only ever sees
 /// the shim header, never glib headers directly.
 fn addPangoShim(b: *std.Build, m: *std.Build.Module) void {
-    m.addIncludePath(b.path("src"));
+    // src/linux, not src/: the shim header moved into the Linux backend folder
+    // with its TU, and @cInclude("shim.h") from linux/text.zig and
+    // linux/renderer.zig must resolve to it.
+    m.addIncludePath(b.path("src/linux"));
     m.addCSourceFile(.{
-        .file = b.path("src/pango_text.c"),
+        .file = b.path("src/linux/shim.c"),
         .flags = &.{
             "-I/usr/include/pango-1.0",
             "-I/usr/include/cairo",
@@ -365,36 +395,27 @@ fn genWaylandProtocol(
     return .{ .header = header, .code = code };
 }
 
-fn makeModuleTestStep(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    path: []const u8,
-    zclay: *std.Build.Module,
-) *std.Build.Step {
-    const m = b.createModule(.{
-        .root_source_file = b.path(path),
-        .target = target,
-    });
-    m.addImport("zclay", zclay);
-    addVendoredStbInclude(b, m);
-    addPangoShim(b, m);
-    const test_exe = b.addTest(.{ .root_module = m });
-    test_exe.root_module.linkSystemLibrary("c", .{});
-    linkTextEngine(test_exe.root_module);
-    return &b.addRunArtifact(test_exe).step;
-}
-
-/// Agnostic platform step: wayland.zig re-exports its own children
-/// render_gles3.zig + text.zig. Needs zclay + generated protocol headers
-/// plus libc; Renderer references GL symbols so link GLESv2.
-fn makeWaylandTestStep(
+/// The single root for the Linux-only `native-test` step.
+///
+/// It is rooted at `src/native_test.zig` — one level ABOVE the backends — for a
+/// concrete reason, not for tidiness: Zig rejects an `@import` that escapes the
+/// module's root DIRECTORY ("import of file outside module path"), and the
+/// native backends import the shared `core/` modules (render_common,
+/// window_contract). A module rooted at src/linux/ cannot see src/core/, so
+/// the root has to sit at src/ — the same place (and the same reason) the
+/// parity root `src/root.zig` sits.
+///
+/// That is also why this replaced THREE steps (text, renderer, window):
+/// they were only separable while every native file shared one directory. The
+/// union of their link flags is what this one step links.
+fn makeNativeTestStep(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     zclay: *std.Build.Module,
     protocols: NativeProtocols,
 ) *std.Build.Step {
     const m = b.createModule(.{
-        .root_source_file = b.path("src/wayland.zig"),
+        .root_source_file = b.path("src/native_test.zig"),
         .target = target,
     });
     m.addImport("zclay", zclay);
