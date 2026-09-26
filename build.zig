@@ -137,7 +137,22 @@ pub fn build(b: *std.Build) void {
     // path is on at a time, which is what makes the shared header name safe.
     if (is_macos) {
         mod.addIncludePath(b.path("src/mac"));
-        mod.addCSourceFile(.{ .file = b.path("src/mac/shim.m") });
+        mod.addCSourceFile(.{
+            .file = b.path("src/mac/shim.m"),
+            // `-Werror` is load-bearing, not style. The shim is the one
+            // untestable part of the toolkit (it owns NSWindow/NSView and
+            // nothing else), and its most likely bug is messaging a
+            // selector AppKit does not implement. That is a WARNING in
+            // clang, so the build passed and the app shipped a runtime
+            // `NSInvalidArgumentException` on every single mouse event:
+            // `-[NSEvent locationInView:]` does not exist, so no press or
+            // release ever reached the toolkit and every macOS click was a
+            // no-op. Promoting warnings to errors here turns that class of
+            // mistake into a build failure. Verified against the SDK: with
+            // the fix in place the file compiles with zero warnings, so
+            // nothing else is silenced by accident.
+            .flags = &.{"-Werror"},
+        });
         mod.linkFramework("AppKit", .{});
         mod.linkFramework("Foundation", .{});
         mod.linkFramework("CoreGraphics", .{});

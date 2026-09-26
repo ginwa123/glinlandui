@@ -74,8 +74,8 @@ struct GlinCocoaWindow {
 
 - (BOOL)isFlipped {
     // We do NOT flip the view. Keeping the standard bottom-left origin means
-    // AppKit's `locationInView:` lands in the same space the host's blit
-    // already assumed, so there is exactly one flip (in Zig) rather than two
+    // the point `glinForward:` hands the host is already in the space the
+    // blit assumed, so there is exactly one flip (in Zig) rather than two
     // independent ones that could disagree.
     return NO;
 }
@@ -150,10 +150,29 @@ enum {
 
 /// Forward one AppKit mouse event. The y axis (bottom-left origin) and the
 /// button code are translated by the host, not here, so both are unit-tested.
+///
+/// WHY THIS IS NOT `[event locationInView:self]`
+/// -----------------------------------------
+/// `NSEvent` has NO `locationInView:` method. It declares exactly one
+/// location accessor, `locationInWindow`, and everything else is a
+/// `convertPoint:...` round trip. Messaging it anyway is a *warning*
+/// (`'NSEvent' may not respond to 'locationInView:'`), the build still
+/// succeeds, and the failure only shows up at runtime: every single
+/// mouse event raised `NSInvalidArgumentException: -[NSEvent
+/// locationInView:]: unrecognized selector`, which unwound straight out
+/// of `mouseDown:`/`mouseUp:` BEFORE `o->on_pointer(...)` ever ran. The
+/// whole macOS backend was therefore deaf: no press, no release, no
+/// click, and the calculator looked completely inert while the Zig-side
+/// state machine was perfectly healthy. `build.zig` now compiles this
+/// file with `-Werror` so that mistake is a BUILD failure instead.
+///
+/// The correct conversion is window space -> view space, via the view
+/// that is the window's content view (`self`): exactly the transform
+/// `locationInView:` would have performed.
 - (void)glinForward:(NSEvent *)event kind:(int)kind {
     GlinCocoaWindow *o = _owner;
     if (!o || !o->on_pointer) return;
-    NSPoint p = [event locationInView:self];
+    NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
     o->on_pointer(o->user, kind, (int)event.buttonNumber, p.x, p.y, 0);
 }
 
