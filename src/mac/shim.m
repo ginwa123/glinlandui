@@ -404,6 +404,13 @@ void glin_cocoa_present(GlinCocoaWindow *win, const unsigned char *bgra, int w, 
         win->frames_drawn += 1;
         if (win->max_frames > 0 && win->frames_drawn >= win->max_frames) {
             [NSApp terminate:nil];
+        } else if (win->max_frames > 0) {
+            // A capped run must actually produce `max_frames` frames, but
+            // AppKit only redraws when something marks the view dirty, and a
+            // static window goes quiet after the first composite. Without
+            // re-arming the display here, any cap above 1 is unreachable and
+            // the run hangs until the CI job timeout instead of exiting.
+            [(GlinView *)win->view setNeedsDisplay:YES];
         }
     }
 }

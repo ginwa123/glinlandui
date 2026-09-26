@@ -87,9 +87,16 @@ jobs:
         run: env QS_SETTINGS_TEST_FRAMES=3 zig build run
 
   macos:
-    name: macOS / CPU rasterizer / headless pixels
+    # The job opens a REAL Cocoa window now (mac/window.zig + mac/shim.m), so
+    # this is no longer a "headless pixels" job: it is the macOS peer of the
+    # Linux job above, driving the same Clay -> rasterizer -> RGBA8 pipeline
+    # through CoreGraphics instead of through a Wayland/EGL swapchain.
+    name: macOS / CPU rasterizer / Cocoa window
     runs-on: macos-14
-    timeout-minutes: 25
+    # Deliberately shorter than the Linux job's 25. A capped Cocoa run that
+    # stops exiting is the one regression this job is most exposed to, and it
+    # used to burn the full 25 minutes before failing. Fail in 10 instead.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -97,10 +104,6 @@ jobs:
         with:
           version: 0.16.0
 
-      # macOS has no native Wayland/EGL/GLES client stack. The library selects
-      # its portable software rasterizer there and `zig build run` performs a
-      # REAL headless render (Clay layout -> rasterizer -> RGBA8 pixels), so
-      # this job proves the app genuinely draws without needing a GUI session.
       - name: Check formatting
         run: zig fmt --check build.zig src examples
 
@@ -113,13 +116,38 @@ jobs:
       # Proves the blit buffer is DISPLAYED as the colour that was written.
       # A wrong `kCGBitmapByteOrder32Little` in mac/shim.m renders the whole
       # window bright red and is invisible to the parity suite; this drives
-      # CoreGraphics for real. Needs no GUI session, so it runs on a headless
+      # CoreGraphics for real. Needs no window server, so it runs on a stock
       # macOS runner.
       - name: macOS CoreGraphics colour hand-off (displayed == written)
         run: zig build check-colors
 
-      - name: Run the demo (real headless render)
-        run: zig build run
+      # QS_SETTINGS_TEST_FRAMES caps the run so it terminates on its own, the
+      # same way the Linux job above caps its Wayland run. It is NOT optional:
+      # with the variable unset the backend is an interactive app, and
+      # `[NSApp run]` never returns, so the job would sit here until the
+      # timeout instead of failing with something readable.
+      #
+      # The assertions are what turn "it drew something" into a gate. A blank
+      # or flat-filled window still paints every pixel, so a plain exit code
+      # proves nothing; the non-zero blit checksum is what proves the exact
+      # bytes handed to CoreGraphics are not one repeated colour.
+      - name: Run the demo (real Cocoa window, 3 frames)
+        run: |
+          set -euo pipefail
+
+          out="$(env QS_SETTINGS_TEST_FRAMES=3 zig build run 2>&1)"
+          echo "$out"
+
+          echo "$out" | grep -q 'macOS window:'
+          echo "$out" | grep -q 'macOS first frame:'
+          painted="$(echo "$out"             | sed -nE 's/.*first frame: [0-9]+x[0-9]+, ([0-9]+) painted pixels.*/\1/p' | head -n1)"
+          sum="$(echo "$out"             | sed -nE 's/.*blit checksum 0x([0-9a-f]+).*/\1/p' | head -n1)"
+
+          test -n "$painted"
+          test "$painted" -gt 0
+          test -n "$sum"
+          test "$sum" != "0000000000000000"
+          echo "demo painted $painted pixels, blit checksum 0x$sum"
 
   # ---------------------------------------------------------------------------
   # Calculator example (examples/calculator.zig)
@@ -128,10 +156,11 @@ jobs:
   # grid, indexed click dispatch, and real keyboard input through the Host's
   # KeyChain. It is written against the PUBLIC surface only, so it is NOT
   # Linux-only any more: `Window` is the platform indirection. On Linux it is
-  # the real Wayland/EGL/GLES3/pangocairo runtime; on macOS it is the portable
-  # CPU backend, which renders a real headless frame and prints the painted
-  # pixel count. Its 36 tests are part of the cross-platform parity count, so
-  # `./ci/check_test_parity.sh` now covers the example on both platforms.
+  # the real Wayland/EGL/GLES3/pangocairo runtime; on macOS it is the same CPU
+  # rasterizer behind the real Cocoa window backend, so the example opens a
+  # window and composites through CGBitmapContext. Its 36 tests are part of the
+  # cross-platform parity count, so `./ci/check_test_parity.sh` now covers the
+  # example on both platforms.
   #
   # Windows is the one host that keeps the example ABSENT: it would resolve the
   # same portable module, but nothing has verified that path, and the `absent`
