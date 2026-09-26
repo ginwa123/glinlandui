@@ -200,8 +200,8 @@ jobs:
         if: runner.os != 'Linux'
         run: ./ci/check_test_parity.sh
 
-      # ---- present: build it, install it, run it, prove pixels. ----
-      - name: Build and run the calculator (real pixels)
+      # ---- present: build it, install it, run it, prove real pixels. ----
+      - name: Build and run the calculator
         if: matrix.expect == 'present'
         run: |
           set -euo pipefail
@@ -213,18 +213,39 @@ jobs:
           test -x zig-out/bin/glinlandui-calculator
           test -x zig-out/bin/glinlandui
 
-          # Neither leg has a display. Linux has no compositor, so
-          # Window.run() reports NoWaylandDisplay and the example falls back
-          # to a REAL software rasterization of the same Clay tree; macOS
-          # has no display surface at all, so the portable backend renders
-          # one headless frame. Assert on the painted pixel count rather
-          # than the exit code alone: that proves the layout ran AND the
-          # rasterizer wrote pixels, so this step cannot pass on a build
-          # that renders nothing.
-          out="$(env QS_SETTINGS_TEST_FRAMES=3 WAYLAND_DISPLAY= ./zig-out/bin/glinlandui-calculator 2>&1)"
+          # QS_SETTINGS_TEST_FRAMES caps the frame count so the run is
+          # deterministic and terminates on its own.
+          #
+          # Linux: no compositor, so Window.run() reports NoWaylandDisplay
+          # and the example falls back to a REAL software rasterization.
+          #
+          # macOS: there IS now a real Cocoa window backend, so the example
+          # opens an NSWindow and composites through CGBitmapContext. The
+          # backend reports the first composited frame's size, painted-pixel
+          # count and a checksum of the exact bytes handed to CoreGraphics.
+          # That is the assertion that matters — a screenshot is NOT usable
+          # here, because macOS blocks screen capture of an app's own window
+          # without Screen Recording permission, so `screencapture` yields a
+          # desktop-only image on a stock CI runner.
+          out="$(env QS_SETTINGS_TEST_FRAMES=1 WAYLAND_DISPLAY= ./zig-out/bin/glinlandui-calculator 2>&1)"
           echo "$out"
-          echo "$out" | grep -q 'headless'
-          painted="$(echo "$out" | sed -nE 's/.*headless \(([0-9]+) painted pixels.*/\1/p' | head -n1)"
+
+          painted=0
+          if echo "$out" | grep -q 'headless'; then
+            # Linux leg.
+            painted="$(echo "$out" | sed -nE 's/.*\(([0-9]+) painted pixels.*/\1/p' | head -n1)"
+          else
+            # macOS leg: assert the real window composited a real frame.
+            echo "$out" | grep -q 'macOS window:'
+            echo "$out" | grep -q 'macOS first frame:'
+            painted="$(echo "$out" | sed -nE 's/.*first frame: [0-9]+x[0-9]+, ([0-9]+) painted pixels.*/\1/p' | head -n1)"
+            # A non-zero checksum proves the composited bytes are not a flat
+            # fill; a blank window cannot fake this.
+            sum="$(echo "$out" | sed -nE 's/.*blit checksum 0x([0-9a-f]+).*/\1/p' | head -n1)"
+            test -n "$sum"
+            test "$sum" != "0000000000000000"
+          fi
+
           test -n "$painted"
           test "$painted" -gt 0
           echo "calculator painted $painted pixels"

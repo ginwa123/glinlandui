@@ -40,6 +40,7 @@ pub fn build(b: *std.Build) void {
     // honest: it verifies portable behavior without inventing a windowing
     // backend that the project does not yet have.
     const is_linux = target.result.os.tag == .linux;
+    const is_macos = target.result.os.tag == .macos;
 
     // Hosts the calculator example is wired for: a real native windowing
     // runtime (Linux) or the portable CPU backend (macOS). Windows is
@@ -81,6 +82,29 @@ pub fn build(b: *std.Build) void {
     });
     mod.addImport("zclay", zclay_mod);
     addVendoredStbInclude(b, mod);
+    // Every backend resolves the Cocoa shim header, so the include path is
+    // unconditional. Only the .m source and the frameworks are macOS-gated
+    // (below) — a path with no consumers costs nothing and keeps the
+    // `addCocoaShim` helper to one call.
+    mod.addIncludePath(b.path("src"));
+
+    // ---- macOS-only native windowing graph ----
+    //
+    // The Cocoa shim: one Objective-C translation unit plus the frameworks it
+    // needs. `linkFramework` is required, NOT `linkSystemLibrary` — the SDK
+    // keeps AppKit & co. in `System/Library/Frameworks`, and `linkSystemLibrary`
+    // only searches `usr/lib`, where there is no libAppKit.tbd.
+    //
+    // The shim is deliberately the only untestable part of the macOS backend.
+    // Every decision it would otherwise make (keycodes, the y-axis flip, the
+    // BGRA byte order, resize coalescing) lives in `src/platform/` as pure,
+    // cross-platform, unit-tested Zig.
+    if (is_macos) {
+        mod.addCSourceFile(.{ .file = b.path("src/cocoa_window.m") });
+        mod.linkFramework("AppKit", .{});
+        mod.linkFramework("Foundation", .{});
+        mod.linkFramework("CoreGraphics", .{});
+    }
 
     // ---- Linux-only native windowing and rendering graph ----
     var native_protocols: ?NativeProtocols = null;

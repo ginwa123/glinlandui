@@ -5,14 +5,24 @@
 //! so a CPU-only platform can compile the same Clay/UI surface without
 //! pretending to present a Wayland window.
 const builtin = @import("builtin");
-// Test builds select the portable window module on EVERY platform, so the
-// parity suite never analyzes the Linux Wayland module and its tests. That
-// keeps the cross-platform test count identical. Production on Linux still
-// uses wayland.zig; the native window module is tested in `native-test`.
-const platform = if (builtin.os.tag == .linux and !builtin.is_test)
-    @import("wayland.zig")
-else
-    @import("wayland_portable.zig");
+// One window module per OS, selected here and nowhere else. Every consumer
+// (Host, the library root, application code) depends on this stable shape.
+//
+// TEST BUILDS SELECT `wayland_portable.zig` ON EVERY PLATFORM. That is the
+// single most important rule in this file: it means the parity suite never
+// analyzes either native backend, so Linux and macOS report an identical test
+// count even though the two backends are completely different code. The
+// native modules are still tested — the Wayland one in `native-test`, and the
+// macOS one's decision logic in `platform/` (pure, cross-platform).
+const platform = if (builtin.is_test)
+    @import("wayland_portable.zig")
+else switch (builtin.os.tag) {
+    .linux => @import("wayland.zig"),
+    .macos => @import("wayland_macos.zig"),
+    // No backend yet (Windows): the CPU-only path, so the library still
+    // compiles and its headless render still proves pixels.
+    else => @import("wayland_portable.zig"),
+};
 
 pub const Window = platform.Window;
 pub const WindowConfig = platform.WindowConfig;

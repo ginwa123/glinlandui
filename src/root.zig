@@ -80,6 +80,19 @@ test {
     _ = @import("wayland/render_pixels_test.zig");
     _ = @import("platform/protocol_consts.zig");
     _ = @import("platform/window_contract.zig");
+    // The macOS backend's keycode translation. It is a pure table, so it
+    // belongs in the parity suite on every platform: it proves macOS hands the
+    // Delegate the same evdev codes Linux does, which is what keeps the widget
+    // layer platform-free.
+    _ = @import("platform/keymap_macos.zig");
+    // The macOS blit's pixel shuffle (channel order + row order). Pure, so it
+    // is tested on every platform — a mistake there is the kind that renders
+    // a plausible-looking but wrong window.
+    _ = @import("platform/blit.zig");
+    // The macOS event adapter: origin flip, resize coalescing, scroll
+    // normalisation. Pure, so the translations AppKit needs are tested here
+    // rather than only observable in a running window.
+    _ = @import("platform/macos_adapter.zig");
     // The portable window backend + its headless-render test. This file has no
     // C imports and compiles identically everywhere, so its tests are part of
     // the parity count on Linux AND macOS. (It is NOT the platform selected by
