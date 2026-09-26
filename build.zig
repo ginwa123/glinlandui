@@ -21,6 +21,17 @@ const std = @import("std");
 // never hit G_GNUC_BEGIN_IGNORE_DEPRECATIONS translation failures.
 // wayland/text.zig measures via shim, wayland/render_gles3.zig renders
 // via shim ARGB32 image -> GL_RGBA texture. stb TU kept as fallback.
+
+/// Generated Wayland protocol artifacts (client header + private-code TU).
+/// Passed whole to the wayland test step: the test module needs BOTH the
+/// include paths (to @cImport the headers) and the C sources (to link the
+/// wl_interface symbols the listener fields reference).
+const NativeProtocols = struct {
+    xdg: WaylandProtocol,
+    layer_shell: WaylandProtocol,
+    cursor_shape: WaylandProtocol,
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -67,11 +78,6 @@ pub fn build(b: *std.Build) void {
     addVendoredStbInclude(b, mod);
 
     // ---- Linux-only native windowing and rendering graph ----
-    const NativeProtocols = struct {
-        xdg: WaylandProtocol,
-        layer_shell: WaylandProtocol,
-        cursor_shape: WaylandProtocol,
-    };
     var native_protocols: ?NativeProtocols = null;
     if (is_linux) {
         // ---- wayland protocol codegen (moved from qs build.zig) ----
@@ -112,20 +118,7 @@ pub fn build(b: *std.Build) void {
         // wayland.zig; C sources propagate to every consumer via the module
         // link chain, including the parent qs-settings-zig test binaries).
         // get_tablet_tool_v2 is never called, so the empty table stays dead.
-        mod.addCSourceFile(.{ .file = b.addWriteFiles().add("tablet_tool_stub.c",
-            \\struct wl_interface {
-            \\    const char *name;
-            \\    int version;
-            \\    int method_count;
-            \\    const void *methods;
-            \\    int event_count;
-            \\    const void *events;
-            \\};
-            \\const struct wl_interface zwp_tablet_tool_v2_interface = {
-            \\    "zwp_tablet_tool_v2", 1, 0, 0, 0, 0,
-            \\};
-            \\
-        ) });
+        addTabletToolStub(b, mod);
         // stb_truetype implementation TU kept as fallback (headless / NoDisplay).
         mod.addCSourceFile(.{ .file = b.path("src/stb_truetype_impl.c") });
         // stb_image + resize2 implementation TU (wallpaper thumbnails/preview).
@@ -193,7 +186,7 @@ pub fn build(b: *std.Build) void {
     if (native_protocols) |protocols| {
         native_test_step.dependOn(makeModuleTestStep(b, target, "src/wayland/text.zig", zclay_mod));
         native_test_step.dependOn(makeModuleTestStep(b, target, "src/wayland/render_gles3.zig", zclay_mod));
-        native_test_step.dependOn(makeWaylandTestStep(b, target, zclay_mod, protocols.xdg.header.dirname(), protocols.layer_shell.header.dirname(), protocols.cursor_shape.header.dirname()));
+        native_test_step.dependOn(makeWaylandTestStep(b, target, zclay_mod, protocols));
     }
     // Components are not standalone test roots: they import the shared
     // renderer contract relatively, which escapes a standalone root module.
@@ -294,23 +287,55 @@ fn makeWaylandTestStep(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     zclay: *std.Build.Module,
-    xdg_header_dir: std.Build.LazyPath,
-    layer_header_dir: std.Build.LazyPath,
-    cursor_header_dir: std.Build.LazyPath,
+    protocols: NativeProtocols,
 ) *std.Build.Step {
     const m = b.createModule(.{
         .root_source_file = b.path("src/wayland.zig"),
         .target = target,
     });
     m.addImport("zclay", zclay);
-    m.addIncludePath(xdg_header_dir);
-    m.addIncludePath(layer_header_dir);
-    m.addIncludePath(cursor_header_dir);
+    m.addIncludePath(protocols.xdg.header.dirname());
+    m.addIncludePath(protocols.layer_shell.header.dirname());
+    m.addIncludePath(protocols.cursor_shape.header.dirname());
+    // The generated protocol C TUs supply the wl_interface symbols
+    // (xdg_wm_base_interface, wp_cursor_shape_manager_v1_interface, ...).
+    // This standalone module does not inherit `mod`'s C sources, and the
+    // listener-ownership fields reference those interfaces at link time.
+    m.addCSourceFile(.{ .file = protocols.xdg.code });
+    m.addCSourceFile(.{ .file = protocols.layer_shell.code });
+    m.addCSourceFile(.{ .file = protocols.cursor_shape.code });
+    addTabletToolStub(b, m);
     addVendoredStbInclude(b, m);
     addPangoShim(b, m);
     const test_exe = b.addTest(.{ .root_module = m });
     test_exe.root_module.linkSystemLibrary("c", .{});
     test_exe.root_module.linkSystemLibrary("GLESv2", .{});
+    // wayland-client is required at link time: Window owns the listener
+    // structs as fields, so every wl_* symbol is referenced even though
+    // run() itself is pruned under `builtin.is_test`. Without this the
+    // test binary fails with "undefined symbol: wl_proxy_add_listener".
+    test_exe.root_module.linkSystemLibrary("wayland-client", .{});
+    test_exe.root_module.linkSystemLibrary("wayland-egl", .{});
+    test_exe.root_module.linkSystemLibrary("EGL", .{});
     linkTextEngine(test_exe.root_module);
     return &b.addRunArtifact(test_exe).step;
+}
+
+/// Linker stub for the cursor-shape protocol's tablet-tool dependency.
+/// Kept in one place so `mod` and the wayland test module cannot drift.
+fn addTabletToolStub(b: *std.Build, m: *std.Build.Module) void {
+    m.addCSourceFile(.{ .file = b.addWriteFiles().add("tablet_tool_stub.c",
+        \\struct wl_interface {
+        \\    const char *name;
+        \\    int version;
+        \\    int method_count;
+        \\    const void *methods;
+        \\    int event_count;
+        \\    const void *events;
+        \\};
+        \\const struct wl_interface zwp_tablet_tool_v2_interface = {
+        \\    "zwp_tablet_tool_v2", 1, 0, 0, 0, 0,
+        \\};
+        \\
+    ) });
 }

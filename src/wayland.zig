@@ -314,6 +314,35 @@ fn xdgToplevelClose(
     win.quit = true;
 }
 
+/// xdg_toplevel.configure_bounds (v4): a window-geometry hint. We already
+/// size from xdg_toplevel.configure, so this is a no-op — but the listener
+/// member MUST be non-null or libffi calls address 0x4 when the compositor
+/// sends it.
+fn xdgToplevelConfigureBounds(
+    data: ?*anyopaque,
+    toplevel: ?*c.struct_xdg_toplevel,
+    width: i32,
+    height: i32,
+) callconv(.c) void {
+    _ = data;
+    _ = toplevel;
+    _ = width;
+    _ = height;
+}
+
+/// xdg_toplevel.wm_capabilities (v5): advertises window-manager features.
+/// Not used by this client. Wired purely so the listener struct has no
+/// null slots (see configure_bounds).
+fn xdgToplevelWmCapabilities(
+    data: ?*anyopaque,
+    toplevel: ?*c.struct_xdg_toplevel,
+    capabilities: ?*c.struct_wl_array,
+) callconv(.c) void {
+    _ = data;
+    _ = toplevel;
+    _ = capabilities;
+}
+
 fn frameDone(
     data: ?*anyopaque,
     callback: ?*c.struct_wl_callback,
@@ -471,6 +500,18 @@ fn pointerAxisDiscrete(data: ?*anyopaque, pointer: ?*c.struct_wl_pointer, axis: 
     _ = discrete;
 }
 
+/// wl_pointer.axis_value120 (since seat v8) carries the same scroll delta
+/// as .axis but in 1/120ths of a degree. It MUST be wired: leaving the
+/// member null makes libffi call address 0x4 the moment the compositor
+/// sends it, killing the process. Deliberately a no-op — scrolling is
+/// driven by .axis — but present so the listener struct is complete.
+fn pointerAxisValue120(data: ?*anyopaque, pointer: ?*c.struct_wl_pointer, axis: u32, value120: i32) callconv(.c) void {
+    _ = data;
+    _ = pointer;
+    _ = axis;
+    _ = value120;
+}
+
 fn pointerAxisRelativeDirection(data: ?*anyopaque, pointer: ?*c.struct_wl_pointer, axis: u32, direction: u32) callconv(.c) void {
     _ = data;
     _ = pointer;
@@ -548,6 +589,89 @@ fn keyboardRepeatInfo(data: ?*anyopaque, keyboard: ?*c.struct_wl_keyboard, rate:
     _ = delay;
 }
 
+// ---- Listener constructors (single source of truth) -------------
+//
+// Each *_add_listener call must use one of these, and the resulting
+// struct is STORED ON WINDOW - never a local. libwayland keeps the
+// caller's pointer (wl_proxy_add_listener does not copy), so a local
+// dangles as soon as the registering function returns.
+//
+// Every slot is filled, including the Wayland >= 1.22 additions
+// (warp, axis_value120). A null slot is a live segfault the moment the
+// compositor sends that event, so the regression tests at the bottom of
+// this file assert completeness reflectively over the real struct types.
+
+fn pointerListener() c.struct_wl_pointer_listener {
+    var full = c.struct_wl_pointer_listener{
+        .enter = pointerEnter,
+        .leave = pointerLeave,
+        .motion = pointerMotion,
+        .button = pointerButton,
+        .axis = pointerAxis,
+        .frame = pointerFrame,
+        .axis_source = pointerAxisSource,
+        .axis_stop = pointerAxisStop,
+        .axis_discrete = pointerAxisDiscrete,
+        .axis_relative_direction = pointerAxisRelativeDirection,
+    };
+    // `warp` and `axis_value120` (both seat v8) exist only on Wayland
+    // >= 1.22 headers; we bind v7, so they are conditional. Both are
+    // still required whenever the header provides them.
+    if (comptime @hasField(c.struct_wl_pointer_listener, "warp")) {
+        full.warp = pointerWarp;
+    }
+    if (comptime @hasField(c.struct_wl_pointer_listener, "axis_value120")) {
+        full.axis_value120 = pointerAxisValue120;
+    }
+    return full;
+}
+
+fn keyboardListener() c.struct_wl_keyboard_listener {
+    return .{
+        .keymap = keyboardKeymap,
+        .enter = keyboardEnter,
+        .leave = keyboardLeave,
+        .key = keyboardKey,
+        .modifiers = keyboardModifiers,
+        .repeat_info = keyboardRepeatInfo,
+    };
+}
+
+fn seatListener() c.struct_wl_seat_listener {
+    return .{
+        .capabilities = seatCapabilities,
+        .name = seatName,
+    };
+}
+
+fn registryListener() c.struct_wl_registry_listener {
+    return .{
+        .global = registryGlobalWithNames,
+        .global_remove = registryGlobalRemove,
+    };
+}
+
+fn callbackListener() c.struct_wl_callback_listener {
+    return .{ .done = frameDone };
+}
+
+fn xdgWmBaseListener() c.struct_xdg_wm_base_listener {
+    return .{ .ping = xdgWmBasePing };
+}
+
+fn xdgSurfaceListener() c.struct_xdg_surface_listener {
+    return .{ .configure = xdgSurfaceConfigure };
+}
+
+fn xdgToplevelListener() c.struct_xdg_toplevel_listener {
+    return .{
+        .configure = xdgToplevelConfigure,
+        .close = xdgToplevelClose,
+        .configure_bounds = xdgToplevelConfigureBounds,
+        .wm_capabilities = xdgToplevelWmCapabilities,
+    };
+}
+
 // ---- Task B: wl_seat listener ----
 
 fn seatCapabilities(data: ?*anyopaque, seat: ?*c.struct_wl_seat, capabilities: u32) callconv(.c) void {
@@ -558,40 +682,16 @@ fn seatCapabilities(data: ?*anyopaque, seat: ?*c.struct_wl_seat, capabilities: u
         const p = c.wl_seat_get_pointer(seat);
         win.pointer_obj = p;
         if (p) |ptr| {
-            var full = c.struct_wl_pointer_listener{
-                .enter = pointerEnter,
-                .leave = pointerLeave,
-                .motion = pointerMotion,
-                .button = pointerButton,
-                .axis = pointerAxis,
-                .frame = pointerFrame,
-                .axis_source = pointerAxisSource,
-                .axis_stop = pointerAxisStop,
-                .axis_discrete = pointerAxisDiscrete,
-                .axis_relative_direction = pointerAxisRelativeDirection,
-            };
-            // `warp` was added to wl_pointer in Wayland 1.22 (seat v8). We
-            // bind v7, so the field is only present on newer headers — set it
-            // conditionally so this builds against older distro headers too.
-            if (comptime @hasField(c.struct_wl_pointer_listener, "warp")) {
-                full.warp = pointerWarp;
-            }
-            _ = c.wl_pointer_add_listener(ptr, &full, win);
+            // Storage is win.pointer_listener (lives as long as the
+            // proxy) - NOT a local, which would dangle on return.
+            _ = c.wl_pointer_add_listener(ptr, &win.pointer_listener, win);
         }
     }
     if (has_keyboard and win.keyboard_obj == null) {
         const k = c.wl_seat_get_keyboard(seat);
         win.keyboard_obj = k;
         if (k) |kb| {
-            const klistener = c.struct_wl_keyboard_listener{
-                .keymap = keyboardKeymap,
-                .enter = keyboardEnter,
-                .leave = keyboardLeave,
-                .key = keyboardKey,
-                .modifiers = keyboardModifiers,
-                .repeat_info = keyboardRepeatInfo,
-            };
-            _ = c.wl_keyboard_add_listener(kb, &klistener, win);
+            _ = c.wl_keyboard_add_listener(kb, &win.keyboard_listener, win);
         }
     }
 }
@@ -657,6 +757,24 @@ pub const Window = struct {
     /// frame.done). Guards the kick path against stacking requests.
     frame_pending: bool = false,
 
+    // ---- Listener storage (MUST outlive the proxy) ----
+    //
+    // wl_proxy_add_listener does NOT copy the listener struct - it keeps
+    // the caller's pointer. A listener declared as a local in the
+    // function that registers it dangles the moment that function
+    // returns, and the next compositor event calls into dead stack
+    // (this crashed qs-settings on the first pointer event). Every
+    // listener therefore lives here, on the Window that owns the
+    // proxies, and is built by the *Listener() constructors above.
+    pointer_listener: c.struct_wl_pointer_listener = pointerListener(),
+    keyboard_listener: c.struct_wl_keyboard_listener = keyboardListener(),
+    seat_listener: c.struct_wl_seat_listener = seatListener(),
+    registry_listener: c.struct_wl_registry_listener = registryListener(),
+    callback_listener: c.struct_wl_callback_listener = callbackListener(),
+    wm_listener: c.struct_xdg_wm_base_listener = xdgWmBaseListener(),
+    xdg_surface_listener: c.struct_xdg_surface_listener = xdgSurfaceListener(),
+    toplevel_listener: c.struct_xdg_toplevel_listener = xdgToplevelListener(),
+
     pub fn init(config: WindowConfig) Window {
         return .{
             .config = config,
@@ -685,11 +803,7 @@ pub const Window = struct {
         const registry = c.wl_display_get_registry(display) orelse return error.NoRegistry;
         defer c.wl_registry_destroy(registry);
         var reg: RegistryState = .{};
-        const listener = c.struct_wl_registry_listener{
-            .global = registryGlobalWithNames,
-            .global_remove = registryGlobalRemove,
-        };
-        _ = c.wl_registry_add_listener(registry, &listener, &reg);
+        _ = c.wl_registry_add_listener(registry, &self.registry_listener, &reg);
         if (c.wl_display_roundtrip(display) < 0) return error.RoundtripFailed;
         std.log.info(
             "wayland globals: compositor={} xdg_wm_base={} shm={} seat={}",
@@ -721,19 +835,9 @@ pub const Window = struct {
         self.surface = surface;
         self.win_w = self.config.width;
         self.win_h = self.config.height;
-        const wm_listener = c.struct_xdg_wm_base_listener{
-            .ping = xdgWmBasePing,
-        };
-        _ = c.xdg_wm_base_add_listener(wm_base, &wm_listener, self);
-        const xs_listener = c.struct_xdg_surface_listener{
-            .configure = xdgSurfaceConfigure,
-        };
-        _ = c.xdg_surface_add_listener(xdg_surface, &xs_listener, self);
-        const xt_listener = c.struct_xdg_toplevel_listener{
-            .configure = xdgToplevelConfigure,
-            .close = xdgToplevelClose,
-        };
-        _ = c.xdg_toplevel_add_listener(toplevel, &xt_listener, self);
+        _ = c.xdg_wm_base_add_listener(wm_base, &self.wm_listener, self);
+        _ = c.xdg_surface_add_listener(xdg_surface, &self.xdg_surface_listener, self);
+        _ = c.xdg_toplevel_add_listener(toplevel, &self.toplevel_listener, self);
         c.wl_surface_commit(surface);
         if (c.wl_display_roundtrip(display) < 0) return error.RoundtripFailed;
 
@@ -754,11 +858,7 @@ pub const Window = struct {
             const seat_ptr = c.wl_registry_bind(registry, reg.seat_name, &c.wl_seat_interface, 7);
             if (seat_ptr) |sp| {
                 seat = @ptrCast(@alignCast(sp));
-                const seat_listener = c.struct_wl_seat_listener{
-                    .capabilities = seatCapabilities,
-                    .name = seatName,
-                };
-                _ = c.wl_seat_add_listener(seat, &seat_listener, self);
+                _ = c.wl_seat_add_listener(seat, &self.seat_listener, self);
                 if (c.wl_display_roundtrip(display) < 0) return error.RoundtripFailed;
             } else {
                 std.log.warn("wl_seat bind failed; running without pointer/keyboard input", .{});
@@ -828,13 +928,10 @@ pub const Window = struct {
         // stall, no tearing), and motion floods coalesce into one frame.
         // QS_SETTINGS_TEST_FRAMES forces continuous drawing (old behavior)
         // so the frame-count harness keeps working.
-        const frame_listener = c.struct_wl_callback_listener{
-            .done = frameDone,
-        };
         const max_frames = testFramesFromEnv();
         var frames: u32 = 0;
         var frame_cb = c.wl_surface_frame(surface) orelse return error.NoFrameCallback;
-        _ = c.wl_callback_add_listener(frame_cb, &frame_listener, self);
+        _ = c.wl_callback_add_listener(frame_cb, &self.callback_listener, self);
         self.frame_pending = true;
         // The frame request is surface state: it needs a commit to take
         // effect (the pre-loop eglSwapBuffers already happened, so without
@@ -894,14 +991,14 @@ pub const Window = struct {
                     // More work arrived mid-draw (or test harness): keep going.
                     if (self.needs_draw) {
                         frame_cb = c.wl_surface_frame(surface) orelse break;
-                        _ = c.wl_callback_add_listener(frame_cb, &frame_listener, self);
+                        _ = c.wl_callback_add_listener(frame_cb, &self.callback_listener, self);
                         self.frame_pending = true;
                         c.wl_surface_commit(surface);
                     }
                 },
                 .kick => {
                     frame_cb = c.wl_surface_frame(surface) orelse break;
-                    _ = c.wl_callback_add_listener(frame_cb, &frame_listener, self);
+                    _ = c.wl_callback_add_listener(frame_cb, &self.callback_listener, self);
                     self.frame_pending = true;
                     c.wl_surface_commit(surface);
                 },
@@ -1181,4 +1278,79 @@ test "cursor shape mapping matches protocol constants" {
     try std.testing.expect(win.shape_device == null);
     try std.testing.expect(win.cursor_shape_manager == null);
     try std.testing.expectEqual(frame.shape_sentinel, win.last_shape);
+}
+
+// ---- Listener wiring contract (regression guard) ------------------
+//
+// Two properties MUST hold for every `*_add_listener` call, and neither
+// is checked by the compiler or by any runtime assert:
+//
+//   1. NO NULL SLOTS. libwayland dispatches through the listener struct
+//      with no null check; a null member means libffi calls address
+//      0x4 the instant the compositor sends that event -> SIGSEGV.
+//      This is how `wl_pointer.axis_value120` (added in Wayland 1.22)
+//      killed qs-settings: it was simply never wired.
+//
+//   2. THE STRUCT MUST OUTLIVE THE PROXY. wl_proxy_add_listener does
+//      NOT copy the struct - it stores the caller's pointer
+//      (`mov %rsi,0x8(%rdi)` in libwayland). A listener declared as a
+//      local in the function that registers it dangles the moment that
+//      function returns, and the proxy then calls into freed stack.
+//
+// assertListenerComplete walks the type's fields reflectively so a NEW
+// protocol version adding an event fails the build instead of shipping.
+// Assert every function-pointer member of a listener struct is non-null.
+// Reflection is over the REAL cimport type, so when a newer Wayland
+// header adds an event, the new field is simply not assigned and this
+// fails at `zig build native-test` instead of segfaulting at runtime.
+fn assertListenerComplete(comptime T: type, listener: T) !void {
+    const fields = @typeInfo(T).@"struct".fields;
+    inline for (fields) |f| {
+        const ti = @typeInfo(@TypeOf(@field(listener, f.name)));
+        // Only optional C-callback members are listener slots; skip anything
+        // else (a protocol is free to add a plain data member).
+        if (ti != .optional) continue;
+        const child = ti.optional.child;
+        const child_ti = @typeInfo(child);
+        if (child_ti != .@"fn") continue;
+        if (child_ti.@"fn".calling_convention != .c) continue;
+        try std.testing.expect(@field(listener, f.name) != null);
+    }
+}
+
+test "RED every wayland listener has a non-null handler in EVERY slot" {
+    // Pointer: a new header can add members (axis_value120, warp) at any
+    // time. Reflecting over the real struct type means an unwired member
+    // fails here rather than crashing on the first scroll.
+    try assertListenerComplete(c.struct_wl_pointer_listener, pointerListener());
+    try assertListenerComplete(c.struct_wl_keyboard_listener, keyboardListener());
+    try assertListenerComplete(c.struct_wl_seat_listener, seatListener());
+    try assertListenerComplete(c.struct_wl_registry_listener, registryListener());
+    try assertListenerComplete(c.struct_wl_callback_listener, callbackListener());
+    try assertListenerComplete(c.struct_xdg_wm_base_listener, xdgWmBaseListener());
+    try assertListenerComplete(c.struct_xdg_surface_listener, xdgSurfaceListener());
+    try assertListenerComplete(c.struct_xdg_toplevel_listener, xdgToplevelListener());
+}
+
+test "RED listener structs are owned by Window so they outlive their proxy" {
+    // Storage lives on Window, which is alive for the whole run() call.
+    // A local `var full = ...` inside seatCapabilities() would compile,
+    // pass every other test, and then segfault on the first pointer
+    // event, because libwayland keeps the pointer after the frame dies.
+    // Each field must therefore be present AND complete — ownership alone
+    // is not enough, it must not smuggle in null slots.
+    const win = Window.init(.{});
+    inline for (.{
+        .{ "pointer", c.struct_wl_pointer_listener, win.pointer_listener },
+        .{ "keyboard", c.struct_wl_keyboard_listener, win.keyboard_listener },
+        .{ "seat", c.struct_wl_seat_listener, win.seat_listener },
+        .{ "registry", c.struct_wl_registry_listener, win.registry_listener },
+        .{ "callback", c.struct_wl_callback_listener, win.callback_listener },
+        .{ "wm_base", c.struct_xdg_wm_base_listener, win.wm_listener },
+        .{ "xdg_surface", c.struct_xdg_surface_listener, win.xdg_surface_listener },
+        .{ "xdg_toplevel", c.struct_xdg_toplevel_listener, win.toplevel_listener },
+    }) |entry| {
+        _ = entry[0];
+        try assertListenerComplete(@TypeOf(entry[2]), entry[2]);
+    }
 }
