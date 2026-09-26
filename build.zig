@@ -68,9 +68,11 @@ pub fn build(b: *std.Build) void {
     const is_macos = target.result.os.tag == .macos;
 
     // Hosts the calculator example is wired for: a real native windowing
-    // runtime (Linux) or the portable CPU backend (macOS). Windows is
-    // intentionally NOT listed — see the example block below for why.
-    const calc_supported = is_linux or target.result.os.tag == .macos;
+    // runtime (Linux), the portable CPU backend behind a real window
+    // (macOS), or that same portable backend headless (Windows). See the
+    // example block below.
+    const is_windows = target.result.os.tag == .windows;
+    const calc_supported = is_linux or is_macos or is_windows;
 
     // ---- vendored zclay Zig bindings (moved from qs build.zig) ----
     const zclay_mod = b.createModule(.{
@@ -211,8 +213,21 @@ pub fn build(b: *std.Build) void {
         mod.linkSystemLibrary("GLESv2", .{});
         linkTextEngine(mod);
     }
+    // ---- Windows-only native windowing and rendering graph ----
+    //
+    // The Win32 + D3D11 shim: one C translation unit plus the import
+    // libraries its entry points live in. The include path is GATED for the
+    // same reason the macOS one is — all three platform folders expose a
+    // header called `shim.h` with different contents, so only one platform's
+    // include path is ever on at a time, which is what makes the shared
+    // header name safe.
+    if (is_windows) {
+        addWindowsShim(b, mod);
+    }
+
     // Clay is a portable C implementation and libc are required by every
-    // host; all remaining native dependencies above are Linux-only.
+    // host; all remaining native dependencies above are Linux-, macOS- or
+    // Windows-only.
     mod.linkSystemLibrary("c", .{});
     mod.linkLibrary(clay_lib);
 
@@ -240,18 +255,21 @@ pub fn build(b: *std.Build) void {
     // ---- Example app: the calculator ----
     //
     // The example drives the toolkit through its PUBLIC surface (`Window`,
-    // `host.Host`, `components.*`), so it is NOT Linux-only any more: on
-    // Linux `Window` is the real Wayland/EGL/GLES3/pangocairo runtime and a
-    // window opens, and on macOS it is the portable backend, which renders a
-    // real headless frame and reports the painted pixel count.
+    // `host.Host`, `components.*`), so it is NOT Linux-only: on Linux
+    // `Window` is the real Wayland/EGL/GLES3/pangocairo runtime, on macOS the
+    // real Cocoa backend, and on Windows the real Win32/D3D11 backend — each
+    // opening a real window. On a host with no window station (a headless
+    // service session, a container) `Window.run()` returns the same
+    // "no display" error Linux and macOS already return, and the example
+    // falls back to a real headless render and reports the painted pixel
+    // count, so the example still works there and CI still has something to
+    // assert on.
     //
     // `calc_supported` is the explicit list of hosts with a window backend the
-    // example has actually been exercised on. Windows deliberately stays off
-    // it: it would resolve the same portable module, but nothing has verified
-    // that path and the CI `calculator` matrix still asserts the example is
-    // ABSENT there. Promoting Windows is a one-line change to this list plus
-    // flipping that matrix leg from `absent` to `present` — do not widen this
-    // gate casually.
+    // example has actually been exercised on. Windows is on it because
+    // `.github/workflows/ci.yml` runs the same `present` assertions there as on
+    // the other two — see the calculator job. Removing it does not delete the
+    // backend; it just stops CI from requiring the example to build.
     //
     // `calc_test` is hoisted out of the block so the parity `test` step below
     // can depend on it: the example's tests are portable, so they belong in
@@ -355,20 +373,73 @@ pub fn build(b: *std.Build) void {
     // it is safe on any macOS machine and in CI.
     //
     // It is a separate step (and a separate `zig build check-colors`) rather
-    // than part of `test` because it is macOS-only and must not perturb the
-    // cross-platform test count, which is what `tests.lock` pins.
+    // than part of `test` because it is macOS- or Windows-only and must not
+    // perturb the cross-platform test count, which is what `tests.lock` pins.
+    //
+    // The Windows gate is the same idea for D3D11: `windows/present.zig`
+    // claims the RGBA8 hand-off is the identity (no channel swap, no vertical
+    // flip), and the tests there can only compare the upload buffer against the
+    // surface it came from. What actually goes wrong lives in the shim's
+    // swap-chain format and shader, where no Zig test can reach.
     const check_colors_step = b.step("check-colors",
-        \\Check the macOS CoreGraphics colour hand-off (displayed == written)
+        \\Check the platform colour hand-off (displayed == written)
     );
     if (is_macos) {
         const check_colors = b.addSystemCommand(&.{"bash"});
         check_colors.addFileArg(b.path("ci/check_macos_colors.sh"));
         check_colors.setName("ci/check_macos_colors.sh");
         check_colors_step.dependOn(&check_colors.step);
+    } else if (is_windows) {
+        // Deliberately NOT `bash ci/check_windows_colors.sh` here, the way the
+        // macOS leg is. bash is not guaranteed to exist on a Windows developer
+        // machine â€” Git for Windows ships it, but a machine with the toolchain
+        // and nothing else does not â€” and a gate that cannot run is worse than
+        // no gate. So the two things the script does are spelled out as build
+        // steps: compile the real shim plus the probe, then run the probe. A
+        // non-zero exit from the probe fails the build, exactly as a failing
+        // script would.
+        //
+        // The shim TU is compiled IN, not a copy of its draw path, so the check
+        // cannot drift from what the window actually does.
+        //
+        // Two Windows details, both learned the hard way:
+        //
+        //  - The exe path is a plain lazy path, not addOutputFileArg. This Run
+        //    step EXECUTES the binary, and Zig will not infer a file type for a
+        //    path another step declared as an output, so it errors out with
+        //    "unrecognized file extension" before anything runs.
+        //  - `cmd /c` is given that path RELATIVE to the build root, which is
+        //    the Run step's working directory. That keeps the build root out
+        //    of the argument list entirely, so a checkout whose path contains
+        //    spaces cannot split the command in half. `zig cc` also does not
+        //    create its output directory, hence the `if not exist` step.
+        const probe = b.addSystemCommand(&.{ "zig", "cc", "-O1" });
+        probe.addFileArg(b.path("ci/check_windows_colors.c"));
+        probe.addFileArg(b.path("src/windows/shim.c"));
+        probe.addArgs(&.{
+            "-ld3d11", "-ldxgi", "-ld3dcompiler_47", "-luser32", "-lgdi32",
+        });
+
+        const probe_dir = "zig-out/.ci";
+        const probe_exe = b.path(probe_dir ++ "/check_windows_colors.exe");
+        const mk = b.addSystemCommand(&.{ "cmd", "/c" });
+        mk.addArg("if not exist zig-out\\.ci mkdir zig-out\\.ci");
+        probe.step.dependOn(&mk.step);
+        probe.addArgs(&.{"-o"});
+        probe.addFileArg(probe_exe);
+
+        const run_probe = b.addSystemCommand(&.{ "cmd", "/c" });
+        run_probe.addArg("zig-out\\.ci\\check_windows_colors.exe");
+        run_probe.setName("ci/check_windows_colors (D3D11 displayed == written)");
+        // The run waits for the compile, and the step waits for the run.
+        run_probe.step.dependOn(&probe.step);
+        check_colors_step.dependOn(&run_probe.step);
+        check_colors_step.dependOn(&probe.step);
     } else {
-        // Not a failure on other hosts: the hand-off only exists on macOS.
-        const skip = b.addSystemCommand(&.{ "bash", "-c" });
-        skip.addArg("echo 'check-colors: skipped (not a macOS build)'");
+        // Not a failure on other hosts: the hand-off only exists on the
+        // platforms that have a native presenter.
+        const skip = b.addSystemCommand(&.{ "cmd", "/c" });
+        skip.addArg("echo check-colors: skipped (not a macOS or Windows build)");
         check_colors_step.dependOn(&skip.step);
     }
 
@@ -395,6 +466,46 @@ pub fn build(b: *std.Build) void {
     // Components are not standalone test roots: they import the shared
     // renderer contract relatively, which escapes a standalone root module.
     // They are covered by src/root.zig's aggregate test on every platform.
+}
+
+/// Win32 + D3D11 shim TU, its include path, and the import libraries its
+/// entry points live in.
+///
+/// The library list is not decoration; each one is a symbol the shim actually
+/// calls, and dropping it is a link error rather than a runtime surprise:
+///
+///   d3d11           ID3D11Device / *Context / *Texture2D / *Shader, and
+///                   D3D11CreateDeviceAndSwapChain
+///   dxgi            the swap chain itself (IDXGISwapChain::Present,
+///                   ResizeBuffers, GetBuffer) — it is NOT part of d3d11
+///   d3dcompiler_47  D3DCompile. The shaders are compiled at run time from
+///                   source in this TU rather than checked in as prebuilt
+///                   DXBC: shipping bytecode means shipping a compiler output
+///                   the build can no longer read, and `d3dcompiler_47.dll` has
+///                   shipped with Windows itself since Windows 7, so it is not
+///                   an extra dependency to install.
+///   user32          the window, the message loop, the mouse capture
+///   gdi32           pulled in by user32's windowing entry points
+///   shell32         SystemParametersInfo's work-area probe
+///
+/// Kept in one function so `mod` and any future standalone Windows test
+/// module cannot drift apart.
+fn addWindowsShim(b: *std.Build, m: *std.Build.Module) void {
+    m.addIncludePath(b.path("src/windows"));
+    // No extra flags: shim.c defines COBJMACROS itself, before it includes
+    // anything. That has to happen in the TU rather than on the command line
+    // for a boring but important reason — the macro is what makes the MinGW
+    // Direct3D headers emit the COM method macros (ID3D11Device_Release and
+    // friends), and the file has to own that decision so the shim still
+    // compiles when it is built outside this build.zig (the CI colour check
+    // compiles it with plain `zig cc`).
+    m.addCSourceFile(.{ .file = b.path("src/windows/shim.c") });
+    m.linkSystemLibrary("d3d11", .{});
+    m.linkSystemLibrary("dxgi", .{});
+    m.linkSystemLibrary("d3dcompiler_47", .{});
+    m.linkSystemLibrary("user32", .{});
+    m.linkSystemLibrary("gdi32", .{});
+    m.linkSystemLibrary("shell32", .{});
 }
 
 /// Keep the stb implementation headers identical on every Linux runner and

@@ -48,35 +48,61 @@ src/
 │   │   └── assertions.zig        node assertions
 │   └── stb_{truetype,image}_impl.c   vendored library TUs
 │
-├── linux/            the Linux backend.  9 files, mirrored 1:1 with mac/
-└── mac/              the macOS backend.  9 files, mirrored 1:1 with linux/
+├── linux/            the Linux backend.    9 files, mirrored 1:1 with mac/ and windows/
+├── mac/              the macOS backend.    9 files, mirrored 1:1 with linux/ and windows/
+└── windows/          the Windows backend. 9 files, mirrored 1:1 with linux/ and mac/
 ```
 
 ### The platform mirror
 
-`linux/` and `mac/` expose the **same nine file names**, so you can read and diff
-them side by side. **Same role, not same code** — the line counts carry the
-information:
+`linux/`, `mac/` and `windows/` expose the **same nine file names**, so you can
+read and diff them side by side. **Same role, not same code** — the line counts
+carry the information:
 
-| file | role | linux | mac |
-|---|---|---|---|
-| `window.zig` | bootstrap, event loop, frame loop | 1345 | 355 |
-| `input.zig` | native events → the `Delegate` contract | 60 | 324 |
-| `keymap.zig` | native keycode → evdev | 40 | 359 |
-| `adapter.zig` | coords / scroll / resize / quit | 65 | 484 |
-| `present.zig` | finished frame → screen | 42 | 221 |
-| `renderer.zig` | renderer for this OS | 1378 | 27 |
-| `text.zig` | text engine for this OS | 261 | 38 |
-| `shim.h` | this platform's C shim header | 30 | 111 |
-| `shim.c` / `shim.m` | this platform's C shim TU | 101 | 415 |
+| file | role | linux | mac | windows |
+|---|---|---|---|---|
+| `window.zig` | bootstrap, event loop, frame loop | 1345 | 355 | 423 |
+| `input.zig` | native events → the `Delegate` contract | 60 | 324 | 312 |
+| `keymap.zig` | native keycode → evdev | 40 | 359 | 451 |
+| `adapter.zig` | coords / scroll / resize / quit | 65 | 484 | 430 |
+| `present.zig` | finished frame → screen | 42 | 221 | 216 |
+| `renderer.zig` | renderer for this OS | 1378 | 27 | 33 |
+| `text.zig` | text engine for this OS | 261 | 38 | 196 |
+| `shim.h` | this platform's C shim header | 30 | 111 | 190 |
+| `shim.c` / `shim.m` | this platform's C shim TU | 101 | 415 | 1032 |
 
 `shim.c` ↔ `shim.m` is the one name that cannot match — Objective-C requires `.m`.
 
-**If you add or rename a file in one folder, do the same in the other**, or update
-the mirrors table above. Each file's header comment states what the *other*
-platform has that it does not, and why. Keep that honest: those absences are the
-most useful thing in the pair (e.g. `linux/keymap.zig` is an identity function
-because Wayland already speaks evdev; `mac/keymap.zig` is a 359-line table).
+**If you add or rename a file in one folder, do the same in the others**, or
+update the mirrors table above. Each file's header comment states what the
+*other* platforms have that it does not, and why. Keep that honest: those
+absences are the most useful thing in the group (e.g. `linux/keymap.zig` is an
+identity function because Wayland already speaks evdev; `mac/keymap.zig` and
+`windows/keymap.zig` are real tables).
+
+### Where Windows sits between the other two
+
+The three backends are not three copies of one idea, and the difference is worth
+stating plainly because it is the most-asked question about this layout:
+
+| | rasterizes the UI | composites the frame | window |
+|---|---|---|---|
+| `linux/` | **on the GPU** (EGL + GLES3) | GPU swapchain | Wayland |
+| `mac/` | on the CPU (`core/render_software.zig`) | CoreGraphics bitmap | NSWindow |
+| `windows/` | on the CPU (`core/render_software.zig`) | **D3D11 swapchain** (GDI if the GPU cannot rasterize) | HWND |
+
+So Windows presents through the GPU the way Linux does — a swap chain, a texture
+upload and a shader, the same *role* `linux/present.zig` plays — but the drawing
+happens in `core/`, exactly as on macOS. The payload therefore crosses the
+platform boundary as a plain RGBA8 CPU surface, which is what makes
+`windows/present.zig`'s central claim ("the upload is the identity") a
+byte-order statement rather than a scaling one.
+
+The GDI fallback is a real path, not a stub: a D3D11 device is cheap to create
+and easy to create uselessly (a VM or a half-initialised driver hands one back
+and then fails the first time a vertex shader executes), and a window that has
+already opened should not then sit there blank. Same bytes, same hand-off, only
+the thing the bytes are handed to changes.
 
 ### Data flow
 
@@ -101,22 +127,27 @@ only calls the `Delegate`. That contract is the whole integration surface.
 
 ## 2. Invariants. Breaking these fails CI, not just a test
 
-### I1 — Test parity: `zig build test` must report exactly **440**
+### I1 — Test parity: `zig build test` must report exactly **518**
 
-`tests.lock` holds `440`; `ci/check_test_parity.sh` asserts it. The suite compiles
-a **fixed, platform-independent set** of test roots so Linux and macOS run the
-same tests, which is what makes the macOS path trustworthy without a Mac.
+`tests.lock` holds `518`; `ci/check_test_parity.sh` asserts it. The suite compiles
+a **fixed, platform-independent set** of test roots, so Linux, macOS and Windows
+run the same tests, which is what makes the macOS and Windows paths trustworthy
+without a Mac or a Windows box.
 
-The count is `386` (`root.zig` aggregate) + `1` (`main.zig`) + `36` (the
+The count is `461` (`root.zig` aggregate) + `1` (`main.zig`) + `36` (the
 calculator example) + `15` (`examples/calculator_e2e_test.zig`, the E2E suite).
+It went from 440 to 518 when the Windows backend landed: its pure modules are in
+the aggregate, so a VK→evdev keycode typo is a typo the suite catches on every
+platform rather than one a user finds on Windows.
 
 - **Adding or removing a `test` block changes the count.** Update `tests.lock` in
   the same commit, deliberately. Never "fix" a parity failure by editing the lock
   without understanding which test moved.
 - **Adding a file to the aggregate block in `root.zig` adds its tests.** If that
   file has no `test` blocks, the count is unchanged and the file merely gets
-  type-checked — that is a deliberate, useful trick used for `mac/renderer.zig`,
-  `mac/text.zig` and `linux/{keymap,input,adapter}.zig`.
+  type-checked — that is a deliberate, useful trick used for
+  `mac/{renderer,text}.zig`, `windows/{renderer,text}.zig` and
+  `linux/{keymap,input,adapter}.zig`.
 - **Test collection crosses FILE imports but not MODULE imports.** A test root
   runs the tests of every file it reaches by relative `@import`, but it does not
   descend into `addImport`ed modules — which is why `exe_tests` has never
@@ -124,7 +155,7 @@ calculator example) + `15` (`examples/calculator_e2e_test.zig`, the E2E suite).
   `examples/calculator_e2e_test.zig` reaches the calculator through an imported
   module (`@import("calculator")`, wired in `build.zig`), **not** a relative
   `@import("calculator.zig")`. The relative form compiles and passes but makes the
-  count 476 instead of 440, by re-running the example's 36 tests in the E2E
+  count 554 instead of 518, by re-running the example's 36 tests in the E2E
   binary.
 
 ### I2 — The test build must select the portable backend on every OS
@@ -138,10 +169,10 @@ but not on macOS, the parity count would diverge and CI would fail on both legs.
 
 | | rule |
 |---|---|
-| R1 | nothing under `core/` may import `linux/` or `mac/` |
+| R1 | nothing under `core/` may import `linux/`, `mac/` or `windows/` |
 | R2 | only `core/select.zig` may import `../platform.zig` |
 | R3 | `core/` may not read `os.tag` or include a platform C header |
-| R4 | `linux/` and `mac/` may not import each other |
+| R4 | `linux/`, `mac/` and `windows/` may not import each other |
 | R5 | only `platform.zig` may read `os.tag` (the OS is chosen in one place) |
 | R6 | every module in the parity suite must be pure Zig (no `@cImport(` call) |
 
@@ -167,13 +198,15 @@ A gate that has never been seen to fail is not a gate.
 ### I4 — One C TU per platform folder
 
 `linux/` owns exactly `shim.c` (+ `shim.h`); `mac/` owns exactly `shim.m`
-(+ `shim.h`). Vendored-library TUs (`stb_*_impl.c`) live in `core/`.
+(+ `shim.h`); `windows/` owns exactly `shim.c` (+ `shim.h`). Vendored-library TUs
+(`stb_*_impl.c`) live in `core/`.
 
-Consequence you must respect: **both folders have a file called `shim.h` with
+Consequence you must respect: **all three folders have a file called `shim.h` with
 different contents**, so the include paths are mutually exclusive —
-`addIncludePath("src/mac")` is gated inside `if (is_macos)`. If you ever make a
+`addIncludePath("src/mac")` is gated inside `if (is_macos)`, and the Windows one inside `if (is_windows)`.
+If you ever make a
 platform include path unconditional, `@cInclude("shim.h")` may silently resolve
-to the *other* platform's header.
+to a *different* platform's header.
 
 ### I5 — `zclay` is a module, never a relative path
 

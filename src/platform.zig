@@ -34,8 +34,9 @@ pub const window = if (builtin.is_test)
 else switch (builtin.os.tag) {
     .linux => @import("linux/window.zig"),
     .macos => @import("mac/window.zig"),
-    // No backend yet (Windows): the CPU-only path, so the library still
-    // compiles and its headless render still proves pixels.
+    .windows => @import("windows/window.zig"),
+    // No backend yet: the CPU-only path, so the library still compiles and
+    // its headless render still proves pixels.
     else => @import("core/window_portable.zig"),
 };
 
@@ -53,6 +54,9 @@ pub const render_impl = if (builtin.is_test)
 else switch (builtin.os.tag) {
     .linux => @import("linux/renderer.zig"),
     .macos => @import("mac/renderer.zig"),
+    // Windows presents through D3D11 but rasterises on the CPU, exactly as
+    // macOS does through CoreGraphics; see windows/renderer.zig.
+    .windows => @import("windows/renderer.zig"),
     else => @import("core/render_software.zig"),
 };
 
@@ -67,6 +71,7 @@ pub const text_impl = if (builtin.is_test)
 else switch (builtin.os.tag) {
     .linux => @import("linux/text.zig"),
     .macos => @import("mac/text.zig"),
+    .windows => @import("windows/text.zig"),
     else => @import("core/text_portable.zig"),
 };
 

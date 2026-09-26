@@ -663,8 +663,12 @@ Honest list; each is a reasonable next task.
   only `scroll` contributes clip ancestry today.
 - **No accessibility bridge.** The semantics tree is exactly what an AT-SPI / UIA
   backend would consume, but nothing wires it up yet.
-- **Windows** builds the CPU-only surface, but `examples/calculator.zig` is
-  deliberately not wired for it (`calc_supported` in `build.zig`) because nothing
-  has verified that path.
+- **Windows has a real backend** (`src/windows/`): a Win32 window composited by
+  D3D11, and a GDI blit when the machine's driver cannot execute a shader — so
+  the window is real either way and never blank. The example is wired there and
+  CI runs the same assertions as on the other two platforms. What it does NOT
+  have is a Direct3D *rasterizer*: the shared CPU rasterizer draws, and D3D11
+  composites, exactly as CoreGraphics does on macOS. Only the Linux GLES3 path
+  rasterizes on the GPU.
 - **`core/frame.zig` owns the cursor-shape mapping**, which is a Wayland
   `cursor-shape-v1` concern living in the platform-agnostic layer.

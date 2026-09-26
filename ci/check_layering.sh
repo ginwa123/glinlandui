@@ -8,10 +8,12 @@
 # appear in this subtree", which is exactly the invariant. The rules are also the
 # documentation.
 #
-#   R1  no file under src/core/** may import a platform backend (linux/ or mac/)
+#   R1  no file under src/core/** may import a platform backend (linux/, mac/
+#       or windows/)
 #   R2  only src/core/select.zig may import ../platform.zig
 #   R3  src/core/** must be OS-blind and free of platform C imports
-#   R4  the linux/ and mac/ backends are siblings and must not import each other
+#   R4  the linux/, mac/ and windows/ backends are siblings and must not
+#       import each other
 #   R5  only src/platform.zig may branch on builtin.os.tag
 #   R6  every module in the parity suite must stay pure Zig (no @cImport call)
 #
@@ -44,7 +46,7 @@ scan() {
 # ---------------------------------------------------------------------------
 # R1 — core must not reach a platform backend.
 # ---------------------------------------------------------------------------
-scan src/core "$SOURCE_GLOB" '@import\("\.\./(\.\./)?(linux|mac)/' \
+scan src/core "$SOURCE_GLOB" '@import\("\.\./(\.\./)?(linux|mac|windows)/' \
   "R1 violated: src/core/** imports a platform backend"
 
 # ---------------------------------------------------------------------------
@@ -71,16 +73,18 @@ scan src/core "$SOURCE_GLOB" 'os\.tag' \
 
 # Vendored stb is allowed: it is byte-identical on every host and build.zig adds
 # its include path unconditionally. Everything else names a platform.
-scan src/core "$SOURCE_GLOB" '@cInclude\("(EGL|GLES|pango|cocoa|wayland)' \
+scan src/core "$SOURCE_GLOB" '@cInclude\("(EGL|GLES|pango|cocoa|wayland|d3d11|dxgi|windows)' \
   "R3 violated: src/core/** includes a platform C header"
 
 # ---------------------------------------------------------------------------
 # R4 — the backends are siblings, not a hierarchy.
 # ---------------------------------------------------------------------------
-scan src/linux "$SOURCE_GLOB" '@import\("\.\./(\.\./)?mac/' \
-  "R4 violated: src/linux/** imports mac/"
-scan src/mac "$SOURCE_GLOB" '@import\("\.\./(\.\./)?linux/' \
-  "R4 violated: src/mac/** imports linux/"
+scan src/linux "$SOURCE_GLOB" '@import\("\.\./(\.\./)?(mac|windows)/' \
+  "R4 violated: src/linux/** imports mac/ or windows/"
+scan src/mac "$SOURCE_GLOB" '@import\("\.\./(\.\./)?(linux|windows)/' \
+  "R4 violated: src/mac/** imports linux/ or windows/"
+scan src/windows "$SOURCE_GLOB" '@import\("\.\./(\.\./)?(linux|mac)/' \
+  "R4 violated: src/windows/** imports linux/ or mac/"
 
 # ---------------------------------------------------------------------------
 # R5 — one OS switch, in the composition root, and nowhere else.
@@ -100,11 +104,13 @@ fi
 # proves the macOS translations are right without a Mac — and, equally, that a
 # typo in the Linux event translation fails on both platforms rather than only in
 # CI's Linux leg. Backends that legitimately cImport are kept OUT of the suite:
-# linux/window.zig, linux/present.zig, mac/window.zig.
+# linux/window.zig, linux/present.zig, mac/window.zig, windows/window.zig.
 # ---------------------------------------------------------------------------
 for f in src/mac/present.zig src/mac/keymap.zig src/mac/adapter.zig src/mac/input.zig \
          src/mac/renderer.zig src/mac/text.zig \
-         src/linux/keymap.zig src/linux/input.zig src/linux/adapter.zig; do
+         src/linux/keymap.zig src/linux/input.zig src/linux/adapter.zig \
+         src/windows/keymap.zig src/windows/input.zig src/windows/adapter.zig \
+         src/windows/present.zig src/windows/renderer.zig src/windows/text.zig; do
   # Match the CALL, not a mention: these files legitimately discuss @cImport in
   # their doc comments ("this module needs no @cImport"), and a rule that cannot
   # tell a comment from a call would forbid explaining the rule.

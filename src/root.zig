@@ -138,6 +138,29 @@ test {
     _ = @import("linux/keymap.zig");
     _ = @import("linux/input.zig");
     _ = @import("linux/adapter.zig");
+    // The Windows backend's PURE role modules — the mirror image of the mac and
+    // Linux ones above, for the same mirror-image reason. They live under
+    // src/windows/, which the parity suite never compiles (a test build selects
+    // core/window_portable.zig), so importing them is the only thing that
+    // type-checks the Windows VK->evdev table, the pointer translation and the
+    // D3D11 byte-order contract on a Linux or macOS runner.
+    //
+    // keymap.zig and input.zig contain tests, and those tests are part of the
+    // locked cross-platform count: a Windows keycode typo is a typo the user
+    // hits on Windows, and it is much cheaper to find it on every platform.
+    // adapter.zig's and present.zig's tests are counted for the same reason.
+    // windows/window.zig and windows/renderer.zig are deliberately ABSENT: the
+    // first @cImports the shim, and the second is a two-line re-export that
+    // `platform.zig` already pulls in on Windows. windows/text.zig is pure but
+    // its font-path assertions are about a filesystem, so it is imported only
+    // for its type-checking, not to assert anything about a particular
+    // machine's fonts — see its own header for why.
+    _ = @import("windows/keymap.zig");
+    _ = @import("windows/input.zig");
+    _ = @import("windows/adapter.zig");
+    _ = @import("windows/present.zig");
+    _ = @import("windows/renderer.zig");
+    _ = @import("windows/text.zig");
     // The portable window backend + its headless-render test. This file has no
     // C imports and compiles identically everywhere, so its tests are part of
     // the parity count on Linux AND macOS. (It is NOT the platform selected by
