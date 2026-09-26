@@ -56,11 +56,14 @@ jobs:
           test -f /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
 
       - name: Check formatting
-        run: zig fmt --check build.zig src
+        run: zig fmt --check build.zig src examples
 
       - name: Cross-platform parity test suite (count checked against tests.lock)
         run: ./ci/check_test_parity.sh
 
+      # native-test also carries the Linux-only calculator example's tests:
+      # examples/calculator.zig has its own test root, wired in under the
+      # same `is_linux` gate as the executable. See the `calculator` job.
       - name: Linux-only native tests (Wayland/EGL/GLES3/Pango)
         run: zig build native-test --summary all
 
@@ -86,7 +89,7 @@ jobs:
       # REAL headless render (Clay layout -> rasterizer -> RGBA8 pixels), so
       # this job proves the app genuinely draws without needing a GUI session.
       - name: Check formatting
-        run: zig fmt --check build.zig src
+        run: zig fmt --check build.zig src examples
 
       - name: Cross-platform parity test suite (count checked against tests.lock)
         run: ./ci/check_test_parity.sh
@@ -96,3 +99,146 @@ jobs:
 
       - name: Run the demo (real headless render)
         run: zig build run
+
+  # ---------------------------------------------------------------------------
+  # Calculator example (examples/calculator.zig)
+  #
+  # The example is the reference consumer for the toolkit: a 20-key button
+  # grid, indexed click dispatch, and real keyboard input through the Host's
+  # KeyChain. Today it targets the Linux-only Wayland/EGL/GLES3/pangocairo
+  # backend, so only the Linux leg can actually run it.
+  #
+  # The macOS and Windows legs are wired now, before their backends exist, so
+  # the migration has a destination and the Linux-only contract stays
+  # enforced in the meantime: each of those legs ASSERTS THE EXAMPLE IS ABSENT
+  # (no `run-calculator` step, no installed binary). That is a real, passing
+  # check today — it is exactly what keeps `is_linux` honest.
+  #
+  # When a macOS/Windows window backend lands, promote that leg by flipping
+  # its `expect` to `present` and moving its assertions into the run branch.
+  # The Linux leg is the base every other leg is expected to grow into.
+  # ---------------------------------------------------------------------------
+  calculator:
+    name: Calculator / ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            label: Linux (Wayland/EGL/GLES3/pangocairo)
+            expect: present
+          - os: macos-14
+            label: macOS (backend not implemented yet)
+            expect: absent
+          - os: windows-2022
+            label: Windows (backend not implemented yet)
+            expect: absent
+    # The non-Linux legs report their real status but never block a merge, so
+    # this job can be landed ahead of the backends it will eventually enforce.
+    continue-on-error: ${{ matrix.expect != 'present' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Check formatting (includes examples/)
+        run: zig fmt --check build.zig src examples
+
+      # The example links the real native stack, exactly like the main demo.
+      - name: Install native Linux dependencies
+        if: matrix.expect == 'present'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            fonts-dejavu-core \
+            libcairo2-dev \
+            libegl-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libfribidi-dev \
+            libglib2.0-dev \
+            libgles-dev \
+            libharfbuzz-dev \
+            libpango1.0-dev \
+            libpixman-1-dev \
+            libpng-dev \
+            libwayland-dev \
+            pkg-config
+
+          scanner="$(command -v wayland-scanner)"
+          test -n "$scanner"
+          sudo ln -sf "$scanner" /usr/sbin/wayland-scanner
+
+          echo "C_INCLUDE_PATH=/usr/lib/$(gcc -print-multiarch)/glib-2.0/include" >> "$GITHUB_ENV"
+
+      - name: Report whether the example is wired on this platform
+        run: |
+          set -uo pipefail
+          if zig build --help 2>/dev/null | grep -q 'run-calculator'; then
+            echo "run-calculator step: PRESENT"
+          else
+            echo "run-calculator step: absent"
+          fi
+
+      # ---- Linux: the base. Build it, install it, run it, prove pixels. ----
+      - name: Build and run the calculator (real pixels)
+        if: matrix.expect == 'present'
+        run: |
+          set -euo pipefail
+
+          # `zig build` installs both executables; assert the artifact
+          # really exists so a silent regression in the is_linux gate
+          # cannot pass this job.
+          zig build -Doptimize=ReleaseSafe
+          test -x zig-out/bin/glinlandui-calculator
+          test -x zig-out/bin/glinlandui
+
+          # The example's own tests (36 of them: the arithmetic Machine plus
+          # the view-reactivity checks) run under native-test, which is
+          # Linux-only and therefore excluded from the parity count.
+          zig build native-test --summary all
+
+          # A CI runner has no compositor, so Window.run() reports
+          # NoWaylandDisplay and the example falls back to a REAL software
+          # rasterization of the same Clay tree. Assert on the painted
+          # pixel count rather than the exit code alone: that proves the
+          # layout ran AND the rasterizer wrote pixels, so this step cannot
+          # pass on a build that renders nothing.
+          out="$(env QS_SETTINGS_TEST_FRAMES=3 WAYLAND_DISPLAY= ./zig-out/bin/glinlandui-calculator 2>&1)"
+          echo "$out"
+          echo "$out" | grep -q 'headless'
+          painted="$(echo "$out" | sed -nE 's/.*headless \(([0-9]+) painted pixels.*/\1/p' | head -n1)"
+          test -n "$painted"
+          test "$painted" -gt 0
+          echo "calculator painted $painted pixels"
+
+      # ---- Not-Linux: the Linux-only gate must still hold. ----
+      - name: Linux-only gate holds (example must not be wired here yet)
+        if: matrix.expect == 'absent'
+        run: |
+          set -euo pipefail
+
+          if zig build --help 2>/dev/null | grep -q 'run-calculator'; then
+            echo "::error::run-calculator exists on ${{ matrix.label }} but this leg expects the example to be absent" >&2
+            exit 1
+          fi
+
+          # Build when the rest of the library supports this host; the
+          # calculator must not be installed either way.
+          zig build >/dev/null 2>&1 || echo "note: plain 'zig build' does not succeed on this host yet; checking artifacts only"
+          for f in zig-out/bin/glinlandui-calculator zig-out/bin/glinlandui-calculator.exe; do
+            if [ -e "$f" ]; then
+              echo "::error::$f was installed on ${{ matrix.label }} but the example is Linux-only" >&2
+              exit 1
+            fi
+          done
+
+          echo "Linux-only gate holds on ${{ matrix.label }}: no run-calculator step, no calculator binary"
