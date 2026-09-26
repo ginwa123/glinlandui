@@ -341,8 +341,9 @@ pub const Surface = struct {
     ///     (corner radius honoured); mixed widths fall back to up to four
     ///     square quads with radius 0, and side quads are dropped entirely when
     ///     top+bottom exceed the box height.
-    ///   - `text` draws the deterministic per-byte rect fallback: one small AA'd
-    ///     box per UTF-8 byte, advance 0.6*font_size, box 0.42*font_size wide.
+    ///   - `text` draws a real glyph run centred in the box the layout gave it
+    ///     (see `drawTextRun`); the per-byte bar fallback is used only when the
+    ///     host has no font the rasterizer can parse.
     ///   - `image` draws nothing when `image_data` is null, a placeholder box
     ///     when the path has no decoded source, and a bilinear blit otherwise.
     ///   - `scissor_start` replaces (does not intersect) the clip region;
@@ -368,9 +369,12 @@ pub const Surface = struct {
                 .text => {
                     const td = cmd.render_data.text;
                     const bytes = td.string_contents.chars[0..@intCast(td.string_contents.length)];
+                    // The box's HEIGHT matters: it is the box the layout
+                    // reserved for this run, and the run is centred in it.
                     self.drawTextRun(
                         cmd.bounding_box.x,
                         cmd.bounding_box.y,
+                        cmd.bounding_box.height,
                         bytes,
                         td.font_size,
                         td.text_color,
@@ -436,10 +440,21 @@ pub const Surface = struct {
     /// falls back to `drawTextRunFallback` below — the portable per-byte bars.
     /// Degrading to bars is deliberate: a machine with no font must still
     /// render, and must still pass the shared pixel suite.
+    ///
+    /// `bbox_h` is the HEIGHT of the box the layout gave this run (the text
+    /// command's bounding box). The font's line box is centred inside it, with
+    /// the baseline one full ascent below the line box's top — that is what
+    /// puts a label in the middle of a keycap. This argument is not optional
+    /// decoration: the earlier version took only (x, y) and guessed the box
+    /// height, which left every run drawn against the top edge of its box on
+    /// macOS while the Pango path (which blits a texture the size the layout
+    /// reserved) looked centred. Pass 0 when the caller genuinely has no box;
+    /// the line box is then placed with its top at `bbox_y`.
     pub fn drawTextRun(
         self: *Surface,
         bbox_x: f32,
         bbox_y: f32,
+        bbox_h: f32,
         text_bytes: []const u8,
         font_size: u16,
         color: [4]f32,
@@ -452,15 +467,20 @@ pub const Surface = struct {
         }
         const font = textBytes.?;
         const fs: u16 = if (font_size == 0) 16 else font_size;
-        // Centre the run vertically in the box the layout gave it, the same way
-        // the fallback does, so switching paths does not shift the baseline.
         const m = glyphs.measure(&font, text_bytes, fs);
         if (m.width <= 0) {
             self.drawTextRunFallback(bbox_x, bbox_y, text_bytes, font_size, color);
             return;
         }
-        const box_h = @min(@as(f32, @floatFromInt(fs)), 24);
-        const baseline = bbox_y + (box_h + m.ascent) / 2;
+        // Centre the font's LINE BOX (ascent..descent) in the box the layout
+        // reserved, then drop the baseline a full ascent from the line box's
+        // top. This is the same placement the Pango path gets for free: there
+        // the laid-out texture IS the line box and the quads sit where the
+        // layout put them. `slack` is 0 whenever the measured height already
+        // equals the line box, which is the usual case.
+        const line_h = font.lineHeight(fs);
+        const slack: f32 = if (bbox_h > 0) bbox_h - line_h else 0;
+        const baseline = bbox_y + slack * 0.5 + m.ascent;
 
         var pen = bbox_x;
         var i: usize = 0;
@@ -471,9 +491,13 @@ pub const Surface = struct {
                 var mask = mask_g;
                 defer glyphs.freeMask(&mask);
                 const gx: isize = @intFromFloat(@floor(pen + mask.xoff));
-                // stb's yoff is measured from the TOP of the line going down,
-                // so the mask's top row sits at (baseline - ascent) + yoff.
-                const top = baseline - m.ascent + mask.yoff;
+                // stb's yoff is measured from the BASELINE, positive downward
+                // (stbtt_GetGlyphBitmapBoxSubpixel negates the font-space y1),
+                // so the mask's top row sits at baseline + yoff. Subtracting
+                // the ascent here — as this code once did, reading yoff as an
+                // offset from the top of the line — lifted every run by one
+                // ascent: the "macOS text is not centred" bug.
+                const top = baseline + mask.yoff;
                 const gy: isize = @intFromFloat(@floor(top));
                 for (0..mask.h) |row| {
                     for (0..mask.w) |col| {

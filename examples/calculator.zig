@@ -597,6 +597,21 @@ fn renderHeadless(host: *glinlandui.host.Host, w: u32, h: u32) !void {
     renderer.surface.clear();
     renderer.surface.renderCommands(commands);
 
+    // Optional raw dump of the rendered surface: the SAME env var and the same
+    // RGBA8 layout the macOS window backend writes (see `dumpRaw` in
+    // mac/window.zig), so a frame from either platform can be compared byte for
+    // byte instead of by eye. Off unless GLIN_DUMP_SURFACE is set.
+    if (std.c.getenv("GLIN_DUMP_SURFACE")) |path| {
+        if (std.c.fopen(path, "wb")) |f| {
+            _ = std.c.fwrite(renderer.surface.pixels.ptr, 1, renderer.surface.pixels.len, f);
+            _ = std.c.fclose(f);
+            std.debug.print(
+                "wrote {d} raw RGBA bytes ({d}x{d}) to {s}\n",
+                .{ renderer.surface.pixels.len, w, h, std.mem.span(path) },
+            );
+        }
+    }
+
     const clear = renderer.surface.clear_rgb;
     var painted: usize = 0;
     var i: usize = 0;

@@ -322,7 +322,7 @@ test "pixel: the real glyph path paints ink above the baseline and none below" {
     if (!soft.hasGlyphFont()) return error.SkipZigTest;
     var s = try surface(96, 64);
     defer s.deinit();
-    s.drawTextRun(4, 4, "8", 32, .{ 255, 255, 255, 255 });
+    s.drawTextRun(4, 4, 40, "8", 32, .{ 255, 255, 255, 255 });
 
     var inked: usize = 0;
     var below_baseline: usize = 0;
@@ -331,8 +331,9 @@ test "pixel: the real glyph path paints ink above the baseline and none below" {
             const p = s.px(@intCast(x), @intCast(y));
             if (p[0] == 255 and p[1] == 255 and p[2] == 255) {
                 inked += 1;
-                // The run is vertically centred in a min(32,24)=24px box, so
-                // ink must not spill far past the box's lower edge.
+                // The run is vertically centred in the 40px box it was
+                // given, so ink must not spill past the box's lower edge
+                // (4 + 40 = 44).
                 if (y >= 44) below_baseline += 1;
             }
         }
@@ -349,7 +350,7 @@ test "pixel: glyph text respects the text colour, not a hard-coded white" {
     if (!soft.hasGlyphFont()) return error.SkipZigTest;
     var s = try surface(96, 64);
     defer s.deinit();
-    s.drawTextRun(4, 4, "8", 32, .{ 255, 0, 0, 255 });
+    s.drawTextRun(4, 4, 40, "8", 32, .{ 255, 0, 0, 255 });
     var red: usize = 0;
     var wrong: usize = 0;
     for (0..64) |y| {
@@ -367,10 +368,10 @@ test "pixel: a longer run paints more ink than a single glyph" {
     if (!soft.hasGlyphFont()) return error.SkipZigTest;
     var one = try surface(96, 64);
     defer one.deinit();
-    one.drawTextRun(4, 4, "8", 32, .{ 255, 255, 255, 255 });
+    one.drawTextRun(4, 4, 40, "8", 32, .{ 255, 255, 255, 255 });
     var two = try surface(96, 64);
     defer two.deinit();
-    two.drawTextRun(4, 4, "88", 32, .{ 255, 255, 255, 255 });
+    two.drawTextRun(4, 4, 40, "88", 32, .{ 255, 255, 255, 255 });
 
     const ink = struct {
         fn count(s2: *soft.Surface) usize {
@@ -389,10 +390,81 @@ test "pixel: a longer run paints more ink than a single glyph" {
     try std.testing.expect(ink(&two) > ink(&one));
 }
 
+/// The ink's vertical span: the first and last row holding a pixel that is at
+/// least 40% of the way from the black background to the white text. A
+/// threshold rather than exact white because a single glyph's stroke at UI
+/// sizes never fills a whole pixel, so its peak coverage is below 1.0 — the
+/// span is still within a pixel of the true ink box.
+fn inkRows(s: *const Surface) struct { first: i64, last: i64 } {
+    const ink_level: u8 = 100;
+    var first: i64 = std.math.maxInt(i64);
+    var last: i64 = -1;
+    var y: i64 = 0;
+    while (y < @as(i64, @intCast(s.height))) : (y += 1) {
+        var x: i64 = 0;
+        while (x < @as(i64, @intCast(s.width))) : (x += 1) {
+            const p = s.px(x, y);
+            if (p[0] >= ink_level and p[1] >= ink_level and p[2] >= ink_level) {
+                if (y < first) first = y;
+                if (y > last) last = y;
+            }
+        }
+    }
+    return .{ .first = first, .last = last };
+}
+
+test "pixel: a glyph run is centred in the box the layout gave it" {
+    // THE regression guard for the macOS "font is not in centre like Linux"
+    // report. The renderer used to ignore the box height the layout handed it
+    // and place the baseline from a guessed box plus a misread stb `yoff`,
+    // which lifted every run by a full ascent: on the calculator's keycaps the
+    // ink sat against the TOP edge (top gap 5px, bottom gap 36px) instead of in
+    // the middle.
+    //
+    // This is asserted on the INK, not on the code path, and runs on both
+    // platforms: the box is what the layout reserved, so the ink's centre must
+    // land on the box's centre wherever the font's own metrics put it.
+    if (!soft.hasGlyphFont()) return error.SkipZigTest;
+    var s = try surface(64, 96);
+    defer s.deinit();
+
+    const box_y: f32 = 20;
+    const box_h: f32 = 40;
+    s.drawTextRun(8, box_y, box_h, "8", 18, .{ 255, 255, 255, 255 });
+
+    const ink = inkRows(&s);
+    try std.testing.expect(ink.last >= ink.first); // something was painted
+    const mid = (@as(f32, @floatFromInt(ink.first)) + @as(f32, @floatFromInt(ink.last))) * 0.5;
+    // Centred: the cap-height box of a digit sits slightly above the true
+    // vertical centre of the line box, so allow 2px of optical slack.
+    try std.testing.expectApproxEqAbs(box_y + box_h * 0.5, mid, 2.0);
+    // And confined: no ink outside the box the layout reserved.
+    try std.testing.expect(@as(f32, @floatFromInt(ink.first)) >= box_y - 1);
+    try std.testing.expect(@as(f32, @floatFromInt(ink.last)) <= box_y + box_h);
+}
+
+test "pixel: a taller box moves the ink down, a shorter one up" {
+    // The same run in two boxes of different heights must follow the box: this
+    // is what makes `bbox_h` load-bearing rather than decorative.
+    if (!soft.hasGlyphFont()) return error.SkipZigTest;
+    var tall = try surface(64, 128);
+    defer tall.deinit();
+    var short = try surface(64, 128);
+    defer short.deinit();
+
+    tall.drawTextRun(8, 0, 80, "8", 18, .{ 255, 255, 255, 255 });
+    short.drawTextRun(8, 0, 24, "8", 18, .{ 255, 255, 255, 255 });
+
+    const a = inkRows(&tall);
+    const b = inkRows(&short);
+    try std.testing.expect(a.first > b.first);
+    try std.testing.expect(a.last > b.last);
+}
+
 test "pixel: empty text draws nothing" {
     var s = try surface(16, 16);
     defer s.deinit();
-    s.drawTextRun(4, 4, "", 18, .{ 255, 255, 255, 255 });
+    s.drawTextRun(4, 4, 22, "", 18, .{ 255, 255, 255, 255 });
     for (0..16) |y| {
         for (0..16) |x| {
             try expectPx(s, @intCast(x), @intCast(y), .{ 0, 0, 0, 255 });
@@ -406,7 +478,7 @@ test "pixel: a space paints nothing" {
     defer s.deinit();
     // A blank glyph must not draw ink even though it DOES advance the pen —
     // conflating the two would put a black box where a space belongs.
-    s.drawTextRun(4, 4, " ", 32, .{ 255, 255, 255, 255 });
+    s.drawTextRun(4, 4, 40, " ", 32, .{ 255, 255, 255, 255 });
     for (0..48) |y| {
         for (0..64) |x| {
             try expectPx(s, @intCast(x), @intCast(y), .{ 0, 0, 0, 255 });

@@ -156,13 +156,35 @@ pub fn extentCacheReset() void {
     extent_misses = 0;
 }
 
-/// Build "Family 18" Pango font-desc string into buf (NUL-terminated).
+/// Build "Family 18px" Pango font-desc string into buf (NUL-terminated).
 /// Returns the C pointer, or null if formatting fails.
+///
+/// The `px` suffix is load-bearing, not decoration. Pango reads a bare number
+/// as POINTS and scales it by the fontmap resolution (96 dpi -> x4/3) before
+/// picking the face, so "Mono 18" rasterizes as a 24px em. Every other backend
+/// in this project treats `font_size` as PIXELS — that is Clay's unit, what the
+/// CPU/stb glyph path feeds to stbtt_ScaleForPixelHeight, and what the shared
+/// estimator in core/text_portable.zig assumes — so without the suffix the same
+/// app drew its labels a third larger here than on macOS. `px` is Pango's
+/// "absolute size" marker (pango/fonts.c: parse_size, consumed by
+/// pango/pangofc-fontmap.c: get_scaled_size, which skips the dpi multiply).
+///
+/// BOTH the measure and the render path go through this one function, so the
+/// layout box and the blitted texture can never disagree about the size.
 pub fn pangoDescInto(buf: *[128]u8, font_size: u16) ?[*:0]const u8 {
     if (font_size == 0) return null;
     const family = pangoFamily();
-    _ = std.fmt.bufPrint(buf, "{s} {d}\x00", .{ family, font_size }) catch return null;
+    _ = std.fmt.bufPrint(buf, "{s} {d}px\x00", .{ family, font_size }) catch return null;
     return @ptrCast(buf);
+}
+
+test "pangoDescInto marks the size absolute (px), never points" {
+    // Points would be x4/3 larger at Pango's default 96 dpi, which is exactly
+    // the Linux-vs-macOS size mismatch this pins shut.
+    var buf: [128]u8 = undefined;
+    const desc = pangoDescInto(&buf, 18) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.endsWith(u8, std.mem.span(desc), " 18px"));
+    try std.testing.expect(pangoDescInto(&buf, 0) == null);
 }
 
 /// Try Pango measurement via the C shim. Returns null on any failure so

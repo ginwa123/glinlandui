@@ -104,6 +104,17 @@ pub const Font = struct {
         return stb.stbtt_ScaleForPixelHeight(&self.info, @floatFromInt(font_size));
     }
 
+    /// The font's line box height at `font_size`, in pixels: ascent + |descent|.
+    ///
+    /// `stbtt_ScaleForPixelHeight` is defined so that this comes out exactly
+    /// `font_size` — which is why a caller can centre a run by centring this
+    /// box, and why the layout-side estimator's `1.2 * font_size` box is
+    /// slightly taller than the line it holds.
+    pub fn lineHeight(self: *const Font, font_size: u16) f32 {
+        const scale = self.scaleFor(font_size);
+        return (self.ascent - self.descent) * scale;
+    }
+
     /// Horizontal advance of one codepoint in pixels, and where its bitmap
     /// starts relative to the pen.
     pub fn glyphMetrics(self: *const Font, cp: u21, font_size: u16) Metrics {
