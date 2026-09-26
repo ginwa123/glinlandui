@@ -160,6 +160,56 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
+    // ---- Linux-only example app: the calculator ----
+    //
+    // The example targets the real Wayland/EGL/GLES3/pangocairo backend, so
+    // BOTH the executable and its run step are created inside the same
+    // `is_linux` gate as the native protocol graph. On macOS and every other
+    // host `calc` / `run_calc_step` stay null, so `zig build
+    // run-calculator` does not exist there and the example cannot be built,
+    // run or tested. The example's own tests go to `native-test` below —
+    // never to the parity `test` step — so tests.lock stays valid on every
+    // platform.
+    var run_calc_step: ?*std.Build.Step = null;
+    var calc_test: ?*std.Build.Step.Compile = null;
+    if (is_linux) {
+        const calc_mod = b.createModule(.{
+            .root_source_file = b.path("examples/calculator.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "glinlandui", .module = mod },
+            },
+        });
+        const calc = b.addExecutable(.{
+            .name = "glinlandui-calculator",
+            .root_module = calc_mod,
+        });
+        b.installArtifact(calc);
+
+        run_calc_step = b.step("run-calculator", "Run the calculator example (Linux only)");
+        const run_calc = b.addRunArtifact(calc);
+        run_calc_step.?.dependOn(&run_calc.step);
+        run_calc.step.dependOn(b.getInstallStep());
+        if (b.args) |args| {
+            run_calc.addArgs(args);
+        }
+
+        // A separate test root over the same file: `b.addTest` compiles the
+        // root as a test binary, so `pub fn main` is never an entry point
+        // and the example's tests run headless (no window opens).
+        calc_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/calculator.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "glinlandui", .module = mod },
+                },
+            }),
+        });
+    }
+
     const mod_tests = b.addTest(.{
         .root_module = mod,
     });
@@ -187,6 +237,13 @@ pub fn build(b: *std.Build) void {
         native_test_step.dependOn(makeModuleTestStep(b, target, "src/wayland/text.zig", zclay_mod));
         native_test_step.dependOn(makeModuleTestStep(b, target, "src/wayland/render_gles3.zig", zclay_mod));
         native_test_step.dependOn(makeWaylandTestStep(b, target, zclay_mod, protocols));
+    }
+    // Linux-only example tests live here, NOT in the parity `test` step: the
+    // calculator targets the native backend, so folding its count into the
+    // parity step would invalidate tests.lock on macOS. Same reasoning as
+    // every other entry above.
+    if (calc_test) |calc| {
+        native_test_step.dependOn(&b.addRunArtifact(calc).step);
     }
     // Components are not standalone test roots: they import the shared
     // renderer contract relatively, which escapes a standalone root module.
