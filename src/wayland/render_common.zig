@@ -6,6 +6,22 @@
 //! test harness can safely import on every supported platform.
 const std = @import("std");
 
+/// Headless-testable draw command: rect fill or text run.
+///
+/// Lives here (not in a backend file) because it is pure data: applications
+/// map their own layout summary to a Draw list and assert on it in tests
+/// without a GL context. Keeping it backend-agnostic means `render.Draw`
+/// resolves identically on every platform, including hosts that never
+/// compile render_gles3.zig.
+pub const Draw = struct {
+    kind: enum { rect, text },
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    color: u32,
+};
+
 /// Convert 0xRRGGBB to a Clay color ([4]f32 in 0-255 range, alpha 255).
 pub fn u32ToClayColor(hex: u32) [4]f32 {
     return .{

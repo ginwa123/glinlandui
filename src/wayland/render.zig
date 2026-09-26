@@ -12,6 +12,9 @@ const soft = @import("render_software.zig");
 
 pub const ImageFit = common.ImageFit;
 pub const ImageRef = common.ImageRef;
+/// Re-exported from render_common so `render.Draw` resolves on every
+/// platform, not just Linux hosts that compile render_gles3.zig.
+pub const Draw = common.Draw;
 pub const u32ToClayColor = common.u32ToClayColor;
 pub const scaledDims = common.scaledDims;
 pub const coverUv = common.coverUv;

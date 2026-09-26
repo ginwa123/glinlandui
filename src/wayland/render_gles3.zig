@@ -23,6 +23,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const text = @import("text.zig");
+const render_common = @import("render_common.zig");
 const cl = @import("zclay");
 
 const egl = @cImport({
@@ -46,15 +47,10 @@ const shim = @cImport({
     @cInclude("pango_text.h");
 });
 
-/// Headless-testable draw command: rect fill or text run.
-pub const Draw = struct {
-    kind: enum { rect, text },
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    color: u32,
-};
+/// Headless-testable draw command: rect fill or text run. Declared in
+/// render_common (backend-agnostic) and re-exported here for the legacy
+/// `render_gles3.Draw` path.
+pub const Draw = render_common.Draw;
 
 fn normChannel(v: u32) f32 {
     return @as(f32, @floatFromInt(v & 0xff)) / 255.0;
