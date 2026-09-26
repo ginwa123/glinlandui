@@ -21,10 +21,29 @@
 
 #include "shim.h"
 
-/// Bitmap info for a 32-bit little-endian premultiplied context. In memory
-/// that is B, G, R, A — which is exactly what mac/present.zig produces.
+/// Bitmap info for the 32-bit context the blit buffer is copied into.
+///
+/// The byte-order flag is the whole ballgame, and it is easy to get exactly
+/// backwards. `kCGBitmapByteOrder32Little` does NOT mean "little-endian RGBA in
+/// memory"; it means the 32-bit pixel is a little-endian WORD, which
+/// REVERSES the component order on a little-endian host. With
+/// `kCGImageAlphaPremultipliedLast` the logical order is (R,G,B,A), so
+/// `32Little` puts the bytes in memory as A, B, G, R.
+///
+/// The bug that cost a day: with `32Little`, a source pixel (R,G,B,A) is
+/// DISPLAYED as (A,B,G,R). Every pixel in the window therefore came out with
+/// its alpha in the red channel — the calculator's `0x101014` background
+/// rendered as bright red (255,20,16) and the `=` key's accent blue
+/// `0x2f6df6` rendered as yellow (255,246,109). Nothing errored, and every
+/// byte-level test still passed, because they only ever compared the buffer
+/// against itself.
+///
+/// `32Big` is what actually makes memory order (R,G,B,A) == displayed order
+/// (R,G,B,A), which is the identity transform `mac/present.zig` produces.
+/// `ci/check_macos_colors.c` measures this through CoreGraphics and fails the
+/// build if the displayed colour is not the source colour.
 static const CGBitmapInfo kGlinBitmapInfo =
-    (CGBitmapInfo)kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Little;
+    (CGBitmapInfo)kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big;
 
 struct GlinCocoaWindow {
     NSWindow *window;

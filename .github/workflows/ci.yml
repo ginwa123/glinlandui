@@ -110,6 +110,14 @@ jobs:
       - name: Build the CPU-rasterizer executable (ReleaseSafe)
         run: zig build -Doptimize=ReleaseSafe
 
+      # Proves the blit buffer is DISPLAYED as the colour that was written.
+      # A wrong `kCGBitmapByteOrder32Little` in mac/shim.m renders the whole
+      # window bright red and is invisible to the parity suite; this drives
+      # CoreGraphics for real. Needs no GUI session, so it runs on a headless
+      # macOS runner.
+      - name: macOS CoreGraphics colour hand-off (displayed == written)
+        run: zig build check-colors
+
       - name: Run the demo (real headless render)
         run: zig build run
 

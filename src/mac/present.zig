@@ -7,23 +7,36 @@
 //! path, and it cost a day: it rendered the calculator upside down with the
 //! accent key at the top, and blue as pink.
 //!
-//! What was measured, by dumping the exact bytes handed to
-//! `glin_cocoa_present` and comparing them against the surface they came from:
+//! What was measured, by reproducing the shim's exact CoreGraphics round trip
+//! (`CGBitmapContextCreate` -> `CGBitmapContextCreateImage` ->
+//! `CGContextDrawImage`) and reading back the DISPLAYED colour:
 //!
 //!   - `soft.Surface` is TOP-LEFT origin: its row 0 is the visual top, and its
-//!     bytes are plain R, G, B, A.
-//!   - The shim creates the context with
-//!     `kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Little`, then
-//!     hands it to `CGBitmapContextCreateImage` and draws THAT with
-//!     `CGContextDrawImage`. Going through `CGImage` is what changes the
-//!     answer: a CGImage's row 0 is its TOP row, and in that configuration the
-//!     bytes are read as R, G, B, A — the same order they are already in.
+//!     bytes are plain R, G, B, A. Going through a `CGImage` is what removes
+//!     the vertical flip — a CGImage's row 0 is its TOP row — so the rows stay
+//!     in order.
+//!   - with the shim's bitmap info, `kCGImageAlphaPremultipliedLast |
+//!     kCGBitmapByteOrder32Big`, the four bytes of a pixel are read as
+//!     R, G, B, A: exactly the order they are already in.
 //!
 //! So the required transform is the IDENTITY. Both the channel swap and the
 //! vertical flip are over-corrections, and each one produces a plausible,
-//! wrong-looking window rather than an obvious failure, which is exactly why
-//! they need a test that states the VISUAL contract rather than one that
-//! restates the implementation.
+//! wrong-looking window rather than an obvious failure.
+//!
+//! ## Read this before trusting the tests below
+//!
+//! Every test in this file compares the blit buffer against the surface it
+//! was copied from — i.e. against this module's own idea of the answer. They
+//! are worth having, and they pin the layout, but they CANNOT catch a wrong
+//! hand-off to CoreGraphics, because the thing that goes wrong lives in
+//! `mac/shim.m`'s `kGlinBitmapInfo` and is invisible from here. They stayed
+//! green through a bug that rendered the entire window bright red.
+//!
+//! The check that actually guards the hand-off is `ci/check_macos_colors.c`,
+//! which drives CoreGraphics for real and compares the DISPLAYED colour with
+//! the colour that was written. It needs no window server and no Screen
+//! Recording permission, so it runs on every macOS build machine. Run it with
+//! `./ci/check_macos_colors.sh`.
 //!
 //! `identityRgba8` keeps the call site honest and the buffer reusable across
 //! frames, and the tests below pin the layout and the colours — the two things

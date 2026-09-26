@@ -317,6 +317,36 @@ pub fn build(b: *std.Build) void {
     // software rasterizer's command stream, and the text backend resolves to
     // the deterministic estimator in EVERY test build. So it must report the
     // same count on both platforms — which is what makes it a useful guard.
+    // `check-colors` proves the macOS pixel hand-off for real.
+    //
+    // The parity suite CANNOT do this: `mac/present.zig`'s tests compare the
+    // blit buffer against the surface it came from, i.e. against the
+    // implementation's own idea of the answer, and the thing that actually
+    // goes wrong lives in `mac/shim.m`'s `kGlinBitmapInfo`, which no Zig test
+    // can reach. A wrong byte-order flag there rendered the whole window
+    // bright red with every one of those tests still green. This step drives
+    // CoreGraphics for real and compares the DISPLAYED colour with the colour
+    // that was written — no window server, no Screen Recording permission, so
+    // it is safe on any macOS machine and in CI.
+    //
+    // It is a separate step (and a separate `zig build check-colors`) rather
+    // than part of `test` because it is macOS-only and must not perturb the
+    // cross-platform test count, which is what `tests.lock` pins.
+    const check_colors_step = b.step("check-colors",
+        \\Check the macOS CoreGraphics colour hand-off (displayed == written)
+    );
+    if (is_macos) {
+        const check_colors = b.addSystemCommand(&.{"bash"});
+        check_colors.addFileArg(b.path("ci/check_macos_colors.sh"));
+        check_colors.setName("ci/check_macos_colors.sh");
+        check_colors_step.dependOn(&check_colors.step);
+    } else {
+        // Not a failure on other hosts: the hand-off only exists on macOS.
+        const skip = b.addSystemCommand(&.{ "bash", "-c" });
+        skip.addArg("echo 'check-colors: skipped (not a macOS build)'");
+        check_colors_step.dependOn(&skip.step);
+    }
+
     const test_step = b.step("test", "Run the cross-platform test suite (identical on every OS)");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
