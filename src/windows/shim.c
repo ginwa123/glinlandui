@@ -1144,15 +1144,14 @@ int glin_win_probe_color(const unsigned char *rgba, int w, int h, unsigned char 
     ID3D11Device *device = NULL;
     ID3D11DeviceContext *context = NULL;
     D3D_FEATURE_LEVEL got = D3D_FEATURE_LEVEL_11_0;
-    // WARP first, and deliberately: this probe runs a full draw, and a
-    // hardware adapter that is present but not actually able to rasterize
-    // (a VM, a remote session, a driver that has half-initialised) answers
-    // DXGI_ERROR_DEVICE_HUNG on the first real draw. WARP is Microsoft's own
-    // software rasterizer, it implements the identical feature levels and
-    // shader model, and it cannot half-work — so the probe measures the
-    // PRESENT PATH, which is what it is for, rather than the health of
-    // whatever GPU the build machine happens to have.
-    HRESULT hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_WARP, NULL, 0, NULL, 0,
+    // Device selection MIRRORS createDeviceForWindow(): hardware first, WARP
+    // second. That symmetry is the entire point of this probe — a check that
+    // exercised a different adapter than the window would be measuring
+    // something else. (An earlier version put WARP first, on the theory that
+    // a software rasterizer is the more predictable target. It is the LESS
+    // representative one, and it also made the probe skip on a hosted runner
+    // whose hardware device works fine.)
+    HRESULT hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, NULL, 0,
                                    D3D11_SDK_VERSION, &device, &got, &context);
     if (FAILED(hr) || device == NULL || context == NULL) {
         if (device != NULL) {
@@ -1163,7 +1162,7 @@ int glin_win_probe_color(const unsigned char *rgba, int w, int h, unsigned char 
         }
         device = NULL;
         context = NULL;
-        hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, NULL, 0,
+        hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_WARP, NULL, 0, NULL, 0,
                                D3D11_SDK_VERSION, &device, &got, &context);
     }
     if (FAILED(hr) || device == NULL || context == NULL) {

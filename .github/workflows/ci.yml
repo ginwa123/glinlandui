@@ -253,7 +253,19 @@ jobs:
           echo "$out" | grep -q 'Windows window:'
           echo "$out" | grep -q 'Windows first frame:'
 
-          presenter="$(echo "$out" | sed -nE 's/.*presenter: ([a-z0-9]+) .*/\1/p' | head -n1)"
+          # Read the presenter from the FIRST-FRAME line, never from the
+          # window-open line. The two disagree, and that disagreement is the
+          # whole point: `run()` logs the presenter as soon as the device is
+          # CREATED, and the shim can only find out that it cannot actually
+          # present when it presents. A machine whose D3D11 device is
+          # real-looking but cannot execute a shader (a hosted VM, for
+          # instance) therefore logs `d3d11` and then composites with GDI —
+          # and grepping the first line reports a D3D11 pass for a GDI frame.
+          # The first-frame line is reported after the present, so it is the
+          # authoritative one.
+          presenter="$(echo "$out" | sed -nE \
+            's/.*first frame: [0-9]+x[0-9]+, [0-9]+ painted pixels, ([a-z0-9]+) upload checksum.*/\1/p' \
+            | head -n1)"
           case "$presenter" in
             d3d11) echo "presenter: d3d11 (GPU swap chain)" ;;
             gdi)   echo "presenter: gdi (D3D11 unavailable on this host; CPU blit)" ;;
