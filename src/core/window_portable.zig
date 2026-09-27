@@ -55,7 +55,12 @@ pub const Window = struct {
     /// (`window.delegate = host.delegate()`) is identical on every platform.
     delegate: ?Delegate = null,
 
-    pub fn init(config: WindowConfig) Window {
+    pub fn init(alloc: std.mem.Allocator, config: WindowConfig) Window {
+        // The allocator is accepted for signature parity with the web backend,
+        // which genuinely needs it (`wasm_allocator` is the only allocator that
+        // grows a wasm module's linear memory). Native backends ignore it: their
+        // allocator is a process global, and the Clay arena is owned by the Host.
+        _ = alloc;
         return .{ .state = contract.WindowState.init(config) };
     }
 

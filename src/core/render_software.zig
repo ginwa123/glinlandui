@@ -649,7 +649,25 @@ pub const Renderer = struct {
 var textBytes: ?glyphs.Font = null;
 
 /// True once a glyph-bearing font is available, so the fallback can be skipped.
+///
+/// Resolution order is deliberate, and it is the web backend's entry point:
+///
+///   1. a font INSTALLED by the backend (`glyphs.installFont`) wins, because a
+///      host with no filesystem can never satisfy step 2 — the wasm text
+///      backend reports an empty candidate list on purpose;
+///   2. otherwise the platform's font paths are walked, which is what every
+///      native host has always done.
+///
+/// The struct copy in step 1 is shallow and safe: it duplicates `bytes` (a
+/// slice header) and `stbtt_fontinfo` (offsets plus pointers into `bytes`),
+/// while the backing memory stays owned by whoever installed the font — the
+/// web backend allocates it for process lifetime. That is also why `Font.deinit`
+/// must never run on the installed font.
 pub fn hasGlyphFont() bool {
+    if (glyphs.installedFont()) |f| {
+        textBytes = f.*;
+        return true;
+    }
     if (textBytes == null) textBytes = glyphs.Font.loadDefault();
     return textBytes != null;
 }

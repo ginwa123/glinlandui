@@ -333,3 +333,97 @@ jobs:
           done
 
           echo "calc_supported gate holds on ${{ matrix.label }}: no run-calculator step, no calculator binary"
+
+  # ---------------------------------------------------------------------------
+  # Browser backend (WebAssembly).
+  #
+  # `zig build web` and `zig build web-calculator` produce `zig-out/web/`, and
+  # `web/smoke.mjs` drives both modules through their real ABI in Node — no
+  # browser, no headless Chrome, no npm, no `apt-get install`. That last absence
+  # is itself the assertion: a `wasm32-freestanding` module needs no system
+  # libraries at all, which is why this job installs nothing.
+  #
+  # What it checks is the web peer of the macOS job's CoreGraphics colour check.
+  # That job exists because a green parity suite could not catch a wrong
+  # `kCGBitmapInfo` in the shim; this one exists because a browser's canvas, DOM
+  # and `requestAnimationFrame` are equally unreachable from a Zig test. It closes
+  # the gap WITHOUT a browser by driving the real modules end to end and asserting
+  # on real pixels:
+  #
+  #   - each module's import section is EMPTY (nothing stubbed, nothing borrowed)
+  #   - `src/web/shim.h` matches the module's actual exports, both directions
+  #   - a frame paints non-zero pixels and is not a flat fill
+  #   - the dirty-flag contract holds (the idle-CPU guarantee)
+  #   - the EMBEDDED FONT installed, asserted twice: by `glin_web_font_error()`
+  #     being 0, and by the title band containing antialiased text rather than the
+  #     glyph-free bar fallback. The second is the one that matters — a flag can
+  #     be wrong, pixels cannot. This is the check that would have caught the
+  #     install-before-window bug that made the browser draw bars for a long time
+  #     while every other assertion here passed.
+  #   - a synthesised click CHANGES the frame, because the demo draws its own
+  #     click count — so the whole chain from DOM-shaped coordinates to the app
+  #     callback is covered, not merely "the code ran"
+  #   - the calculator's KEYBOARD works: `7 + 8 =` typed through the keymap
+  #     changes its display, which exercises `web/keymap.zig` -> the Host's
+  #     KeyChain -> the app's `onKey` -> the re-render
+  # ---------------------------------------------------------------------------
+  web:
+    name: Web / WebAssembly / canvas (no browser, no npm)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check formatting
+        run: zig fmt --check build.zig src examples
+
+      # No `apt-get` step, deliberately. The wasm build is the one artifact in
+      # this repository that needs no system library — no Wayland, no EGL, no
+      # pango, no libc — and a job that quietly installed them would hide a
+      # regression that reintroduced the dependency.
+      - name: Build the browser webapp (demo)
+        run: zig build web -Doptimize=ReleaseSafe
+
+      - name: Build the browser webapp (calculator)
+        run: zig build web-calculator -Doptimize=ReleaseSafe
+
+      - name: Assert the artifact is a complete, servable site
+        run: |
+          set -euo pipefail
+          test -s zig-out/web/glinlandui.wasm
+          test -s zig-out/web/glinlandui-calculator.wasm
+          for f in index.html shim.js style.css; do
+            test -s "zig-out/web/$f" || { echo "::error::missing zig-out/web/$f" >&2; exit 1; }
+          done
+          echo "demo:       $(wc -c < zig-out/web/glinlandui.wasm) bytes"
+          echo "calculator: $(wc -c < zig-out/web/glinlandui-calculator.wasm) bytes"
+
+      - name: Drive both modules through their ABI
+        run: node web/smoke.mjs
+
+      # The `-Dweb` flag is what `zig build run-calculator -Dweb` uses, and it is
+      # a BUILD option rather than a runtime one because the target is a
+      # compile-time property. This step proves the flag is wired: it must build
+      # the wasm artifact and print the URL. It does NOT leave a server running —
+      # the step is capped and its output is checked, not its lifetime.
+      #
+      # NOTE: the flag is `-Dweb`, NOT `--web`. `zig build` has its own built-in
+      # `--webui` flag and parses `--web` as an abbreviation of that, so `--web`
+      # silently does nothing. That cost an hour once; this step is what stops it
+      # happening again.
+      - name: The -Dweb flag builds and prints the URL
+        run: |
+          set -euo pipefail
+          out="$(timeout 20 zig build run-calculator -Dweb 2>&1 || true)"
+          echo "$out"
+          echo "$out" | grep -q 'serving zig-out/web'
+          echo "$out" | grep -q 'http://localhost:8080/?app=calculator'
+          echo "-Dweb: builds, serves, prints the URL"

@@ -766,7 +766,12 @@ pub const Window = struct {
     xdg_surface_listener: c.struct_xdg_surface_listener = xdgSurfaceListener(),
     toplevel_listener: c.struct_xdg_toplevel_listener = xdgToplevelListener(),
 
-    pub fn init(config: WindowConfig) Window {
+    pub fn init(alloc: std.mem.Allocator, config: WindowConfig) Window {
+        // The allocator is accepted for signature parity with the web backend,
+        // which genuinely needs it (`wasm_allocator` is the only allocator that
+        // grows a wasm module's linear memory). Native backends ignore it: their
+        // allocator is a process global, and the Clay arena is owned by the Host.
+        _ = alloc;
         return .{
             .config = config,
             .win_w = config.width,
@@ -1071,7 +1076,7 @@ test "layerSize matches theme 720x480" {
 }
 
 test "delegate defaults to null (headless no-op)" {
-    const win = Window.init(.{});
+    const win = Window.init(std.testing.allocator, .{});
     try std.testing.expect(win.delegate == null);
 }
 
@@ -1109,7 +1114,7 @@ test "attached delegate round-trips on_key/on_close/is_quit" {
         }
     };
     var state = State{};
-    var win = Window.init(.{});
+    var win = Window.init(std.testing.allocator, .{});
     win.delegate = .{
         .ptr = &state,
         .on_frame = fns.onFrame,
@@ -1175,7 +1180,7 @@ test "fixedToFloat converts wl_fixed 24.8 to float" {
 
 test "RED clampSize enforces min 520x360, 0 defers to client size" {
     // Same cases via the Window.clamp method form (default config).
-    const win = Window.init(.{});
+    const win = Window.init(std.testing.allocator, .{});
     // 0 means the compositor defers to the client -> keep default size.
     try std.testing.expectEqual(@as(u32, 720), win.clamp(0, 0).w);
     try std.testing.expectEqual(@as(u32, 480), win.clamp(0, 0).h);
@@ -1191,7 +1196,7 @@ test "RED clampSize enforces min 520x360, 0 defers to client size" {
 }
 
 test "RED Window.init stores custom config" {
-    const win = Window.init(.{
+    const win = Window.init(std.testing.allocator, .{
         .app_id = "qs-settings",
         .title = "Settings",
         .width = 800,
@@ -1206,7 +1211,7 @@ test "RED Window.init stores custom config" {
 }
 
 test "Window defaults are 720x480 + 520/360 (literals; see ui/theme.zig)" {
-    const win = Window.init(.{});
+    const win = Window.init(std.testing.allocator, .{});
     try std.testing.expectEqual(@as(u32, 720), win.config.width);
     try std.testing.expectEqual(@as(u32, 480), win.config.height);
     try std.testing.expectEqual(@as(u32, 520), win.config.min_width);
@@ -1217,14 +1222,14 @@ test "Window defaults are 720x480 + 520/360 (literals; see ui/theme.zig)" {
 }
 
 test "RED Window.clamp honors custom mins" {
-    const win = Window.init(.{ .width = 720, .height = 480, .min_width = 520, .min_height = 360 });
+    const win = Window.init(std.testing.allocator, .{ .width = 720, .height = 480, .min_width = 520, .min_height = 360 });
     try std.testing.expectEqual(@as(u32, 720), win.clamp(0, 0).w);
     try std.testing.expectEqual(@as(u32, 480), win.clamp(0, 0).h);
     try std.testing.expectEqual(@as(u32, 520), win.clamp(100, 100).w);
     try std.testing.expectEqual(@as(u32, 360), win.clamp(100, 100).h);
     try std.testing.expectEqual(@as(u32, 1000), win.clamp(1000, 700).w);
     try std.testing.expectEqual(@as(u32, 700), win.clamp(1000, 700).h);
-    const custom = Window.init(.{ .width = 800, .height = 600, .min_width = 400, .min_height = 300 });
+    const custom = Window.init(std.testing.allocator, .{ .width = 800, .height = 600, .min_width = 400, .min_height = 300 });
     try std.testing.expectEqual(@as(u32, 400), custom.clamp(100, 100).w);
     try std.testing.expectEqual(@as(u32, 300), custom.clamp(100, 100).h);
     try std.testing.expectEqual(@as(u32, 800), custom.clamp(0, 0).w);
@@ -1264,7 +1269,7 @@ test "cursor shape mapping matches protocol constants" {
     // Change-only gate + sentinel default on fresh windows.
     try std.testing.expect(frame.shouldApplyShape(frame.shape_sentinel, frame.shape_default));
     try std.testing.expect(!frame.shouldApplyShape(frame.shape_default, frame.shape_default));
-    const win = Window.init(.{});
+    const win = Window.init(std.testing.allocator, .{});
     try std.testing.expectEqual(@as(u32, 0), win.enter_serial);
     try std.testing.expect(win.shape_device == null);
     try std.testing.expect(win.cursor_shape_manager == null);
@@ -1330,7 +1335,7 @@ test "RED listener structs are owned by Window so they outlive their proxy" {
     // event, because libwayland keeps the pointer after the frame dies.
     // Each field must therefore be present AND complete — ownership alone
     // is not enough, it must not smuggle in null slots.
-    const win = Window.init(.{});
+    const win = Window.init(std.testing.allocator, .{});
     inline for (.{
         .{ "pointer", c.struct_wl_pointer_listener, win.pointer_listener },
         .{ "keyboard", c.struct_wl_keyboard_listener, win.keyboard_listener },

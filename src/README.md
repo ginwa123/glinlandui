@@ -55,29 +55,55 @@ src/
 
 ### The platform mirror
 
-`linux/` and `mac/` expose the **same nine file names**, so you can read and diff
-them side by side. **Same role, not same code** — the line counts carry the
-information:
+`linux/`, `mac/` and `web/` expose the **same nine file names**, so you can read
+and diff them side by side. **Same role, not same code** — the line counts carry
+the information:
 
-| file | role | linux | mac |
-|---|---|---|---|
-| `window.zig` | bootstrap, event loop, frame loop | 1345 | 355 |
-| `input.zig` | native events → the `Delegate` contract | 60 | 324 |
-| `keymap.zig` | native keycode → evdev | 40 | 359 |
-| `adapter.zig` | coords / scroll / resize / quit | 65 | 484 |
-| `present.zig` | finished frame → screen | 42 | 221 |
-| `renderer.zig` | renderer for this OS | 1378 | 27 |
-| `text.zig` | text engine for this OS | 261 | 38 |
-| `shim.h` | this platform's C shim header | 30 | 111 |
-| `shim.c` / `shim.m` | this platform's C shim TU | 101 | 415 |
+| file | role | linux | mac | web |
+|---|---|---|---|---|
+| `window.zig` | bootstrap, event loop, frame loop | 1345 | 355 | 416 |
+| `input.zig` | native events → the `Delegate` contract | 60 | 324 | 383 |
+| `keymap.zig` | native keycode → evdev | 40 | 359 | 451 |
+| `adapter.zig` | coords / scroll / resize / quit | 65 | 484 | 442 |
+| `present.zig` | finished frame → screen | 42 | 221 | 319 |
+| `renderer.zig` | renderer for this OS | 1378 | 27 | 38 |
+| `text.zig` | text engine for this OS | 261 | 38 | 97 |
+| `shim.h` | this platform's C shim header | 30 | 111 | 236 |
+| `shim.c` / `shim.m` / `web/shim.js` | this platform's shim TU | 101 | 415 | 363 |
 
-`shim.c` ↔ `shim.m` is the one name that cannot match — Objective-C requires `.m`.
+Two names in that last row cannot match, and each says something:
 
-**If you add or rename a file in one folder, do the same in the other**, or update
+- `shim.c` ↔ `shim.m`, because Objective-C requires `.m`.
+- `shim.c` ↔ `shim.js`, because a browser's shim is a **static asset, not a
+  compiled unit**. It lives at `web/shim.js` (next to `index.html` and
+  `style.css`, the files `zig build web` installs), not in `src/web/`, so that
+  `src/web/` stays "code that is compiled" and `web/` stays "assets that are
+  installed". `src/web/shim.h` is still the ABI — the header slot in the table —
+  which is why `web/smoke.mjs` cross-checks it against the module's real exports.
+
+**The `web/` column is where two rules earn their keep.** `web/keymap.zig` (451
+lines) is larger than `mac/keymap.zig` (359) because a DOM `KeyboardEvent.code`
+is a *string* namespace with more names to cover, and the keypad's arithmetic keys
+must survive as themselves. `web/present.zig` (319) is larger than `mac/present.zig`
+(221) for a reason that has nothing to do with pixels: the DOM adds a rule
+CoreGraphics does not have, and it is the one that silently corrupts frames (see
+`memory.grow()` in §4).
+
+`src/web/` also holds two files with **no counterpart in the other columns**:
+`compat_heap.zig` and `compat_impl.zig`. `wasm32-freestanding` has no libc, so the
+C that a browser build still needs — Clay, stb_truetype — has to find `malloc`,
+`free` and `strlen` somewhere. `compat_heap.zig` is the testable arithmetic;
+`compat_impl.zig` is the thin `export fn` surface that forwards to it. See the
+header of either for why they are split that way.
+
+**If you add or rename a file in one folder, do the same in the others**, or update
 the mirrors table above. Each file's header comment states what the *other*
-platform has that it does not, and why. Keep that honest: those absences are the
-most useful thing in the pair (e.g. `linux/keymap.zig` is an identity function
-because Wayland already speaks evdev; `mac/keymap.zig` is a 359-line table).
+platforms have that it does not, and why. Keep that honest: those absences are the
+most useful thing in the set. The three are deliberately different on the same
+axis — `linux/keymap.zig` is an identity function because Wayland already speaks
+evdev; `mac/keymap.zig` is a virtual-keycode table; `web/keymap.zig` translates
+from a *string* namespace and preserves the keypad, which macOS also preserves and
+Linux gets for free.
 
 ### Data flow
 
@@ -102,14 +128,41 @@ only calls the `Delegate`. That contract is the whole integration surface.
 
 ## 2. Invariants. Breaking these fails CI, not just a test
 
-### I1 — Test parity: `zig build test` must report exactly **458**
+### I1 — Test parity: `zig build test` must report exactly **545**
 
-`tests.lock` holds `458`; `ci/check_test_parity.sh` asserts it. The suite compiles
+`tests.lock` holds `545`; `ci/check_test_parity.sh` asserts it. The suite compiles
 a **fixed, platform-independent set** of test roots so Linux and macOS run the
 same tests, which is what makes the macOS path trustworthy without a Mac.
 
-The count is `404` (`root.zig` aggregate) + `1` (`main.zig`) + `36` (the
+The count is `493` (`root.zig` aggregate) + `1` (`main.zig`) + `36` (the
 calculator example) + `15` (`examples/calculator_e2e_test.zig`, the E2E suite).
+
+**Correction, for whoever checks this line next:** the split used to read
+"`404` (`root.zig` aggregate) + `1` + `36` + `15`", which does not add up to its
+own stated total of `458`. The aggregate was `406`; `458 - 1 - 36 - 15 = 406`.
+The total was right and the split was not. If you are ever reconciling a parity
+failure, trust `tests.lock` and the summary line, not a historical split.
+
+**How the `web/` backend moved the count** (the change that took `458` → `545`),
+stated so it can be checked file by file:
+
+| file | delta | why |
+|---|---|---|
+| `core/text_portable.zig` | `-3` | its three estimator tests **moved** to `core/text_estimator.zig` |
+| `core/text_estimator.zig` | `+3` | the same three tests, now in the pure module (net zero — a move, not an addition) |
+| `core/glyphs.zig` | `+6` | new: the sfnt signature guard, `fromBytes` on empty/HTML/junk, and `installFont`/`installedFont` |
+| `web/compat_heap.zig` | `+13` | the C-heap arithmetic, tested against `std.testing.allocator` on every platform |
+| `web/keymap.zig` | `+20` | `KeyboardEvent.code` → evdev, including round trips through `input.keyChar` |
+| `web/input.zig` | `+15` | DOM pointer → the Delegate contract, including two end-to-end clicks against a real Clay layout |
+| `web/adapter.zig` | `+17` | coordinates, wheel `deltaMode`, resize coalescing, quit |
+| `web/present.zig` | `+12` | the canvas hand-off: identity transform, DPR sizing, painted count, frame hash |
+| `web/text.zig` | `+4` | the refusals — no font paths, no filesystem — plus the estimator staying reachable |
+
+That is `+87`, and it is a deliberate addition in the same commit as the lock
+(C7 below), not a drift. `web/window.zig`, `web/compat_impl.zig` and
+`web/renderer.zig` contribute nothing: the first two are wasm-only (they name
+`std.heap.wasm_allocator`, which cannot be analysed on a native target) and the
+third has no tests by design.
 
 - **Adding or removing a `test` block changes the count.** Update `tests.lock` in
   the same commit, deliberately. Never "fix" a parity failure by editing the lock

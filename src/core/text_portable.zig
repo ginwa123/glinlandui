@@ -1,20 +1,75 @@
-//! Portable text measurement fallback.
+//! Portable text measurement fallback — macOS's `text.zig` peer.
 //!
 //! macOS does not get a fabricated Pango/EGL runtime: it gets a deterministic,
 //! pure-Zig version of the same public measurement contract. It is used by the
 //! CPU frame pipeline and the reusable headless test driver, so those tests stay
 //! meaningful on macOS without pulling in Linux-only system libraries.
+//!
+//! ## What lives here, and what moved out
+//!
+//! This module is now the **fs-backed font-discovery half** of the text
+//! backend: the macOS system-font path list, the existence probe, and the
+//! family name Pango would want. The estimator, its cache, its counters and
+//! `ResolveFontError` moved to `core/text_estimator.zig` — see that file's
+//! header for why (short version: the estimator is the part a new platform
+//! needs, and this module's `std.Io` calls make it unusable for any host
+//! without a filesystem, the wasm/browser backend included).
+//!
+//! The public surface is unchanged: everything is re-exported, so
+//! `core/text_backend.zig`, `core/select.zig` and `src/mac/text.zig` need no
+//! edit. That includes the three estimator tests, which are now collected from
+//! `text_estimator.zig` — still exactly once, still through this module, so
+//! `tests.lock` does not move.
 const std = @import("std");
+const estimator = @import("text_estimator.zig");
 
-/// Clay-shaped text extent.
-pub const TextExtent = struct {
-    w: f32,
-    h: f32,
-};
+// ---- the shared, pure surface ----
 
-pub const ResolveFontError = error{
-    FontNotFound,
-};
+pub const TextExtent = estimator.TextExtent;
+pub const ResolveFontError = estimator.ResolveFontError;
+pub const estimatorExtent = estimator.estimatorExtent;
+pub const hashMeasureKey = estimator.hashMeasureKey;
+pub const extentCacheReset = estimator.extentCacheReset;
+pub const measureText = estimator.measureText;
+/// NOTE: these are **pointers** to the estimator's live counters, not the
+/// counter values. Splitting the estimator into `text_estimator.zig` means this
+/// module can no longer alias a `var`, and copying the u64 would silently
+/// desync the copy from the counter `measureText` actually increments. Nothing
+/// in the repository consumes them (they exist as a test seam, exercised by
+/// text_estimator's own tests), so the type change is inert — but read them as
+/// `text_backend.extent_hits.*`, not `text_backend.extent_hits`.
+pub const extent_hits = &estimator.extent_hits;
+pub const extent_misses = &estimator.extent_misses;
+
+// ---- the fs half of font loading ----
+
+/// Read a font file whole. This is the filesystem half of `core/glyphs.zig`'s
+/// font loading, living here for one reason: `glyphs.zig` is compiled by EVERY
+/// build — the wasm one included — so it must contain no filesystem and no
+/// `std.Io` reference at all. The platform text module owns that, and the wasm
+/// module answers `error.FontNotFound` because a browser has no paths to read.
+///
+/// `alloc` is the caller's, so the native call site can keep passing
+/// `std.heap.page_allocator` exactly as it did before the split, and the
+/// ownership rule (`glyphs.Font.deinit` frees with the same allocator) is
+/// unchanged.
+pub fn readFontBytes(path: [:0]const u8, alloc: std.mem.Allocator) ![]u8 {
+    // Zig 0.16's Io-based fs: cwd() is a Dir and every call needs an Io.
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const dir = std.Io.Dir.cwd();
+    const f = dir.openFile(io, path, .{}) catch return error.FontNotFound;
+    defer f.close(io);
+    const stat = f.stat(io) catch return error.FontNotFound;
+    const n = stat.size;
+    if (n == 0) return error.FontNotFound;
+    const buf = alloc.alloc(u8, @intCast(n)) catch return error.OutOfMemory;
+    errdefer alloc.free(buf);
+    const got = f.readPositionalAll(io, buf, 0) catch return error.FontNotFound;
+    if (got == 0) return error.FontNotFound;
+    return buf;
+}
+
+// ---- macOS system-font discovery (fs-backed) ----
 
 // macOS ships these system fonts, so a no-dependency test can still prove the
 // public font-resolution contract. Keep this list separate from the Linux
@@ -55,15 +110,6 @@ pub fn fontCandidates() []const [:0]const u8 {
     return font_candidates;
 }
 
-/// Pure-Zig fallback: deterministic, no C deps.
-pub fn estimatorExtent(text: []const u8, font_size: u16) TextExtent {
-    const size: f32 = @floatFromInt(font_size);
-    const h = size * 1.2;
-    if (text.len == 0) return .{ .w = 0, .h = h };
-    const len: f32 = @floatFromInt(text.len);
-    return .{ .w = len * size * 0.6, .h = h };
-}
-
 var cached_family: ?[:0]const u8 = null;
 
 pub fn pangoFamily() [:0]const u8 {
@@ -84,92 +130,10 @@ pub fn pangoFamily() [:0]const u8 {
     return fam;
 }
 
-const extent_cache_size: usize = 128;
-
-const ExtentEntry = struct {
-    hash: u64 = 0,
-    w: f32 = 0,
-    h: f32 = 0,
-    valid: bool = false,
-};
-
-var extent_cache: [extent_cache_size]ExtentEntry = [_]ExtentEntry{.{}} ** extent_cache_size;
-var extent_cache_next: usize = 0;
-pub var extent_hits: u64 = 0;
-pub var extent_misses: u64 = 0;
-
-/// Pure + headless-testable hash for the extent cache.
-pub fn hashMeasureKey(text_bytes: []const u8, font_size: u16) u64 {
-    var h: u64 = 0xcbf29ce484222325;
-    for (text_bytes) |b| {
-        h ^= b;
-        h *%= 0x100000001b3;
-    }
-    h ^= @as(u64, font_size);
-    h *%= 0x100000001b3;
-    h ^= @as(u64, text_bytes.len);
-    h *%= 0x100000001b3;
-    return h;
-}
-
-fn extentLookup(hash: u64) ?TextExtent {
-    for (extent_cache) |e| {
-        if (e.valid and e.hash == hash) return .{ .w = e.w, .h = e.h };
-    }
-    return null;
-}
-
-fn extentStore(hash: u64, ext: TextExtent) void {
-    extent_cache[extent_cache_next] = .{ .hash = hash, .w = ext.w, .h = ext.h, .valid = true };
-    extent_cache_next = (extent_cache_next + 1) % extent_cache_size;
-}
-
-pub fn extentCacheReset() void {
-    for (&extent_cache) |*e| e.valid = false;
-    extent_cache_next = 0;
-    extent_hits = 0;
-    extent_misses = 0;
-}
-
-pub fn measureText(text_bytes: []const u8, font_size: u16) TextExtent {
-    const key = hashMeasureKey(text_bytes, font_size);
-    if (extentLookup(key)) |hit| {
-        extent_hits += 1;
-        return hit;
-    }
-    extent_misses += 1;
-    const ext = estimatorExtent(text_bytes, font_size);
-    extentStore(key, ext);
-    return ext;
-}
-
 // NOTE: there is deliberately NO `resolveFont` test here. That check asserts
 // a macOS system font exists, so it only passes on macOS and would break the
 // identical cross-platform test count that the parity suite guarantees. Font
 // resolution on the native Pango path is covered by text.zig in `native-test`.
-
-test "measureText returns positive extent for non-empty, zero width for empty" {
-    const m = measureText("Settings", 18);
-    try std.testing.expect(m.w > 0);
-    try std.testing.expect(m.h > 0);
-    const e = measureText("", 18);
-    try std.testing.expectEqual(@as(f32, 0), e.w);
-}
-
-test "measureText is deterministic and cache resets cleanly" {
-    extentCacheReset();
-    const a = measureText("Settings", 18);
-    const b = measureText("Settings", 18);
-    try std.testing.expectApproxEqAbs(a.w, b.w, 1e-6);
-    try std.testing.expectApproxEqAbs(a.h, b.h, 1e-6);
-    try std.testing.expectEqual(@as(u64, 1), extent_misses);
-    try std.testing.expectEqual(@as(u64, 1), extent_hits);
-    extentCacheReset();
-}
-
-test "hashMeasureKey differs by bytes/size/len" {
-    const a = hashMeasureKey("Settings", 18);
-    try std.testing.expectEqual(a, hashMeasureKey("Settings", 18));
-    try std.testing.expect(hashMeasureKey("Settings", 16) != a);
-    try std.testing.expect(hashMeasureKey("Setting", 18) != a);
-}
+//
+// The estimator's three tests now live in core/text_estimator.zig. They are
+// still reached from here, so the parity count is unchanged.
