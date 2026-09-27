@@ -29,6 +29,11 @@ pub const resolveFont = portable.resolveFont;
 /// because the first file that merely EXISTS may be a TrueType collection,
 /// which no rasterizer can load; it keeps the first that actually parses.
 pub const fontCandidates = portable.fontCandidates;
+/// Read a font file whole. Forwarded from the portable module so
+/// `core/text_backend.zig` resolves on this platform too — see
+/// `core/text_portable.zig` for why the fs half of font loading lives there
+/// rather than in `core/glyphs.zig` (which every build compiles, wasm included).
+pub const readFontBytes = portable.readFontBytes;
 pub const estimatorExtent = portable.estimatorExtent;
 pub const hashMeasureKey = portable.hashMeasureKey;
 pub const extentCacheReset = portable.extentCacheReset;
