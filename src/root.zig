@@ -4,7 +4,20 @@
 //! and headless-test surface. ZERO ui/* imports by design. Consumers do
 //! `@import("glinlandui")`.
 const builtin = @import("builtin");
-const platform = @import("platform.zig");
+
+/// The composition root, exposed so an APPLICATION can reach the two things that
+/// genuinely differ between platforms: `platform.allocator` and
+/// `platform.web_exports`.
+///
+/// This is what lets one `main.zig` serve Linux, macOS and the browser. The
+/// alternative — a per-platform entry point — duplicated the Host setup, the
+/// window config and the delegate wiring in every application, and differed only
+/// in how the program starts, which `Window.run()` already abstracts.
+///
+/// It is `pub` rather than private because `src/main.zig` and
+/// `examples/calculator.zig` are separate modules that import the library by
+/// name; they cannot see a private declaration.
+pub const platform = @import("platform.zig");
 
 // Clay bindings re-export: ui consumers must use `glinlandui.zclay` (not
 // a second `@import("zclay")`) so Clay types crossing the library
@@ -55,6 +68,66 @@ pub const parseTestFrames = platform.parseTestFrames;
 /// spelled it `glinlandui.wayland_lib.*` keep compiling. New code should use
 /// the top-level names (`glinlandui.Window`, `glinlandui.render`, …).
 pub const wayland_lib = platform;
+
+/// The browser backend's modules, for the wasm entry point (`src/web_main.zig`).
+///
+/// ## Why this exists rather than a relative import in the entry point
+///
+/// Zig rejects a file that belongs to two modules: `src/root.zig`'s aggregate
+/// test block already imports every one of these, so a relative
+/// `@import("web/window.zig")` from `src/web_main.zig` fails with
+/// `file exists in modules 'root' and 'glinlandui'`. Re-exporting them here is
+/// the only way the entry point can reach them, and it is also the honest
+/// statement of the dependency — the entry point uses the library's public
+/// surface, exactly as `src/main.zig` does.
+///
+/// ## What is deliberately NOT here
+///
+/// `web/compat_impl.zig` and `web/window.zig`'s allocator. `compat_impl.zig`
+/// names `std.heap.wasm_allocator`, whose methods lower to `@wasmMemoryGrow` and
+/// cannot be analysed on a native target — and this module IS analysed on Linux
+/// and macOS by the parity suite. So the entry point imports that one file
+/// relatively, and it is the only `src/web/` file it may do that with.
+///
+/// `web/window.zig` itself is reachable here only as a TYPE and a set of
+/// methods; it is not selected by `platform.zig` on a native build, so importing
+/// it costs a native build nothing but a type-check.
+pub const web = struct {
+    pub const window = @import("web/window.zig");
+    pub const input = @import("web/input.zig");
+    pub const adapter = @import("web/adapter.zig");
+    pub const keymap = @import("web/keymap.zig");
+    pub const present = @import("web/present.zig");
+    pub const renderer = @import("web/renderer.zig");
+    pub const text = @import("web/text.zig");
+    /// The C-heap arithmetic. Pure and allocator-generic, so it is in the parity
+    /// suite; `compat_impl.zig` (the `export fn` surface) is not, and is reached
+    /// only from the wasm entry point.
+    pub const compat_heap = @import("web/compat_heap.zig");
+    /// The freestanding C runtime's `export fn` surface — `malloc`, `free`,
+    /// `strtol`, the `str*` family.
+    ///
+    /// Re-exported so an application OUTSIDE `src/` can force it into the link.
+    /// `src/main.zig` imports it relatively (both sit in `src/`), but
+    /// `examples/calculator.zig` cannot: a relative path would escape its module
+    /// root, which Zig rejects. So the library carries it, and the example
+    /// references `glinlandui.web.compat_impl` in a `comptime` block.
+    ///
+    /// It is NOT in the parity suite and must not be: it names
+    /// `std.heap.wasm_allocator`, whose methods lower to `@wasmMemoryGrow` and
+    /// cannot be analysed on a native target. The reference is guarded by
+    /// `isWasm` at every call site for that reason.
+    ///
+    /// Reached through a FUNCTION rather than a direct `@import`, because a
+    /// direct import would put `web/compat_impl.zig` in this module — and the
+    /// application root already imports it relatively, so Zig would reject the
+    /// file for belonging to two modules (`file exists in modules 'root' and
+    /// 'glinlandui'`). A function body is only analysed when called, and the
+    /// call sites are all guarded by `isWasm`.
+    pub fn compatImpl() type {
+        return @import("web/compat_impl.zig");
+    }
+};
 
 // Agnostic reusable Clay components (moved from qs src/ui/components).
 // Namespaced under `components` so `components.text` (label widget) never
@@ -177,6 +250,31 @@ test {
     // platform.zig on Linux — that is linux/window.zig — it is imported purely so
     // its portable tests run everywhere.)
     _ = @import("core/window_portable.zig");
+
+    // The web backend's PURE parts — everything in src/web/ that makes a
+    // decision, as opposed to forwarding. The mirror-image reason to the
+    // linux/ and mac/ entries above: a typo in a browser event translation or in
+    // the C-heap arithmetic is a bug that would otherwise be reachable only by
+    // opening a tab, and this suite makes it fail on Linux and macOS instead.
+    //
+    // What is deliberately ABSENT: web/window.zig and web/compat_impl.zig. Both
+    // name `std.heap.wasm_allocator`, whose methods lower to `@wasmMemoryGrow`
+    // and therefore cannot be analysed on a native target at all. They are
+    // forwarding code by construction; the logic they forward to is here.
+    _ = @import("web/compat_heap.zig");
+    // The browser's event translations, added to the parity suite for exactly the
+    // reason the linux/ and mac/ ones are: a dropped evdev code or a swapped
+    // button number is silently wrong in a way only a real user notices, so it
+    // must fail on Linux and macOS rather than only in a browser.
+    _ = @import("web/keymap.zig");
+    _ = @import("web/input.zig");
+    _ = @import("web/adapter.zig");
+    _ = @import("web/present.zig");
+    // No tests, imported so they are TYPE-CHECKED on both platforms — the same
+    // trick mac/renderer.zig and mac/text.zig use. Nothing here may cImport
+    // (rule R6).
+    _ = @import("web/renderer.zig");
+    _ = @import("web/text.zig");
 
     _ = @import("core/components/box.zig");
     _ = @import("core/components/button.zig");

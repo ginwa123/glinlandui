@@ -97,6 +97,30 @@ pub fn fontCandidates() []const [:0]const u8 {
     return font_candidates;
 }
 
+/// Read a font file whole. The fs half of font loading, which lives in the
+/// platform text module rather than in `core/glyphs.zig` — see
+/// `core/text_portable.zig` for why: `glyphs.zig` is compiled by EVERY build,
+/// the wasm one included, so it must hold no filesystem code at all.
+///
+/// Windows has a real filesystem, so this is the same implementation the
+/// portable module uses. It is duplicated rather than re-exported because
+/// `windows/text.zig` deliberately does NOT re-export the portable module's
+/// font list (see `fontCandidates` above) — the two are separate on purpose.
+pub fn readFontBytes(path: [:0]const u8, alloc: std.mem.Allocator) ![]u8 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const dir = std.Io.Dir.cwd();
+    const f = dir.openFile(io, path, .{}) catch return error.FontNotFound;
+    defer f.close(io);
+    const stat = f.stat(io) catch return error.FontNotFound;
+    const n = stat.size;
+    if (n == 0) return error.FontNotFound;
+    const buf = alloc.alloc(u8, @intCast(n)) catch return error.OutOfMemory;
+    errdefer alloc.free(buf);
+    const got = f.readPositionalAll(io, buf, 0) catch return error.FontNotFound;
+    if (got == 0) return error.FontNotFound;
+    return buf;
+}
+
 const std = @import("std");
 
 /// The family name reported for a resolved font. The portable estimator only

@@ -409,6 +409,19 @@ fn tint(key: Key) struct { bg: Color, hover_bg: Color } {
 pub const App = struct {
     m: Machine = Machine.init(),
 
+    /// The webapp's embedded font, read by `web/exports.zig` from `glin_web_init`.
+    ///
+    /// It lives on the APP TYPE rather than in the entry-point file because the
+    /// export surface is generic over the app: `Exports(App, App.root)` can only
+    /// see declarations that belong to `App`. A declaration in the entry-point
+    /// file would be invisible to it, and the font would silently never install.
+    ///
+    /// Empty on native, where the backends resolve a font from the filesystem.
+    pub const embedded_font: []const u8 = if (@import("builtin").cpu.arch.isWasm())
+        @import("font_data").bytes
+    else
+        &.{};
+
     /// Press one key and report it as consumed.
     fn pressKey(self: *App, key: Key) bool {
         self.m.press(key);
@@ -436,6 +449,20 @@ pub const App = struct {
             KEY_KP_DIVIDE => self.pressKey(.divide),
             else => false,
         };
+    }
+
+    /// Called by the web entry point once the Host exists, so the app can wire
+    /// anything that depends on it.
+    ///
+    /// The native `main` below does this inline (`host.keys.register(...)`), but
+    /// the web entry point has no `main` to run — it creates the Host itself. So
+    /// the registration lives here, and BOTH paths call it: `main` calls it
+    /// directly, and `web/exports.zig` calls it through `@hasDecl`.
+    ///
+    /// Without this the calculator's keyboard would be dead in a browser while
+    /// working natively — which is exactly what happened before the hook existed.
+    pub fn onHostReady(host: *glinlandui.host.Host, app: *App) void {
+        host.keys.register(App.onKey, app);
     }
 
     /// The Clay declare callback: everything drawing happens here.
@@ -546,19 +573,74 @@ fn onKeyPress(ctx: ?*anyopaque, index: usize) void {
     self.m.press(KEYS_BY_INDEX[index]);
 }
 
+/// The browser's exported ABI, bound to THIS application.
+///
+/// On a wasm build this instantiates `src/web/exports.zig` with this app's type
+/// and root callback, which forces every `export fn` into the link. On native it
+/// is a no-op struct with the same shape, so this line compiles to nothing and
+/// the same `main` serves every platform — there is no `web_calculator_main.zig`,
+/// and there should not be.
+const web = glinlandui.platform.web_exports.Exports(App, App.root);
+
+/// The webapp's font, as a generated module. See `makeFontModule` in build.zig.
+const font_data = @import("font_data");
+
+/// The embedded font, installed by `web/exports.zig` from `glin_web_init`.
+///
+/// See `src/main.zig` for the full explanation: this is what makes text glyphs in
+/// a browser rather than bars, and it has to happen at runtime because the web
+/// entry point has no `main` to run.
+///
+/// Empty on native, where the backends resolve a font from the filesystem.
+pub const embedded_font: []const u8 = if (@import("builtin").cpu.arch.isWasm())
+    font_data.bytes
+else
+    &.{};
+// The freestanding C runtime, reached THROUGH the library.
+//
+// `src/main.zig` imports `web/compat_impl.zig` relatively, which works because
+// both sit in `src/`. This file is in `examples/`, so a relative path would be
+// `../src/web/compat_impl.zig` — and Zig rejects an import that escapes the
+// module's root directory. The library re-exports it instead, which is also the
+// honest statement of the dependency: the example uses the library's surface.
+//
+// See `src/main.zig` for why the import is forced at all (the vendored C TUs
+// need `malloc`/`free`/`strtol`) and why it is guarded by `isWasm` (on native
+// there is a real libc, and defining these again would be a duplicate symbol).
+comptime {
+    if (@import("builtin").cpu.arch.isWasm()) {
+        _ = glinlandui.web.compatImpl();
+    }
+}
+
+/// The page's `std.log` sink, on a wasm build. See `src/main.zig` for why this is
+/// conditional: overriding `logFn` with a no-op on Linux would silence the
+/// Wayland diagnostics the native build relies on.
+pub const std_options: std.Options = if (@import("builtin").cpu.arch.isWasm())
+    .{ .logFn = web.logFn }
+else
+    .{};
+
 pub fn main() !void {
-    // The Clay arena outlives run() and is process-lifetime, so the page
-    // allocator matches the harness convention (see core/testing/root.zig).
-    const alloc = std.heap.page_allocator;
+    // The Clay arena outlives run() and is process-lifetime, so the allocator
+    // matches the harness convention (see core/testing/root.zig). On the web this
+    // is `wasm_allocator`; see `platform.allocator`.
+    const alloc = glinlandui.platform.allocator;
 
     var app = App{};
     var host = try glinlandui.host.Host.init(alloc, &app, App.root);
     defer host.deinit();
 
-    // Keys reach the app through the Host's chain, not the delegate.
-    host.keys.register(App.onKey, &app);
+    // Keys reach the app through the Host's chain, not the delegate. This is what
+    // makes the numeric keypad work in a browser: `src/web/keymap.zig` translates
+    // `"NumpadAdd"` to evdev 78, and `App.onKey` maps 78 to `plus`. The chain is
+    // the same one the native build uses.
+    //
+    // Registered through `onHostReady` rather than inline, so the web entry point
+    // (which creates its own Host and has no `main` to run) wires the same thing.
+    App.onHostReady(&host, &app);
 
-    var window = glinlandui.Window.init(.{
+    var window = glinlandui.Window.init(alloc, .{
         .app_id = "glinlandui-calculator",
         .title = "glinlandui - calculator",
         .width = 360,
@@ -575,7 +657,14 @@ pub fn main() !void {
     // until closed. Headless (CI, no GUI session) the window cannot open;
     // that is an expected environment, not a failure, so render the same
     // tree through the software rasterizer instead.
+    //
+    // On the web this ARMS the loop and returns — the page owns the event loop.
     window.run() catch |err| {
+        // The headless fallback is NATIVE-ONLY, and the guard is load-bearing:
+        // `std.debug.print` reaches `std.Io.Threaded` for its stderr lock, which
+        // cannot be analysed for a freestanding target. A browser has no stderr
+        // anyway; the page reads `glin_web_log_errors()` instead.
+        if (@import("builtin").cpu.arch.isWasm()) return;
         std.debug.print(
             "window unavailable ({s}); rendering headless instead\n",
             .{@errorName(err)},
@@ -587,6 +676,9 @@ pub fn main() !void {
 /// Render one real frame through the normal frame path into a software
 /// surface and report how many pixels were drawn. Used when no display is
 /// available, so the example still exercises and proves the renderer.
+///
+/// NATIVE-ONLY: it uses `std.debug.print` and `std.c.getenv`, neither of which
+/// exists on a freestanding target. The caller guards it with `isWasm`.
 fn renderHeadless(host: *glinlandui.host.Host, w: u32, h: u32) !void {
     const soft = glinlandui.software_render;
     var renderer = try soft.Renderer.init(std.heap.page_allocator);
@@ -972,7 +1064,6 @@ test "declaring the app emits the display, every key and the row boxes" {
     // page-allocator arena is intentionally left alive for the rest of the
     // test process — exactly what core/testing/root.zig's Driver.deinit does.
     var host = try glinlandui.host.Host.init(alloc, &app, App.root);
-    host.keys.register(App.onKey, &app);
 
     var opt = glinlandui.frame.FrameOptions{};
     opt.probe = Rec.probe;
@@ -996,7 +1087,7 @@ test "a click on a declared key fires its indexed handler" {
     // page-allocator arena is intentionally left alive for the rest of the
     // test process — exactly what core/testing/root.zig's Driver.deinit does.
     var host = try glinlandui.host.Host.init(alloc, &app, App.root);
-    host.keys.register(App.onKey, &app);
+
     host.frame(360, 440);
 
     // Click the "7" key (row 1, col 0) at its own center, the same way

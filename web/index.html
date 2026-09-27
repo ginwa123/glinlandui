@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>glinlandui — WebAssembly</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>glinlandui</h1>
+      <p class="lede">
+        The same Clay tree, the same CPU rasterizer and the same test suite as
+        the Linux and macOS builds — compiled to WebAssembly and drawn into a
+        canvas.
+      </p>
+
+      <!--
+        The toolkit's window. Tabindex so it can take keyboard focus; the UI is
+        drawn by wasm, so everything below the canvas is page chrome that the
+        toolkit knows nothing about.
+      -->
+      <canvas id="canvas" tabindex="0" width="960" height="720">
+        Your browser does not support the canvas element.
+      </canvas>
+
+      <p id="status" role="status">Loading…</p>
+
+      <p class="hint">
+        Click the canvas to focus it. Escape quits the toolkit's loop; a click,
+        a drag, the wheel and the keyboard are all translated by pure Zig.
+      </p>
+
+      <p class="hint">
+        <a id="switch" href="?app=calculator">Open the calculator →</a>
+      </p>
+
+      <noscript>
+        <p class="error">
+          glinlandui is a WebAssembly application and needs JavaScript to load
+          the module. Nothing is drawn without it.
+        </p>
+      </noscript>
+    </main>
+
+    <script type="module" src="shim.js"></script>
+  </body>
+</html>

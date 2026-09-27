@@ -21,12 +21,51 @@
 # discuss these rules — this file, src/README.md and the module headers all
 # mention `builtin.os.tag`, `@cImport` and the folder names — and a rule that
 # cannot tell a comment from code would forbid explaining itself.
+#
+# NOTE ON `rg`: this script uses ripgrep, and the `layering` CI job is
+# deliberately toolchain-free (no Zig, no apt) so it runs in seconds. A bare
+# ubuntu runner does NOT have `rg` — and when it is missing, every `rg` call
+# fails, `set -e` is not enough to catch it inside a `$(...)`, and the rules
+# report FALSE VIOLATIONS. That is exactly what happened: R7 failed on CI while
+# passing locally, because locally `rg` exists.
+#
+# So the script now checks for `rg` up front and falls back to `grep -rE`. The
+# fallback is not as fast and does not understand `--glob`, so the glob is
+# applied by filtering the file list instead. A gate that silently inverts its
+# own answer when a tool is missing is worse than no gate.
 set -euo pipefail
 fail=0
 
 # Files a rule can apply to. Markdown is deliberately excluded: it describes the
 # rules rather than participating in them.
 SOURCE_GLOB='*.{zig,c,h,m}'
+
+# Which search tool to use. `rg` when present (fast, respects .gitignore),
+# `grep -rE` otherwise (always present). Both are invoked through `search()`
+# below so no rule has to know which one it got.
+if command -v rg >/dev/null 2>&1; then
+  HAVE_RG=1
+else
+  HAVE_RG=0
+  echo "layering: note: ripgrep not found; falling back to grep -rE" >&2
+fi
+
+# search <path> <glob> <regex> -> matching lines on stdout, empty on no match.
+# Never fails the script: a missing tool or an empty result is "no match", and
+# the CALLER decides whether that is a pass or a violation.
+search() {
+  local path="$1" glob="$2" pattern="$3"
+  if [ "$HAVE_RG" = "1" ]; then
+    rg -n --glob "$glob" -e "$pattern" "$path" 2>/dev/null || true
+  else
+    # grep has no --glob, so walk the tree and filter by extension. The glob is
+    # always of the form '*.{a,b,c}', so the brace list is expanded by hand.
+    local exts
+    exts="$(printf '%s' "$glob" | sed -E 's/^\*\.\{(.*)\}$/\1/; s/,/|/g')"
+    grep -rnE --include='*' -e "$pattern" "$path" 2>/dev/null \
+      | grep -E "\.($exts):" || true
+  fi
+}
 
 # scan <search-path> <glob> <regex> <message>
 # An empty result (including "no such file yet") is a pass, not a violation.
@@ -35,7 +74,7 @@ SOURCE_GLOB='*.{zig,c,h,m}'
 # .zig in the tree. Path + one glob is what expresses "these rules, these files".
 scan() {
   local matches
-  matches="$(rg -n --glob "$2" -e "$3" "$1" 2>/dev/null || true)"
+  matches="$(search "$1" "$2" "$3")"
   if [ -n "$matches" ]; then
     echo "$4" >&2
     printf '%s\n' "$matches" >&2
@@ -52,7 +91,7 @@ scan src/core "$SOURCE_GLOB" '@import\("\.\./(\.\./)?(linux|mac|windows)/' \
 # ---------------------------------------------------------------------------
 # R2 — exactly one bridge from core to the composition root.
 # ---------------------------------------------------------------------------
-R2_HITS="$(rg -n --glob "$SOURCE_GLOB" -e '@import\("\.\./platform\.zig"\)' src/core 2>/dev/null || true)"
+R2_HITS="$(search src/core "$SOURCE_GLOB" '@import\("\\.\\./platform\\.zig"\\)')"
 R2_BAD="$(printf '%s' "$R2_HITS" | grep -v '^src/core/select\.zig:')" || true
 if [ -n "$R2_BAD" ]; then
   echo "R2 violated: only src/core/select.zig may import ../platform.zig" >&2
@@ -78,19 +117,29 @@ scan src/core "$SOURCE_GLOB" '@cInclude\("(EGL|GLES|pango|cocoa|wayland|d3d11|dx
 
 # ---------------------------------------------------------------------------
 # R4 — the backends are siblings, not a hierarchy.
+#
+# Two folders when this rule was written, three now (web/ joined for the browser
+# backend), so the two pairwise greps became a loop over all three: no backend
+# may import another. The loop is what makes a fourth platform a one-line change
+# rather than a set of scans someone will forget to add.
+#
+# A backend reaching a sibling is the same bug class as core/ reaching a
+# platform, one level down: it would make one platform's build depend on
+# another's C headers, its `shim.h` (which is the reason the platform include
+# paths are mutually exclusive — see I4), or its windowing system.
 # ---------------------------------------------------------------------------
-scan src/linux "$SOURCE_GLOB" '@import\("\.\./(\.\./)?(mac|windows)/' \
-  "R4 violated: src/linux/** imports mac/ or windows/"
-scan src/mac "$SOURCE_GLOB" '@import\("\.\./(\.\./)?(linux|windows)/' \
-  "R4 violated: src/mac/** imports linux/ or windows/"
-scan src/windows "$SOURCE_GLOB" '@import\("\.\./(\.\./)?(linux|mac)/' \
-  "R4 violated: src/windows/** imports linux/ or mac/"
+for backend in linux mac windows web; do
+  for other in linux mac windows web; do
+    if [ "$backend" = "$other" ]; then continue; fi
+    scan "src/$backend" "$SOURCE_GLOB" "@import\(\"\.\./(\.\./)?$other/" \
+      "R4 violated: src/$backend/** imports src/$other/"
+  done
+done
 
 # ---------------------------------------------------------------------------
 # R5 — one OS switch, in the composition root, and nowhere else.
 # ---------------------------------------------------------------------------
-R5_HITS="$(rg -n --glob "$SOURCE_GLOB" --glob '!src/platform.zig' \
-  -e 'os\.tag' src 2>/dev/null || true)"
+R5_HITS="$(search src "$SOURCE_GLOB" 'os\\.tag' | grep -v '^src/platform\\.zig:')" || true
 if [ -n "$R5_HITS" ]; then
   echo "R5 violated: the OS is chosen outside src/platform.zig (os.tag)" >&2
   printf '%s\n' "$R5_HITS" >&2
@@ -110,15 +159,95 @@ for f in src/mac/present.zig src/mac/keymap.zig src/mac/adapter.zig src/mac/inpu
          src/mac/renderer.zig src/mac/text.zig \
          src/linux/keymap.zig src/linux/input.zig src/linux/adapter.zig \
          src/windows/keymap.zig src/windows/input.zig src/windows/adapter.zig \
-         src/windows/present.zig src/windows/renderer.zig src/windows/text.zig; do
+         src/windows/present.zig src/windows/renderer.zig src/windows/text.zig \
+         src/web/present.zig src/web/keymap.zig src/web/adapter.zig src/web/input.zig \
+         src/web/renderer.zig src/web/text.zig src/web/compat_heap.zig; do
   # Match the CALL, not a mention: these files legitimately discuss @cImport in
   # their doc comments ("this module needs no @cImport"), and a rule that cannot
   # tell a comment from a call would forbid explaining the rule.
-  if [ -f "$f" ] && rg -q '@cImport[[:space:]]*\(' "$f"; then
+  #
+  # Note what is ABSENT from the web list: web/window.zig and web/compat_impl.zig.
+  # They are not in the parity suite — they name `std.heap.wasm_allocator`, whose
+  # methods lower to `@wasmMemoryGrow` and cannot be analysed on a native target
+  # — so R6 does not apply to them. R8 below does, because it is scoped by FOLDER
+  # rather than by suite membership. The two rules are deliberately
+  # complementary: R6 says "this file is compiled on every OS, so keep it pure",
+  # R8 says "this folder is compiled for wasm, so keep it freestanding".
+  if [ -f "$f" ] && grep -qE '@cImport[[:space:]]*\(' "$f"; then
     echo "R6 violated: $f is in the parity suite but cImports" >&2
     fail=1
   fi
 done
+
+# ---------------------------------------------------------------------------
+# R7 — the freestanding C-compile compat headers may only reach a WASM build's
+# include path.
+#
+# This is the same trap as I4's two `shim.h` files, one level down: `stb_truetype.h`
+# does `#include <stdlib.h>`, and if `src/web/compat` were ever on a native
+# include path that would silently resolve to OUR declaration-only header,
+# changing what the Linux and macOS backends compile against — with no error and
+# no way to notice from a test.
+#
+# Two halves, and only one of them is greppable:
+#
+#   (a) GREPPED HERE: no source file may NAME the compat directory as an include
+#       target. Sources reach it through `#include <stdlib.h>` and the gated
+#       include path, never by path, so a mention under src/ means someone has
+#       bypassed the gate.
+#
+#       The pattern matches an INCLUDE, not a bare mention, for the same reason
+#       R6 matches the `@cImport(` call: the compat headers legitimately explain
+#       themselves in prose ("the definitions live in `src/web/compat_impl.zig`"),
+#       and a rule that cannot tell a comment from an include would forbid
+#       documenting the rule. The three forms that would actually bypass the gate
+#       are a C `#include` by path, a Zig `@cInclude` by path, and a hand-written
+#       `-I` flag — all three are matched, and all three were verified to FAIL
+#       this script before it was trusted (see the note at the end of this file).
+#   (b) GREPPED HERE TOO: the primary gate must actually be there — the compat
+#       include path has to appear within a few lines of `if (is_wasm) {`.
+#   (c) NOT GREPPABLE: that the second site (`makeWebModule`) is reached only for
+#       a wasm target. Grep cannot see call nesting. It is proven by the native
+#       build: `zig build` and `zig build test` in CI would either fail or change
+#       behaviour if a compat header shadowed a system one. That is a weaker
+#       guarantee than a grep, and it is stated here rather than implied.
+# ---------------------------------------------------------------------------
+R7_LEAK="$(search src "$SOURCE_GLOB" '#include[[:space:]]*"src/web/compat|@cInclude\([[:space:]]*"src/web/compat|-I[[:space:]]*src/web/compat')"
+if [ -n "$R7_LEAK" ]; then
+  echo "R7 violated: a source file includes src/web/compat by path instead of through the gated include path" >&2
+  printf '%s\n' "$R7_LEAK" >&2
+  fail=1
+fi
+
+if [ -f build.zig ]; then
+  R7_GATE="$(grep -A4 -E 'if \(is_wasm\) \{' build.zig 2>/dev/null | grep -e 'src/web/compat' || true)"
+  if [ -z "$R7_GATE" ]; then
+    echo "R7 violated: the compat include path is not inside an \`if (is_wasm)\` block" >&2
+    fail=1
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# R8 — src/web/** is compiled for wasm, so it must stay freestanding.
+#
+# The property that makes the folder compilable at all: no blocking I/O, no
+# filesystem, no threads. A browser has none of them, and `std.Io.Threaded` — the
+# reactor `core/text_portable.zig` uses to probe font paths — cannot even be
+# ANALYSED for a freestanding target, so a convenience call added here breaks the
+# wasm build rather than failing at runtime.
+#
+# The pattern matches the CALL (`std.Io.Dir`, `std.fs.File`, `std.Thread.Mutex`,
+# `std.process.exit`) and not a bare mention, for the same reason R6 does: these
+# files legitimately discuss the rules in their headers — web/text.zig explains at
+# length WHY a browser cannot use `std.Io` — and a rule that cannot tell a comment
+# from a call would forbid explaining it.
+#
+# Scope note: this covers `src/web/**`, not `src/web_main.zig`. The entry point is
+# where `std.heap.wasm_allocator` and `std_options` are named, so it is allowed
+# `std.heap` — and it is small enough to read.
+# ---------------------------------------------------------------------------
+scan src/web "$SOURCE_GLOB" 'std\.(Io|fs|Thread|process)\.' \
+  "R8 violated: src/web/** uses std.Io/std.fs/std.Thread/std.process, which has no meaning in a wasm module"
 
 if [ "$fail" -ne 0 ]; then
   echo "layering: FAILED" >&2

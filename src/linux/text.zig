@@ -62,6 +62,27 @@ pub fn fontCandidates() []const [:0]const u8 {
     return font_candidates;
 }
 
+/// Read a font file whole. See `core/text_portable.zig`'s counterpart: this
+/// exists so `core/glyphs.zig` — which every build compiles, wasm included —
+/// holds no filesystem code of its own. Linux production measures text through
+/// Pango and draws it through the GLES3 atlas, so this is reached only by the
+/// test/CPU path; it is implemented identically to the portable one so the two
+/// cannot drift.
+pub fn readFontBytes(path: [:0]const u8, alloc: std.mem.Allocator) ![]u8 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const dir = std.Io.Dir.cwd();
+    const f = dir.openFile(io, path, .{}) catch return error.FontNotFound;
+    defer f.close(io);
+    const stat = f.stat(io) catch return error.FontNotFound;
+    const n = stat.size;
+    if (n == 0) return error.FontNotFound;
+    const buf = alloc.alloc(u8, @intCast(n)) catch return error.OutOfMemory;
+    errdefer alloc.free(buf);
+    const got = f.readPositionalAll(io, buf, 0) catch return error.FontNotFound;
+    if (got == 0) return error.FontNotFound;
+    return buf;
+}
+
 /// Pure-Zig fallback: deterministic, no C deps. Used when Pango fails
 /// (headless without fontconfig, oversized text, or C null returns).
 pub fn estimatorExtent(text: []const u8, font_size: u16) TextExtent {

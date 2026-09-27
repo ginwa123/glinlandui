@@ -28,6 +28,11 @@ pub const resolveFont = native.resolveFont;
 /// because the first file that merely EXISTS may be a TrueType collection,
 /// which no rasterizer can load; it keeps the first that actually parses.
 pub const fontCandidates = native.fontCandidates;
+/// Read a font file whole — the only fs-shaped thing in the text surface, and
+/// the reason `core/glyphs.zig` (compiled by every build, wasm included) can
+/// stay free of `std.Io`. macOS's `text.zig` forwards the portable
+/// implementation; the wasm one refuses, since a browser has no paths.
+pub const readFontBytes = native.readFontBytes;
 pub const estimatorExtent = native.estimatorExtent;
 pub const hashMeasureKey = native.hashMeasureKey;
 pub const extentCacheReset = native.extentCacheReset;
