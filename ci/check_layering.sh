@@ -21,12 +21,51 @@
 # discuss these rules — this file, src/README.md and the module headers all
 # mention `builtin.os.tag`, `@cImport` and the folder names — and a rule that
 # cannot tell a comment from code would forbid explaining itself.
+#
+# NOTE ON `rg`: this script uses ripgrep, and the `layering` CI job is
+# deliberately toolchain-free (no Zig, no apt) so it runs in seconds. A bare
+# ubuntu runner does NOT have `rg` — and when it is missing, every `rg` call
+# fails, `set -e` is not enough to catch it inside a `$(...)`, and the rules
+# report FALSE VIOLATIONS. That is exactly what happened: R7 failed on CI while
+# passing locally, because locally `rg` exists.
+#
+# So the script now checks for `rg` up front and falls back to `grep -rE`. The
+# fallback is not as fast and does not understand `--glob`, so the glob is
+# applied by filtering the file list instead. A gate that silently inverts its
+# own answer when a tool is missing is worse than no gate.
 set -euo pipefail
 fail=0
 
 # Files a rule can apply to. Markdown is deliberately excluded: it describes the
 # rules rather than participating in them.
 SOURCE_GLOB='*.{zig,c,h,m}'
+
+# Which search tool to use. `rg` when present (fast, respects .gitignore),
+# `grep -rE` otherwise (always present). Both are invoked through `search()`
+# below so no rule has to know which one it got.
+if command -v rg >/dev/null 2>&1; then
+  HAVE_RG=1
+else
+  HAVE_RG=0
+  echo "layering: note: ripgrep not found; falling back to grep -rE" >&2
+fi
+
+# search <path> <glob> <regex> -> matching lines on stdout, empty on no match.
+# Never fails the script: a missing tool or an empty result is "no match", and
+# the CALLER decides whether that is a pass or a violation.
+search() {
+  local path="$1" glob="$2" pattern="$3"
+  if [ "$HAVE_RG" = "1" ]; then
+    rg -n --glob "$glob" -e "$pattern" "$path" 2>/dev/null || true
+  else
+    # grep has no --glob, so walk the tree and filter by extension. The glob is
+    # always of the form '*.{a,b,c}', so the brace list is expanded by hand.
+    local exts
+    exts="$(printf '%s' "$glob" | sed -E 's/^\*\.\{(.*)\}$/\1/; s/,/|/g')"
+    grep -rnE --include='*' -e "$pattern" "$path" 2>/dev/null \
+      | grep -E "\.($exts):" || true
+  fi
+}
 
 # scan <search-path> <glob> <regex> <message>
 # An empty result (including "no such file yet") is a pass, not a violation.
@@ -35,7 +74,7 @@ SOURCE_GLOB='*.{zig,c,h,m}'
 # .zig in the tree. Path + one glob is what expresses "these rules, these files".
 scan() {
   local matches
-  matches="$(rg -n --glob "$2" -e "$3" "$1" 2>/dev/null || true)"
+  matches="$(search "$1" "$2" "$3")"
   if [ -n "$matches" ]; then
     echo "$4" >&2
     printf '%s\n' "$matches" >&2
@@ -52,7 +91,7 @@ scan src/core "$SOURCE_GLOB" '@import\("\.\./(\.\./)?(linux|mac|windows)/' \
 # ---------------------------------------------------------------------------
 # R2 — exactly one bridge from core to the composition root.
 # ---------------------------------------------------------------------------
-R2_HITS="$(rg -n --glob "$SOURCE_GLOB" -e '@import\("\.\./platform\.zig"\)' src/core 2>/dev/null || true)"
+R2_HITS="$(search src/core "$SOURCE_GLOB" '@import\("\\.\\./platform\\.zig"\\)')"
 R2_BAD="$(printf '%s' "$R2_HITS" | grep -v '^src/core/select\.zig:')" || true
 if [ -n "$R2_BAD" ]; then
   echo "R2 violated: only src/core/select.zig may import ../platform.zig" >&2
@@ -100,8 +139,7 @@ done
 # ---------------------------------------------------------------------------
 # R5 — one OS switch, in the composition root, and nowhere else.
 # ---------------------------------------------------------------------------
-R5_HITS="$(rg -n --glob "$SOURCE_GLOB" --glob '!src/platform.zig' \
-  -e 'os\.tag' src 2>/dev/null || true)"
+R5_HITS="$(search src "$SOURCE_GLOB" 'os\\.tag' | grep -v '^src/platform\\.zig:')" || true
 if [ -n "$R5_HITS" ]; then
   echo "R5 violated: the OS is chosen outside src/platform.zig (os.tag)" >&2
   printf '%s\n' "$R5_HITS" >&2
@@ -135,7 +173,7 @@ for f in src/mac/present.zig src/mac/keymap.zig src/mac/adapter.zig src/mac/inpu
   # rather than by suite membership. The two rules are deliberately
   # complementary: R6 says "this file is compiled on every OS, so keep it pure",
   # R8 says "this folder is compiled for wasm, so keep it freestanding".
-  if [ -f "$f" ] && rg -q '@cImport[[:space:]]*\(' "$f"; then
+  if [ -f "$f" ] && grep -qE '@cImport[[:space:]]*\(' "$f"; then
     echo "R6 violated: $f is in the parity suite but cImports" >&2
     fail=1
   fi
@@ -174,11 +212,7 @@ done
 #       behaviour if a compat header shadowed a system one. That is a weaker
 #       guarantee than a grep, and it is stated here rather than implied.
 # ---------------------------------------------------------------------------
-R7_LEAK="$(rg -n --glob "$SOURCE_GLOB" \
-  -e '#include[[:space:]]*"src/web/compat' \
-  -e '@cInclude\([[:space:]]*"src/web/compat' \
-  -e '-I[[:space:]]*src/web/compat' \
-  src 2>/dev/null || true)"
+R7_LEAK="$(search src "$SOURCE_GLOB" '#include[[:space:]]*"src/web/compat|@cInclude\([[:space:]]*"src/web/compat|-I[[:space:]]*src/web/compat')"
 if [ -n "$R7_LEAK" ]; then
   echo "R7 violated: a source file includes src/web/compat by path instead of through the gated include path" >&2
   printf '%s\n' "$R7_LEAK" >&2
@@ -186,7 +220,7 @@ if [ -n "$R7_LEAK" ]; then
 fi
 
 if [ -f build.zig ]; then
-  R7_GATE="$(rg -n -A4 -e 'if \(is_wasm\) \{' build.zig 2>/dev/null | rg -e 'src/web/compat' || true)"
+  R7_GATE="$(grep -A4 -E 'if \(is_wasm\) \{' build.zig 2>/dev/null | grep -e 'src/web/compat' || true)"
   if [ -z "$R7_GATE" ]; then
     echo "R7 violated: the compat include path is not inside an \`if (is_wasm)\` block" >&2
     fail=1
