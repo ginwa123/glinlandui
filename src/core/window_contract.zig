@@ -62,8 +62,16 @@ pub fn layerSize() LayerSize {
 pub const eglConfigAttribs = consts.eglConfigAttribs;
 
 /// Parse QS_SETTINGS_TEST_FRAMES — null/empty/invalid means "run forever".
+///
+/// Surrounding whitespace is trimmed, and that is not tidiness: on Windows
+/// `set QS_SETTINGS_TEST_FRAMES=1 & app` — with a space before the `&`, the
+/// way it is naturally typed — sets the variable to "1 " WITH a trailing
+/// space, because cmd's `set` takes everything up to the `&`. A strict
+/// `parseInt` rejects that, the cap silently becomes "run forever", and the
+/// consequence is not a wrong number, it is a process that never exits: a hung
+/// CI job and a developer who cannot tell why their window will not close.
 pub fn parseTestFrames(env: ?[]const u8) ?u32 {
-    const s = env orelse return null;
+    const s = std.mem.trim(u8, env orelse return null, " \t\r\n");
     if (s.len == 0) return null;
     return std.fmt.parseInt(u32, s, 10) catch null;
 }
@@ -306,6 +314,26 @@ test "parseTestFrames parses N, rejects null/empty/invalid" {
     try std.testing.expectEqual(@as(?u32, null), parseTestFrames(null));
     try std.testing.expectEqual(@as(?u32, null), parseTestFrames(""));
     try std.testing.expectEqual(@as(?u32, null), parseTestFrames("abc"));
+}
+
+test "parseTestFrames tolerates surrounding whitespace" {
+    // The Windows footgun this exists for: `set QS_SETTINGS_TEST_FRAMES=1 & app`
+    // — a space before the `&`, which is how it gets typed — sets the value to
+    // "1 " WITH a trailing space, because cmd's `set` takes everything up to
+    // the `&`. A strict parse turns that into "no cap", and the symptom is a
+    // process that never exits rather than an error message.
+    try std.testing.expectEqual(@as(?u32, 1), parseTestFrames("1 "));
+    try std.testing.expectEqual(@as(?u32, 1), parseTestFrames(" 1"));
+    try std.testing.expectEqual(@as(?u32, 1), parseTestFrames(" 1 "));
+    try std.testing.expectEqual(@as(?u32, 1), parseTestFrames("1\t"));
+    try std.testing.expectEqual(@as(?u32, 3), parseTestFrames("\t3\r\n"));
+    // Whitespace-only is still "unset", not zero: a cap of 0 means interactive
+    // too, but the distinction is not worth losing.
+    try std.testing.expectEqual(@as(?u32, null), parseTestFrames("   "));
+    try std.testing.expectEqual(@as(?u32, null), parseTestFrames(""));
+    // And a number with junk inside it is still rejected, not truncated.
+    try std.testing.expectEqual(@as(?u32, null), parseTestFrames("1 2"));
+    try std.testing.expectEqual(@as(?u32, null), parseTestFrames("1x"));
 }
 
 test "fixedToFloat converts 24.8 fixed-point to float" {

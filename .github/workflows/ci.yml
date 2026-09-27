@@ -159,23 +159,143 @@ jobs:
           test "$sum" != "0000000000000000"
           echo "demo painted $painted pixels, blit checksum 0x$sum"
 
+  # Windows is now a full peer: a real Win32 window with a D3D11 swap chain
+  # (src/windows/shim.c), a real window backend, and the same parity test count
+  # as the other two. It gets its own job because its assertions are different
+  # in kind, not just in the numbers: the interesting question on Windows is
+  # which presenter actually ran, and the answer is not always D3D11.
+  windows:
+    name: Windows / Zig 0.16.0 / Win32 + D3D11
+    runs-on: windows-2022
+    # Deliberately shorter than the Linux job. A Win32 message loop that fails
+    # to terminate is the one regression this leg is most exposed to — the
+    # first version of this backend hung rather than exiting, and a hung job
+    # that burns 25 minutes to time out teaches nobody anything. Fail in 15.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      # Windows 2022 runners have no fonts installed by default. The glyph
+      # tests no-op without one (so the parity COUNT is unaffected), but a real
+      # font is what makes the calculator draw glyphs rather than the per-byte
+      # bars the rasterizer falls back to, and it costs nothing to have.
+      - name: Confirm a monospace font is present
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          for f in consola.ttf cour.ttf lucon.ttf; do
+            if [ -f "/c/Windows/Fonts/$f" ]; then
+              echo "font: /c/Windows/Fonts/$f"
+              found=1
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::warning::no font from src/windows/text.zig's candidate list is present; text will render as per-byte bars"
+          fi
+
+      - name: Check formatting
+        run: zig fmt --check build.zig src examples
+
+      - name: Layering rules (core / linux / mac / windows)
+        run: ./ci/check_layering.sh
+
+      - name: Cross-platform parity test suite (count checked against tests.lock)
+        run: ./ci/check_test_parity.sh
+
+      - name: Build the Win32 + D3D11 executables (ReleaseSafe)
+        run: zig build -Doptimize=ReleaseSafe
+
+      # Proves the D3D11 colour hand-off for real: the check drives the SAME
+      # shader, sampler, draw call and target format the window uses, and
+      # compares displayed pixels with written ones. It needs no window, no
+      # swap chain and no display, because WARP is a Direct3D 11 software
+      # rasterizer — which is the only path available on a hosted runner.
+      #
+      # It SKIPS (with a reason) on a host that cannot execute a shader at all,
+      # which is a real thing on some VMs; it FAILS on a colour mismatch. A
+      # green line here means the check ran.
+      - name: D3D11 colour hand-off (displayed == written)
+        run: zig build check-colors
+
+      # QS_SETTINGS_TEST_FRAMES caps the run so it terminates on its own, the
+      # same way the other two legs cap theirs. It is NOT optional: with the
+      # variable unset the backend is an interactive app and GetMessage never
+      # returns.
+      #
+      # The assertions are what turn "it opened a window" into a gate. Two
+      # things are checked, and which of them applies depends on the machine:
+      #
+      #   - presenter d3d11: a real swap chain presented the frame. The
+      #     non-zero checksum proves the composited bytes are not a flat fill;
+      #     a blank window cannot fake it.
+      #   - presenter gdi: D3D11 was created but could not present (a driver
+      #     that cannot execute a shader), so the shim blitted the same frame
+      #     into the window's DC instead. The window is still real and the
+      #     pixels are still the ones the CPU rasterizer produced, so the
+      #     painted-pixel and checksum assertions apply unchanged. This is the
+      #     path a hosted Windows VM takes, and requiring d3d11 there would
+      #     mean the leg could only ever pass on a machine with a GPU.
+      - name: Run the demo (real Win32 window, one composited frame)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f zig-out/bin/glinlandui.exe
+
+          out="$(env QS_SETTINGS_TEST_FRAMES=1 ./zig-out/bin/glinlandui.exe 2>&1)"
+          echo "$out"
+
+          echo "$out" | grep -q 'Windows window:'
+          echo "$out" | grep -q 'Windows first frame:'
+
+          # Read the presenter from the FIRST-FRAME line, never from the
+          # window-open line. The two disagree, and that disagreement is the
+          # whole point: `run()` logs the presenter as soon as the device is
+          # CREATED, and the shim can only find out that it cannot actually
+          # present when it presents. A machine whose D3D11 device is
+          # real-looking but cannot execute a shader (a hosted VM, for
+          # instance) therefore logs `d3d11` and then composites with GDI —
+          # and grepping the first line reports a D3D11 pass for a GDI frame.
+          # The first-frame line is reported after the present, so it is the
+          # authoritative one.
+          presenter="$(echo "$out" | sed -nE \
+            's/.*first frame: [0-9]+x[0-9]+, [0-9]+ painted pixels, ([a-z0-9]+) upload checksum.*/\1/p' \
+            | head -n1)"
+          case "$presenter" in
+            d3d11) echo "presenter: d3d11 (GPU swap chain)" ;;
+            gdi)   echo "presenter: gdi (D3D11 unavailable on this host; CPU blit)" ;;
+            *)
+              echo "::error::could not read the presenter from the demo's output" >&2
+              exit 1
+              ;;
+          esac
+
+          painted="$(echo "$out" | sed -nE 's/.*first frame: [0-9]+x[0-9]+, ([0-9]+) painted pixels.*/\1/p' | head -n1)"
+          sum="$(echo "$out"     | sed -nE 's/.*upload checksum 0x([0-9a-f]+).*/\1/p' | head -n1)"
+
+          test -n "$painted"
+          test "$painted" -gt 0
+          test -n "$sum"
+          test "$sum" != "0000000000000000"
+          echo "demo painted $painted pixels, upload checksum 0x$sum (presenter: $presenter)"
+
   # ---------------------------------------------------------------------------
   # Calculator example (examples/calculator.zig)
   #
   # The example is the reference consumer for the toolkit: a 20-key button
   # grid, indexed click dispatch, and real keyboard input through the Host's
-  # KeyChain. It is written against the PUBLIC surface only, so it is NOT
-  # Linux-only any more: `Window` is the platform indirection. On Linux it is
-  # the real Wayland/EGL/GLES3/pangocairo runtime; on macOS it is the same CPU
-  # rasterizer behind the real Cocoa window backend, so the example opens a
-  # window and composites through CGBitmapContext. Its 36 tests are part of the
-  # cross-platform parity count, so `./ci/check_test_parity.sh` now covers the
-  # example on both platforms.
-  #
-  # Windows is the one host that keeps the example ABSENT: it would resolve the
-  # same portable module, but nothing has verified that path, and the `absent`
-  # leg is what keeps the gate honest. Promote it by adding .windows to
-  # `calc_supported` in build.zig and flipping that leg to `present`.
+  # KeyChain. It is written against the PUBLIC surface only, so it is not
+  # platform-specific: `Window` is the platform indirection. On Linux it is the
+  # real Wayland/EGL/GLES3/pangocairo runtime; on macOS the CPU rasterizer
+  # behind a real Cocoa window; on Windows the CPU rasterizer behind a real
+  # Win32 window composited by D3D11 (or by GDI where the machine has no usable
+  # GPU driver). Its 51 tests are part of the cross-platform parity count, so
+  # `./ci/check_test_parity.sh` covers the example on all three.
   # ---------------------------------------------------------------------------
   calculator:
     name: Calculator / ${{ matrix.label }}
@@ -195,11 +315,12 @@ jobs:
             label: macOS (portable CPU rasterizer)
             expect: present
           - os: windows-2022
-            label: Windows (backend not implemented yet)
-            expect: absent
-    # The non-Linux legs report their real status but never block a merge, so
-    # this job can be landed ahead of the backends it will eventually enforce.
-    continue-on-error: ${{ matrix.expect != 'present' }}
+            label: Windows (Win32 window, D3D11 or GDI)
+            expect: present
+    # Every leg is now a `present` leg and every one of them blocks a merge.
+    # There is no longer a platform where the example is expected to be
+    # missing, so `continue-on-error` would only be a way to stop noticing.
+    continue-on-error: false
     steps:
       - uses: actions/checkout@v4
 
@@ -291,8 +412,19 @@ jobs:
           echo "$out"
 
           painted=0
-          if echo "$out" | grep -q 'headless'; then
-            # Linux leg.
+          if echo "$out" | grep -q 'Windows first frame:'; then
+            # Windows leg: a real Win32 window, composited by D3D11 or — on a
+            # machine whose driver cannot execute a shader — by GDI. Either way
+            # the window is real and the bytes are the ones the CPU rasterizer
+            # produced, so the same assertions apply. See the `windows` job for
+            # the longer version of this argument.
+            painted="$(echo "$out" | sed -nE 's/.*first frame: [0-9]+x[0-9]+, ([0-9]+) painted pixels.*/\1/p' | head -n1)"
+            sum="$(echo "$out"     | sed -nE 's/.*upload checksum 0x([0-9a-f]+).*/\1/p' | head -n1)"
+            test -n "$sum"
+            test "$sum" != "0000000000000000"
+          elif echo "$out" | grep -q 'headless'; then
+            # Linux leg: no compositor, so Window.run() reports NoWaylandDisplay
+            # and the example falls back to a REAL software rasterization.
             painted="$(echo "$out" | sed -nE 's/.*\(([0-9]+) painted pixels.*/\1/p' | head -n1)"
           else
             # macOS leg: assert the real window composited a real frame.
@@ -309,27 +441,3 @@ jobs:
           test -n "$painted"
           test "$painted" -gt 0
           echo "calculator painted $painted pixels"
-
-      # ---- Windows: the example must stay unwired there (calc_supported
-      # lists only Linux and macOS). This is what keeps that gate honest. ----
-      - name: calc_supported gate holds (example must not be wired here)
-        if: matrix.expect == 'absent'
-        run: |
-          set -euo pipefail
-
-          if zig build --help 2>/dev/null | grep -q 'run-calculator'; then
-            echo "::error::run-calculator exists on ${{ matrix.label }} but this leg expects the example to be absent" >&2
-            exit 1
-          fi
-
-          # Build when the rest of the library supports this host; the
-          # calculator must not be installed either way.
-          zig build >/dev/null 2>&1 || echo "note: plain 'zig build' does not succeed on this host yet; checking artifacts only"
-          for f in zig-out/bin/glinlandui-calculator zig-out/bin/glinlandui-calculator.exe; do
-            if [ -e "$f" ]; then
-              echo "::error::$f was installed on ${{ matrix.label }} but calc_supported excludes this host" >&2
-              exit 1
-            fi
-          done
-
-          echo "calc_supported gate holds on ${{ matrix.label }}: no run-calculator step, no calculator binary"
