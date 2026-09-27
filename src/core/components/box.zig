@@ -1,9 +1,9 @@
 // Agnostic reusable Clay box (div-like container, toolkit-style, library only).
-// Imports: std + zclay + core/render_common ONLY.
+// Imports: std + zclay + core/color + core/render_common ONLY.
 // Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
-const render = @import("../render_common.zig");
+const Color = @import("../color.zig").Color;
 
 /// Box sizing per axis: fit contents, grow to fill, exact pixels, or
 /// percent of the parent (0.0-1.0).
@@ -50,12 +50,12 @@ pub const BoxProps = struct {
     min_h: f32 = 0,
     max_w: f32 = 0,
     max_h: f32 = 0,
-    bg: ?u32 = null,
+    bg: ?Color = null,
     pad: u16 = 0,
     gap: u16 = 0,
     radius: u32 = 0,
     border_width: u16 = 0,
-    border_color: u32 = 0x000000,
+    border_color: Color = Color.rgb(0x00, 0x00, 0x00),
     disabled: bool = false,
     child_align: cl.ChildAlignment = .{},
     on_click: ?*const fn (?*anyopaque) void = null,
@@ -97,10 +97,10 @@ pub fn box(props: BoxProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) v
             .child_gap = props.gap,
             .child_alignment = props.child_align,
         },
-        .background_color = if (props.bg) |b| render.u32ToClayColor(b) else .{ 0, 0, 0, 0 },
+        .background_color = if (props.bg) |b| b.toClay() else .{ 0, 0, 0, 0 },
         .corner_radius = .all(@floatFromInt(props.radius)),
         .border = if (props.border_width > 0) .{
-            .color = render.u32ToClayColor(props.border_color),
+            .color = props.border_color.toClay(),
             .width = .outside(props.border_width),
         } else .{},
     })({
@@ -206,7 +206,7 @@ test "empty box with no bg emits no rectangles" {
 }
 
 fn declareBgBox() void {
-    box(.{ .id = "test-bg-box", .bg = 0x1e1e1e }, {}, emptyChildren);
+    box(.{ .id = "test-bg-box", .bg = Color.rgb(0x1e, 0x1e, 0x1e) }, {}, emptyChildren);
 }
 
 test "box with bg emits exactly one rectangle" {
@@ -231,7 +231,7 @@ fn childLabels(ctx: ChildCtx) void {
     while (i < ctx.n) : (i += 1) {
         cl.text("x", .{
             .font_size = 14,
-            .color = render.u32ToClayColor(0xe8e8e8),
+            .color = Color.rgb(0xe8, 0xe8, 0xe8).toClay(),
         });
     }
 }
@@ -252,7 +252,7 @@ test "children callback invoked; N child labels emit N texts" {
 // ---- Nesting ----
 
 fn innerBox(_: void) void {
-    box(.{ .id = "test-nested-inner", .bg = 0x2d2d2d }, {}, emptyChildren);
+    box(.{ .id = "test-nested-inner", .bg = Color.rgb(0x2d, 0x2d, 0x2d) }, {}, emptyChildren);
 }
 
 fn outerChildren(_: void) void {
@@ -260,7 +260,7 @@ fn outerChildren(_: void) void {
 }
 
 fn declareNestedBox() void {
-    box(.{ .id = "test-nested-outer", .bg = 0x1e1e1e }, {}, outerChildren);
+    box(.{ .id = "test-nested-outer", .bg = Color.rgb(0x1e, 0x1e, 0x1e) }, {}, outerChildren);
 }
 
 test "nested boxes declare both rects" {
@@ -274,8 +274,8 @@ test "nested boxes declare both rects" {
 // ---- Direction proven by geometry ----
 
 fn rowChildren(_: void) void {
-    box(.{ .id = "test-row-a", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = 0x1e1e1e }, {}, emptyChildren);
-    box(.{ .id = "test-row-b", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = 0x1e1e1e }, {}, emptyChildren);
+    box(.{ .id = "test-row-a", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = Color.rgb(0x1e, 0x1e, 0x1e) }, {}, emptyChildren);
+    box(.{ .id = "test-row-b", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = Color.rgb(0x1e, 0x1e, 0x1e) }, {}, emptyChildren);
 }
 
 fn declareRowBox() void {
@@ -292,8 +292,8 @@ test "row direction lays children out horizontally (x differs, y equal)" {
 }
 
 fn colChildren(_: void) void {
-    box(.{ .id = "test-col-a", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = 0x1e1e1e }, {}, emptyChildren);
-    box(.{ .id = "test-col-b", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = 0x1e1e1e }, {}, emptyChildren);
+    box(.{ .id = "test-col-a", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = Color.rgb(0x1e, 0x1e, 0x1e) }, {}, emptyChildren);
+    box(.{ .id = "test-col-b", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = Color.rgb(0x1e, 0x1e, 0x1e) }, {}, emptyChildren);
 }
 
 fn declareColBox() void {
@@ -325,7 +325,7 @@ test "BoxProps carries neutral defaults" {
     try std.testing.expectEqual(@as(u16, 0), p.gap);
     try std.testing.expectEqual(@as(u32, 0), p.radius);
     try std.testing.expectEqual(@as(u16, 0), p.border_width);
-    try std.testing.expectEqual(@as(u32, 0x000000), p.border_color);
+    try std.testing.expectEqual(Color.rgb(0x00, 0x00, 0x00), p.border_color);
     try std.testing.expect(!p.disabled);
     try std.testing.expect(p.child_align.x == .left);
     try std.testing.expect(p.child_align.y == .top);
@@ -368,7 +368,7 @@ test "fixed size keeps fractional pixels (sidebar gap parity)" {
 }
 
 fn alignCenterChild(_: void) void {
-    box(.{ .id = "test-align-inner", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = 0x1e1e1e }, {}, emptyChildren);
+    box(.{ .id = "test-align-inner", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = Color.rgb(0x1e, 0x1e, 0x1e) }, {}, emptyChildren);
 }
 
 fn declareAlignCenter() void {
@@ -376,7 +376,7 @@ fn declareAlignCenter() void {
 }
 
 fn alignTopChild(_: void) void {
-    box(.{ .id = "test-align-top-inner", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = 0x1e1e1e }, {}, emptyChildren);
+    box(.{ .id = "test-align-top-inner", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = Color.rgb(0x1e, 0x1e, 0x1e) }, {}, emptyChildren);
 }
 
 fn declareAlignTop() void {
@@ -401,8 +401,8 @@ test "align y=center vertically centers child (header parity)" {
 // ---- Arrange helpers: row / column / spacer ----
 
 fn helperRowChildren(_: void) void {
-    box(.{ .id = "test-helper-row-a", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = 0x1e1e1e }, {}, emptyChildren);
-    box(.{ .id = "test-helper-row-b", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = 0x1e1e1e }, {}, emptyChildren);
+    box(.{ .id = "test-helper-row-a", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = Color.rgb(0x1e, 0x1e, 0x1e) }, {}, emptyChildren);
+    box(.{ .id = "test-helper-row-b", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = Color.rgb(0x1e, 0x1e, 0x1e) }, {}, emptyChildren);
 }
 
 fn declareHelperRow() void {
@@ -420,8 +420,8 @@ test "row() forces horizontal layout even when props says column" {
 }
 
 fn helperColChildren(_: void) void {
-    box(.{ .id = "test-helper-col-a", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = 0x1e1e1e }, {}, emptyChildren);
-    box(.{ .id = "test-helper-col-b", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = 0x1e1e1e }, {}, emptyChildren);
+    box(.{ .id = "test-helper-col-a", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = Color.rgb(0x1e, 0x1e, 0x1e) }, {}, emptyChildren);
+    box(.{ .id = "test-helper-col-b", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = Color.rgb(0x1e, 0x1e, 0x1e) }, {}, emptyChildren);
 }
 
 fn declareHelperCol() void {
@@ -451,9 +451,9 @@ test "spacer() emits no rectangle (layout-only grow box)" {
 }
 
 fn spacerPushChildren(_: void) void {
-    box(.{ .id = "test-push-a", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = 0x1e1e1e }, {}, emptyChildren);
+    box(.{ .id = "test-push-a", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = Color.rgb(0x1e, 0x1e, 0x1e) }, {}, emptyChildren);
     spacer("test-push-spacer");
-    box(.{ .id = "test-push-b", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = 0x1e1e1e }, {}, emptyChildren);
+    box(.{ .id = "test-push-b", .w = .{ .fixed = 20 }, .h = .{ .fixed = 10 }, .bg = Color.rgb(0x1e, 0x1e, 0x1e) }, {}, emptyChildren);
 }
 
 fn declareSpacerPush() void {
@@ -470,7 +470,7 @@ test "spacer() in a fixed row pushes siblings apart (b at far edge)" {
 }
 
 fn declareBorderBox() void {
-    box(.{ .id = "test-border-box", .bg = 0x1e1e1e, .border_width = 2, .border_color = 0xff0000 }, {}, emptyChildren);
+    box(.{ .id = "test-border-box", .bg = Color.rgb(0x1e, 0x1e, 0x1e), .border_width = 2, .border_color = Color.rgb(0xff, 0x00, 0x00) }, {}, emptyChildren);
 }
 
 test "box border emits a border command alongside the rect" {
@@ -487,7 +487,7 @@ test "box border emits a border command alongside the rect" {
 }
 
 fn declareMinBox() void {
-    box(.{ .id = "test-min-box", .w = .grow, .min_w = 120, .h = .{ .fixed = 10 }, .bg = 0x1e1e1e }, {}, emptyChildren);
+    box(.{ .id = "test-min-box", .w = .grow, .min_w = 120, .h = .{ .fixed = 10 }, .bg = Color.rgb(0x1e, 0x1e, 0x1e) }, {}, emptyChildren);
 }
 
 test "box min_w clamps a grow box" {
@@ -502,7 +502,7 @@ fn declarePercentBox() void {
 }
 
 fn percentChild(_: void) void {
-    box(.{ .id = "test-pct-inner", .w = .{ .percent = 0.5 }, .h = .{ .fixed = 10 }, .bg = 0x1e1e1e }, {}, emptyChildren);
+    box(.{ .id = "test-pct-inner", .w = .{ .percent = 0.5 }, .h = .{ .fixed = 10 }, .bg = Color.rgb(0x1e, 0x1e, 0x1e) }, {}, emptyChildren);
 }
 
 test "box percent sizes relative to parent" {

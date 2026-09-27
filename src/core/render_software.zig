@@ -25,6 +25,7 @@ const std = @import("std");
 const cl = @import("zclay");
 const glyphs = @import("glyphs.zig");
 const common = @import("render_common.zig");
+const Color = @import("color.zig").Color;
 
 pub const ImageFit = common.ImageFit;
 pub const ImageRef = common.ImageRef;
@@ -35,7 +36,7 @@ pub const hashImageKey = common.hashImageKey;
 
 /// Placeholder color drawn when an image cannot be decoded (mirrors
 /// `img_placeholder = 0x1a1a1a` in the GLES3 backend).
-pub const img_placeholder: u32 = 0x1a1a1a;
+pub const img_placeholder: Color = .rgb(0x1a, 0x1a, 0x1a);
 
 /// Corner radii, ordered (top_left, top_right, bottom_left, bottom_right).
 const R4 = [4]f32;
@@ -551,7 +552,7 @@ pub const Surface = struct {
         const path = ref.path_ptr[0..ref.path_len];
         const max_dim: u16 = if (ref.max_dim == 0) 256 else ref.max_dim;
         const img = self.images.get(hashImageKey(path, max_dim)) orelse {
-            self.drawBox(bb.x, bb.y, bb.width, bb.height, noRadius, 0, 0, u32ToClayColor(img_placeholder));
+            self.drawBox(bb.x, bb.y, bb.width, bb.height, noRadius, 0, 0, img_placeholder.toClay());
             return;
         };
         const iw: f32 = @floatFromInt(img.width);
@@ -559,7 +560,7 @@ pub const Surface = struct {
         switch (ref.fit) {
             .cover => self.drawImageQuad(img, bb.x, bb.y, bb.width, bb.height, coverUv(iw, ih, bb.width, bb.height)),
             .contain => {
-                self.drawBox(bb.x, bb.y, bb.width, bb.height, noRadius, 0, 0, u32ToClayColor(img_placeholder));
+                self.drawBox(bb.x, bb.y, bb.width, bb.height, noRadius, 0, 0, img_placeholder.toClay());
                 const b = containBox(iw, ih, bb.width, bb.height);
                 self.drawImageQuad(img, bb.x + b[0], bb.y + b[1], b[2], b[3], .{ 0, 0, 1, 1 });
             },

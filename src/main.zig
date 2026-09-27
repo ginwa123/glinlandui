@@ -12,6 +12,7 @@ const std = @import("std");
 const glinlandui = @import("glinlandui");
 
 const components = glinlandui.components;
+const Color = glinlandui.Color;
 
 /// Demo application state. The counters the widgets mutate make the rendered
 /// pixels visibly reflect interaction, proving clicks/inputs reach the tree.
@@ -34,7 +35,7 @@ const App = struct {
             .direction = .column,
             .w = .grow,
             .h = .grow,
-            .bg = 0x1e1e1e,
+            .bg = Color.rgb(0x1e, 0x1e, 0x1e),
             .pad = 16,
             .gap = 12,
         }, self, Self.children);
@@ -44,12 +45,12 @@ const App = struct {
         components.text.label(.{
             .str = "glinlandui",
             .font_size = 24,
-            .color = 0xf0f0f0,
+            .color = Color.rgb(0xf0, 0xf0, 0xf0),
         });
         components.text.label(.{
             .str = "real pixels, identical tests on Linux and macOS",
             .font_size = 14,
-            .color = 0x9a9a9a,
+            .color = Color.rgb(0x9a, 0x9a, 0x9a),
         });
         components.button.button(.{
             .id = "click-me",
@@ -76,7 +77,7 @@ const App = struct {
         components.text.label(.{
             .str = self.statusText(),
             .font_size = 13,
-            .color = 0x7ab8ff,
+            .color = Color.rgb(0x7a, 0xb8, 0xff),
         });
     }
 

@@ -20,6 +20,11 @@ pub const ImageRef = common.ImageRef;
 /// platform, not just Linux hosts that compile renderer.zig.
 pub const Draw = common.Draw;
 pub const u32ToClayColor = common.u32ToClayColor;
+/// The library's color type, re-exported next to `u32ToClayColor` so
+/// everything needed to turn a color into pixels is on one module. Widget
+/// props take a `Color` and widgets call `.toClay()`; `u32ToClayColor` is a
+/// legacy shim for a caller still holding a 0xRRGGBB `u32`.
+pub const Color = @import("color.zig").Color;
 pub const scaledDims = common.scaledDims;
 pub const coverUv = common.coverUv;
 pub const containBox = common.containBox;

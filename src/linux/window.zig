@@ -13,6 +13,7 @@ const builtin = @import("builtin");
 // second copy of them. One definition means a field added for one backend
 // cannot silently fail to reach Linux.
 const contract = @import("../core/window_contract.zig");
+const Color = @import("../core/color.zig").Color;
 // The four role modules that mirror mac/ one for one. `window.zig` keeps the
 // C-callback glue (the `callconv(.c)` listeners, the protocol bootstrap, the
 // EGL setup and the frame loop); everything a reader would otherwise have to
@@ -132,15 +133,16 @@ fn testFramesFromEnv() ?u32 {
     return parseTestFrames(std.mem.span(raw));
 }
 
-/// Window background (sidebar_bg 0x111111, see ui/theme.zig) as
-/// normalized RGBA floats for glClearColor.
+/// Window background (sidebar_bg #111111) as normalized RGBA floats for
+/// glClearColor. GL wants 0-1 floats where Clay wants 0-255, so this is
+/// `toClay()` divided by 255 — the one place the two scales meet.
 fn clearColor() [4]f32 {
-    const bg: u32 = 0x111111;
+    const clay = Color.rgb(0x11, 0x11, 0x11).toClay();
     return .{
-        @as(f32, @floatFromInt((bg >> 16) & 0xff)) / 255.0,
-        @as(f32, @floatFromInt((bg >> 8) & 0xff)) / 255.0,
-        @as(f32, @floatFromInt(bg & 0xff)) / 255.0,
-        1.0,
+        clay[0] / 255.0,
+        clay[1] / 255.0,
+        clay[2] / 255.0,
+        clay[3] / 255.0,
     };
 }
 

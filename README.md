@@ -30,6 +30,7 @@ versa.
 - [Quick start](#quick-start)
 - [Using it as a dependency](#using-it-as-a-dependency)
 - [Hello world](#hello-world)
+- [Colors](#colors)
 - [Architecture](#architecture)
 - [Testing](#testing)
 - [End-to-end UI testing](#end-to-end-ui-testing)
@@ -66,8 +67,8 @@ env WAYLAND_DISPLAY= ./zig-out/bin/glinlandui-calculator
 
 # The full gate — all of these must pass before pushing.
 zig fmt --check build.zig src examples
-zig build test --summary all     # 425/440 tests passed (15 skipped)
-./ci/check_test_parity.sh        # parity: 440 tests (matches tests.lock)
+zig build test --summary all     # 443/458 tests passed (15 skipped)
+./ci/check_test_parity.sh        # parity: 458 tests (matches tests.lock)
 ./ci/check_layering.sh           # layering: ok
 ```
 
@@ -175,6 +176,61 @@ The two things worth noticing:
 
 ---
 
+## Colors
+
+Every color-bearing prop is a `glinlandui.Color`. It is the same 32 bits the
+old `u32` props held, so it stays copyable and `==`-comparable — but you can now
+write a color the way you actually received it:
+
+```zig
+const Color = glinlandui.Color;
+
+// Four ways in. Use `hexC` for a constant, `hex` when the string is runtime data.
+const primary = Color.hexC("#6200EE");   // hex string   (from a design tool)
+const accent  = Color.rgb(98, 0, 238);   // 0-255 ints   (from legacy code)
+const ghost   = Color.rgbF(.38, 0, .93); // 0-1 floats   (from a spec)
+const ink     = Color.argb(0xFF6200EE);  // ARGB hex     (a copied constant)
+
+components.text.label(.{
+    .str = "Hello",
+    .color = primary,                 // hand the Color straight to a prop
+});
+```
+
+A palette is a block of constants, which is why `hexC` exists — a typo is a
+**compile error** that names the bad literal, not a runtime surprise:
+
+```zig
+const COLOR_BG   = Color.hexC("#101014");
+const COLOR_FG   = Color.hexC("#f0f0f5");
+const COLOR_ERR  = Color.hexC("#ff6b6b");
+```
+
+Beyond construction:
+
+| | |
+|---|---|
+| `c.r() c.g() c.b() c.a()` | channels, 0-255 |
+| `c.isOpaque()` | is alpha fully 255? |
+| `c.withAlpha(128)` / `.withAlphaF(0.5)` | fade, keeping RGB |
+| `Color.lerp(from, to, t)` | blend for hover/press states, `t` clamped |
+| `c.toClay()` | `[4]f32` for Clay (0-255, **carries alpha**) |
+| `c.toU32()` | `0xRRGGBB` for a pre-`Color` consumer (**drops alpha**) |
+| `c.hexString(&buf)` | write `"#rrggbb"` / `"#rrggbbaa"` into your buffer |
+
+**One asymmetry worth knowing:** alpha is stored, but only `toClay()` carries it.
+`toU32()` drops it because 0xRRGGBB has no room for it. So
+`Color.rgba(255, 0, 0, 128)` reaches the screen translucent through a Clay
+config field and opaque through `toU32()`. Nothing silently discards a channel
+you asked for — the two outputs just report what each format can hold.
+
+Rendering works exactly as before: props are `Color`, and the widgets hand
+`.toClay()` to Clay. `render.u32ToClayColor` still exists as a legacy shim for a
+pre-`Color` caller and now delegates to the same `Color` rule, so the GLES3 and
+CPU backends cannot drift apart.
+
+---
+
 ## Architecture
 
 ```
@@ -231,10 +287,10 @@ cannot.
 | gate | command | expectation |
 |---|---|---|
 | formatting | `zig fmt --check build.zig src examples` | silent |
-| unit + parity suite | `zig build test --summary all` | `425/440 tests passed (15 skipped)` |
-| locked test count | `./ci/check_test_parity.sh` | `parity: 440 tests (matches tests.lock)` |
+| unit + parity suite | `zig build test --summary all` | `443/458 tests passed (15 skipped)` |
+| locked test count | `./ci/check_test_parity.sh` | `parity: 458 tests (matches tests.lock)` |
 | architecture | `./ci/check_layering.sh` | `layering: ok` |
-| native backends (Linux only) | `zig build native-test --summary all` | `83/83 tests passed` |
+| native backends (Linux only) | `zig build native-test --summary all` | `99/99 tests passed` |
 | macOS colour hand-off (macOS only) | `zig build check-colors` | `skipped` off macOS |
 
 ### 1. `zig build test` — the cross-platform suite
@@ -251,7 +307,7 @@ It needs no display, no GPU and no font.
 > **Why 15 tests skip.** `core/glyphs.zig`'s font-dependent tests call
 > `requireFont() orelse return error.SkipZigTest`, and in a test build the font
 > candidates come from the portable backend (macOS paths). On macOS all 13 run;
-> elsewhere 15 skip. The *total* is 440 either way, so parity holds — but it
+> elsewhere 15 skip. The *total* is 458 either way, so parity holds — but it
 > means the glyph rasterizer is only really exercised on macOS. This is known
 > debt, tracked in `src/README.md` §5.
 
@@ -604,6 +660,7 @@ src/
 │   ├── window_portable.zig   headless/CPU backend — ALSO the test backend
 │   ├── select.zig            ← the one bridge from core to platform.zig
 │   ├── render.zig            renderer facade        (consumes select.zig)
+│   ├── color.zig            the Color type: every prop is one, not a u32
 │   ├── render_common.zig     the drawing contract the drawing widgets import
 │   ├── render_software.zig   CPU rasterizer (real pixels, real RGBA8)
 │   ├── render_pixels_test.zig  pixel-assertion suite

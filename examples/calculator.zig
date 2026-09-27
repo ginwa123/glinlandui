@@ -37,6 +37,7 @@
 //! pixel count instead.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
+const Color = glinlandui.Color;
 
 const components = glinlandui.components;
 const registry = components.click_registry;
@@ -44,17 +45,17 @@ const cl = glinlandui.zclay;
 
 // ---- Palette (app-local; components stay theme-neutral) ----
 
-const COLOR_BG: u32 = 0x101014;
-const COLOR_PANEL: u32 = 0x1b1b21;
-const COLOR_FG: u32 = 0xf0f0f5;
-const COLOR_DIM: u32 = 0x8a8a99;
-const COLOR_ERR: u32 = 0xff6b6b;
-const COLOR_DIGIT: u32 = 0x26262e;
-const COLOR_DIGIT_HOVER: u32 = 0x33333d;
-const COLOR_OP: u32 = 0x3a3a46;
-const COLOR_OP_HOVER: u32 = 0x4a4a58;
-const COLOR_ACCENT: u32 = 0x2f6df6;
-const COLOR_ACCENT_HOVER: u32 = 0x4a82ff;
+const COLOR_BG = Color.hexC("#101014");
+const COLOR_PANEL = Color.hexC("#1b1b21");
+const COLOR_FG = Color.hexC("#f0f0f5");
+const COLOR_DIM = Color.hexC("#8a8a99");
+const COLOR_ERR = Color.hexC("#ff6b6b");
+const COLOR_DIGIT = Color.hexC("#26262e");
+const COLOR_DIGIT_HOVER = Color.hexC("#33333d");
+const COLOR_OP = Color.hexC("#3a3a46");
+const COLOR_OP_HOVER = Color.hexC("#4a4a58");
+const COLOR_ACCENT = Color.hexC("#2f6df6");
+const COLOR_ACCENT_HOVER = Color.hexC("#4a82ff");
 
 /// Keypad geometry. Four columns x five rows, fixed-size keys: `box` has
 /// no wrap/flex-grow for its children, so the grid is laid out explicitly
@@ -395,7 +396,7 @@ const KEY_KP_MULTIPLY: u32 = 55;
 const KEY_KP_DIVIDE: u32 = 98;
 
 /// Button fill for a key: digits neutral, operators tinted, `=` accented.
-fn tint(key: Key) struct { bg: u32, hover_bg: u32 } {
+fn tint(key: Key) struct { bg: Color, hover_bg: Color } {
     return switch (key) {
         .divide, .times, .minus, .plus => .{ .bg = COLOR_OP, .hover_bg = COLOR_OP_HOVER },
         .equals => .{ .bg = COLOR_ACCENT, .hover_bg = COLOR_ACCENT_HOVER },
@@ -1234,7 +1235,7 @@ test "divide by zero turns the display red in the next frame" {
     var app = App{};
     var host = try glinlandui.host.Host.init(alloc, &app, App.root);
     const healthy = displayColor(drawFrame(&host)).?;
-    try std.testing.expectEqual(render.u32ToClayColor(COLOR_FG), healthy);
+    try std.testing.expectEqual(COLOR_FG.toClay(), healthy);
 
     for ("50") |c| app.m.feedChar(c);
     app.m.feedChar('/');
@@ -1243,7 +1244,7 @@ test "divide by zero turns the display red in the next frame" {
     const broken = drawFrame(&host);
     // Both the text AND its color are reactive to the error latch.
     try std.testing.expectEqualStrings("ERR", displayString(broken).?);
-    try std.testing.expectEqual(render.u32ToClayColor(COLOR_ERR), displayColor(broken).?);
+    try std.testing.expectEqual(COLOR_ERR.toClay(), displayColor(broken).?);
     try std.testing.expect(colorDiffers(displayColor(broken).?, healthy));
 }
 
@@ -1273,16 +1274,16 @@ test "the keypad repaints on hover as the pointer moves" {
     host.onPointerEvent(-1, -1, false, 0);
     const resting = drawFrame(&host);
     const rest_8 = keyFill(resting, 5).?;
-    try std.testing.expectEqual(render.u32ToClayColor(COLOR_DIGIT), rest_8);
+    try std.testing.expectEqual(COLOR_DIGIT.toClay(), rest_8);
     const rest_eq = keyFill(resting, 19).?;
-    try std.testing.expectEqual(render.u32ToClayColor(COLOR_ACCENT), rest_eq);
+    try std.testing.expectEqual(COLOR_ACCENT.toClay(), rest_eq);
 
     // Frame 2: pointer over the "8" key, whose box is known from frame 1.
     const bb8 = cl.getElementData(cl.getElementId(KEY_IDS[5])).bounding_box;
     host.onPointerEvent(bb8.x + bb8.width * 0.5, bb8.y + bb8.height * 0.5, false, 0);
     const hovered = drawFrame(&host);
     // Only the hovered key changes fill; its neighbours do not.
-    try std.testing.expectEqual(render.u32ToClayColor(COLOR_DIGIT_HOVER), keyFill(hovered, 5).?);
+    try std.testing.expectEqual(COLOR_DIGIT_HOVER.toClay(), keyFill(hovered, 5).?);
     try std.testing.expect(colorDiffers(keyFill(hovered, 5).?, rest_8));
     try std.testing.expectEqual(rest_8, keyFill(hovered, 4).?);
     try std.testing.expectEqual(rest_8, keyFill(hovered, 6).?);
@@ -1306,8 +1307,8 @@ test "the operators keep their tint across a state change" {
     for (0..Key.count) |i| {
         try std.testing.expectEqual(keyFill(before, i), keyFill(after, i));
     }
-    try std.testing.expectEqual(render.u32ToClayColor(COLOR_OP), keyFill(after, 3).?); // "/"
-    try std.testing.expectEqual(render.u32ToClayColor(COLOR_OP), keyFill(after, 15).?); // "+"
-    try std.testing.expectEqual(render.u32ToClayColor(COLOR_ACCENT), keyFill(after, 19).?); // "="
+    try std.testing.expectEqual(COLOR_OP.toClay(), keyFill(after, 3).?); // "/"
+    try std.testing.expectEqual(COLOR_OP.toClay(), keyFill(after, 15).?); // "+"
+    try std.testing.expectEqual(COLOR_ACCENT.toClay(), keyFill(after, 19).?); // "="
     try std.testing.expectEqualStrings("16", displayString(after).?);
 }

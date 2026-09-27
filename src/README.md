@@ -32,6 +32,7 @@ src/
 │   ├── window_portable.zig   headless/CPU backend — ALSO the test backend
 │   ├── select.zig            ← the one bridge from core to platform.zig
 │   ├── render.zig            renderer facade      (consumes select.zig)
+│   ├── color.zig            the Color type: every prop is one, not a u32
 │   ├── render_common.zig     the drawing contract the DRAWING widgets import
 │   │                         (click_registry + dispatch are logic-only)
 │   ├── render_software.zig   CPU rasterizer (real pixels, real RGBA8)
@@ -56,8 +57,8 @@ src/
 ### The platform mirror
 
 `linux/`, `mac/` and `windows/` expose the **same nine file names**, so you can
-read and diff them side by side. **Same role, not same code** — the line counts
-carry the information:
+read and diff them side by side. **Same role, not same code** — the line counts carry the
+information:
 
 | file | role | linux | mac | windows |
 |---|---|---|---|---|
@@ -91,18 +92,18 @@ stating plainly because it is the most-asked question about this layout:
 | `mac/` | on the CPU (`core/render_software.zig`) | CoreGraphics bitmap | NSWindow |
 | `windows/` | on the CPU (`core/render_software.zig`) | **D3D11 swapchain** (GDI if the GPU cannot rasterize) | HWND |
 
-So Windows presents through the GPU the way Linux does — a swap chain, a texture
-upload and a shader, the same *role* `linux/present.zig` plays — but the drawing
-happens in `core/`, exactly as on macOS. The payload therefore crosses the
-platform boundary as a plain RGBA8 CPU surface, which is what makes
-`windows/present.zig`'s central claim ("the upload is the identity") a
-byte-order statement rather than a scaling one.
+So Windows presents through the GPU the way Linux does — a swap chain, a
+texture upload and a shader, the same *role* `linux/present.zig` plays — but
+the drawing happens in `core/`, exactly as on macOS. The payload therefore
+crosses the platform boundary as a plain RGBA8 CPU surface, which is what
+makes `windows/present.zig`'s central claim ("the upload is the identity")
+a byte-order statement rather than a scaling one.
 
-The GDI fallback is a real path, not a stub: a D3D11 device is cheap to create
-and easy to create uselessly (a VM or a half-initialised driver hands one back
-and then fails the first time a vertex shader executes), and a window that has
-already opened should not then sit there blank. Same bytes, same hand-off, only
-the thing the bytes are handed to changes.
+The GDI fallback is a real path, not a stub: a D3D11 device is cheap to
+create and easy to create uselessly (a VM or a half-initialised driver hands
+one back and then fails the first time a vertex shader executes), and a
+window that has already opened should not then sit there blank. Same bytes,
+same hand-off, only the thing the bytes are handed to changes.
 
 ### Data flow
 
@@ -127,18 +128,18 @@ only calls the `Delegate`. That contract is the whole integration surface.
 
 ## 2. Invariants. Breaking these fails CI, not just a test
 
-### I1 — Test parity: `zig build test` must report exactly **518**
+### I1 — Test parity: `zig build test` must report exactly **534**
 
-`tests.lock` holds `518`; `ci/check_test_parity.sh` asserts it. The suite compiles
+`tests.lock` holds `534`; `ci/check_test_parity.sh` asserts it. The suite compiles
 a **fixed, platform-independent set** of test roots, so Linux, macOS and Windows
-run the same tests, which is what makes the macOS and Windows paths trustworthy
-without a Mac or a Windows box.
+run the same tests, which is what makes the macOS and Windows paths
+trustworthy without a Mac or a Windows box.
 
-The count is `461` (`root.zig` aggregate) + `1` (`main.zig`) + `36` (the
+The count is `482` (`root.zig` aggregate) + `1` (`main.zig`) + `36` (the
 calculator example) + `15` (`examples/calculator_e2e_test.zig`, the E2E suite).
-It went from 440 to 518 when the Windows backend landed: its pure modules are in
-the aggregate, so a VK→evdev keycode typo is a typo the suite catches on every
-platform rather than one a user finds on Windows.
+It went from 442 to 534 when the Windows backend landed: its pure modules are
+in the aggregate, so a VK→evdev keycode typo is a typo the suite catches on
+every platform rather than one a user finds on Windows.
 
 - **Adding or removing a `test` block changes the count.** Update `tests.lock` in
   the same commit, deliberately. Never "fix" a parity failure by editing the lock
@@ -155,8 +156,15 @@ platform rather than one a user finds on Windows.
   `examples/calculator_e2e_test.zig` reaches the calculator through an imported
   module (`@import("calculator")`, wired in `build.zig`), **not** a relative
   `@import("calculator.zig")`. The relative form compiles and passes but makes the
-  count 554 instead of 518, by re-running the example's 36 tests in the E2E
+  count 570 instead of 534, by re-running the example's 36 tests in the E2E
   binary.
+
+`zig build native-test` is a SEPARATE count (`99`) and is not locked: it is one
+consolidated root (`src/native_test.zig`) that reaches the Linux backends, and
+it also pulls in whatever `core/` those backends import. That is why adding
+`core/color.zig` moved native from `83` to `99` as well as the parity count —
+its 16 tests are collected by both roots. A new `core/` file with tests is
+counted twice; that is expected, not double-counting to fix.
 
 ### I2 — The test build must select the portable backend on every OS
 
@@ -203,10 +211,10 @@ A gate that has never been seen to fail is not a gate.
 
 Consequence you must respect: **all three folders have a file called `shim.h` with
 different contents**, so the include paths are mutually exclusive —
-`addIncludePath("src/mac")` is gated inside `if (is_macos)`, and the Windows one inside `if (is_windows)`.
-If you ever make a
+`addIncludePath("src/mac")` is gated inside `if (is_macos)`, and the Windows
+one inside `if (is_windows)`. If you ever make a
 platform include path unconditional, `@cInclude("shim.h")` may silently resolve
-to a *different* platform's header.
+to the *other* platform's header.
 
 ### I5 — `zclay` is a module, never a relative path
 
@@ -222,12 +230,12 @@ like a confusing type mismatch, not a missing import.
 ```bash
 # The full local gate. All four must pass.
 zig fmt --check build.zig src examples    # formatting is gate 1 in CI
-zig build test --summary all              # expect: 425/440 (15 skipped)  ← see I1 + §5
-./ci/check_test_parity.sh                 # expect: parity: 440 tests (matches tests.lock)
+zig build test --summary all              # expect: 443/458 (15 skipped)  ← see I1 + §5
+./ci/check_test_parity.sh                 # expect: parity: 458 tests (matches tests.lock)
 ./ci/check_layering.sh                    # expect: layering: ok
 
 # Linux native backends (Wayland/EGL/GLES3/pango). NOT part of the parity count.
-zig build native-test --summary all       # expect: 83/83
+zig build native-test --summary all       # expect: 99/99
 
 # Real build + a headless smoke test that proves pixels were painted.
 zig build -Doptimize=ReleaseSafe
@@ -288,10 +296,10 @@ them.
 In a **test** build, `text_impl` is `core/text_portable.zig` (invariant I2), and
 its `font_candidates` are **macOS paths** (`/System/Library/Fonts/…`). So:
 
-- on **macOS**, those paths exist → the 15 tests run → `440/440 passed`;
-- on **Linux/macOS-local without those paths** → 15 skip → `425/440 (15 skipped)`.
+- on **macOS**, those paths exist → the 15 tests run → `458/458 passed`;
+- on **Linux/macOS-local without those paths** → 15 skip → `443/458 (15 skipped)`.
 
-The count is still 440 either way, so parity holds and the gate passes. The real
+The count is still 458 either way, so parity holds and the gate passes. The real
 consequence is a **coverage gap: the glyph rasterizer is only exercised on
 macOS.** `linux/text.zig` *does* carry Linux font paths, but the parity suite never
 selects it. A useful, contained improvement would be to give
@@ -303,7 +311,7 @@ platforms. It is not done yet — do not mistake it for a passing test.
 ## 6. Recipes
 
 **Add a widget** — a file in `core/components/`. A *drawing* widget imports `std`,
-`zclay` and `../render_common.zig`; a logic-only one (`click_registry`,
+`zclay`, `../render_common.zig` and `../color.zig`; a logic-only one (`click_registry`,
 `dispatch`) needs only `std` + `zclay`. Then add it to the `components` struct in
 `root.zig` *and* to the aggregate test block there. If it has tests, `tests.lock`
 changes.

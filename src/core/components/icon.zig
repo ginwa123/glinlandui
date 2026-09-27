@@ -4,11 +4,11 @@
 // wayland.text.resolveFont), so no renderer image support is needed.
 // The GLES3 renderer draws icons like any label (textured quad via the
 // Pango cache); the stb fallback (ASCII-only atlas) degrades to rects.
-// Imports: std + zclay + core/render_common ONLY.
+// Imports: std + zclay + core/color + core/render_common ONLY.
 // Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
-const render = @import("../render_common.zig");
+const Color = @import("../color.zig").Color;
 
 // ---- Glyph table (Font Awesome codepoints, present in Nerd Fonts) ----
 // Drill-in / expand affordances (replace the ASCII ">" chevron).
@@ -34,9 +34,9 @@ pub const lock: []const u8 = "\u{F023}";
 pub const IconProps = struct {
     glyph: []const u8,
     font_size: u16 = 14,
-    color: u32 = 0xe8e8e8,
+    color: Color = Color.rgb(0xe8, 0xe8, 0xe8),
     disabled: bool = false,
-    disabled_color: u32 = 0x777777,
+    disabled_color: Color = Color.rgb(0x77, 0x77, 0x77),
 };
 
 /// Declare a single icon element. Declare-only leaf: no hover, no
@@ -44,7 +44,7 @@ pub const IconProps = struct {
 pub fn icon(props: IconProps) void {
     cl.text(props.glyph, .{
         .font_size = props.font_size,
-        .color = render.u32ToClayColor(if (props.disabled) props.disabled_color else props.color),
+        .color = (if (props.disabled) props.disabled_color else props.color).toClay(),
     });
 }
 
@@ -97,9 +97,9 @@ test "icon emits exactly one text command, no rectangles" {
 test "IconProps carries neutral defaults" {
     const p = IconProps{ .glyph = chevron_right };
     try std.testing.expectEqual(@as(u16, 14), p.font_size);
-    try std.testing.expectEqual(@as(u32, 0xe8e8e8), p.color);
+    try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.color);
     try std.testing.expect(!p.disabled);
-    try std.testing.expectEqual(@as(u32, 0x777777), p.disabled_color);
+    try std.testing.expectEqual(Color.rgb(0x77, 0x77, 0x77), p.disabled_color);
 }
 
 fn declareDisabledIcon() void {
@@ -120,7 +120,7 @@ test "disabled icon emits one text with the disabled color" {
     for (cmds) |c| {
         if (c.command_type == .text) {
             texts += 1;
-            try std.testing.expectEqual(render.u32ToClayColor(0x777777), c.render_data.text.text_color);
+            try std.testing.expectEqual(Color.rgb(0x77, 0x77, 0x77).toClay(), c.render_data.text.text_color);
         }
     }
     try std.testing.expectEqual(@as(usize, 1), texts);

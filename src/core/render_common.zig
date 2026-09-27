@@ -5,6 +5,7 @@
 //! is the portion of the render contract that the reusable components and
 //! test harness can safely import on every supported platform.
 const std = @import("std");
+const Color = @import("color.zig").Color;
 
 /// Headless-testable draw command: rect fill or text run.
 ///
@@ -19,17 +20,22 @@ pub const Draw = struct {
     y: i32,
     w: i32,
     h: i32,
-    color: u32,
+    color: Color,
 };
 
 /// Convert 0xRRGGBB to a Clay color ([4]f32 in 0-255 range, alpha 255).
+///
+/// LEGACY SHIM. `Color` is the color type across the library now and this
+/// exists only so a pre-`Color` caller keeps compiling — the widget layer,
+/// the renderers and the examples all use `color.toClay()` directly. It is
+/// literally `Color.argb(0xFF000000 | hex).toClay()`, which is the point:
+/// there is one expansion rule in the library, not two that can drift.
+///
+/// The forced `0xFF` alpha is why this is a shim and not a peer of
+/// `toU32()`: a 0xRRGGBB value has no alpha to carry, so a caller that
+/// wanted translucency has to use `Color` and say so.
 pub fn u32ToClayColor(hex: u32) [4]f32 {
-    return .{
-        @floatFromInt((hex >> 16) & 0xff),
-        @floatFromInt((hex >> 8) & 0xff),
-        @floatFromInt(hex & 0xff),
-        255,
-    };
+    return Color.argb(0xFF00_0000 | (hex & 0x00ff_ffff)).toClay();
 }
 
 /// How an image fills its box (mirrors wallpaper fit modes + stretch).

@@ -1,9 +1,9 @@
 // Agnostic reusable Clay checkbox (toolkit-style, library only).
-// Imports: std + zclay + core/render_common + sibling components ONLY.
+// Imports: std + zclay + core/color + core/render_common + sibling components ONLY.
 // Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
-const render = @import("../render_common.zig");
+const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
 
@@ -32,14 +32,14 @@ pub const CheckboxProps = struct {
     checked: bool = false,
     size: u32 = 20,
     radius: u32 = 4,
-    box_bg: u32 = 0x1e1e1e,
-    checked_bg: u32 = 0x4caf50,
-    check_color: u32 = 0xffffff,
+    box_bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
+    checked_bg: Color = Color.rgb(0x4c, 0xaf, 0x50),
+    check_color: Color = Color.rgb(0xff, 0xff, 0xff),
     border_width: u16 = 1,
-    border_color: u32 = 0x555555,
-    hover_bg: ?u32 = null,
+    border_color: Color = Color.rgb(0x55, 0x55, 0x55),
+    hover_bg: ?Color = null,
     disabled: bool = false,
-    disabled_bg: u32 = 0x2a2a2a,
+    disabled_bg: Color = Color.rgb(0x2a, 0x2a, 0x2a),
     on_click: ClickFn = null,
     ctx: ?*anyopaque = null,
 };
@@ -71,10 +71,10 @@ pub fn checkbox(props: CheckboxProps) void {
             },
             .child_alignment = .center,
         },
-        .background_color = render.u32ToClayColor(if (props.disabled) props.disabled_bg else if (cl.hovered()) (props.hover_bg orelse (if (props.checked) props.checked_bg else props.box_bg)) else (if (props.checked) props.checked_bg else props.box_bg)),
+        .background_color = (if (props.disabled) props.disabled_bg else if (cl.hovered()) (props.hover_bg orelse (if (props.checked) props.checked_bg else props.box_bg)) else (if (props.checked) props.checked_bg else props.box_bg)).toClay(),
         .corner_radius = .all(@floatFromInt(props.radius)),
         .border = if (props.border_width > 0) .{
-            .color = render.u32ToClayColor(props.border_color),
+            .color = props.border_color.toClay(),
             .width = .outside(props.border_width),
         } else .{},
     })({
@@ -86,7 +86,7 @@ pub fn checkbox(props: CheckboxProps) void {
                         .h = .fixed(inner_f),
                     },
                 },
-                .background_color = render.u32ToClayColor(props.check_color),
+                .background_color = props.check_color.toClay(),
                 .corner_radius = .all(2),
             })({});
         }
@@ -168,14 +168,14 @@ test "CheckboxProps carries neutral defaults" {
     try std.testing.expect(!p.checked);
     try std.testing.expectEqual(@as(u32, 20), p.size);
     try std.testing.expectEqual(@as(u32, 4), p.radius);
-    try std.testing.expectEqual(@as(u32, 0x1e1e1e), p.box_bg);
-    try std.testing.expectEqual(@as(u32, 0x4caf50), p.checked_bg);
-    try std.testing.expectEqual(@as(u32, 0xffffff), p.check_color);
+    try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.box_bg);
+    try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50), p.checked_bg);
+    try std.testing.expectEqual(Color.rgb(0xff, 0xff, 0xff), p.check_color);
     try std.testing.expectEqual(@as(u16, 1), p.border_width);
-    try std.testing.expectEqual(@as(u32, 0x555555), p.border_color);
+    try std.testing.expectEqual(Color.rgb(0x55, 0x55, 0x55), p.border_color);
     try std.testing.expect(p.hover_bg == null);
     try std.testing.expect(!p.disabled);
-    try std.testing.expectEqual(@as(u32, 0x2a2a2a), p.disabled_bg);
+    try std.testing.expectEqual(Color.rgb(0x2a, 0x2a, 0x2a), p.disabled_bg);
     try std.testing.expect(p.on_click == null);
     try std.testing.expect(p.ctx == null);
 }
@@ -205,8 +205,8 @@ fn boxColor(checked: bool) !cl.Color {
 test "checkbox checked/unchecked bg colors differ" {
     const unchecked_c = try boxColor(false);
     const checked_c = try boxColor(true);
-    try std.testing.expectEqual(render.u32ToClayColor(0x1e1e1e), unchecked_c);
-    try std.testing.expectEqual(render.u32ToClayColor(0x4caf50), checked_c);
+    try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e).toClay(), unchecked_c);
+    try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50).toClay(), checked_c);
     try std.testing.expect(!std.meta.eql(unchecked_c, checked_c));
 }
 
@@ -263,7 +263,7 @@ test "disabled checkbox uses disabled_bg and registers no click" {
     const eid = cl.getElementId("test-disabled-checkbox");
     const bg = rectColorForId(cmds, eid.id);
     try std.testing.expect(bg != null);
-    try std.testing.expectEqual(render.u32ToClayColor(0x2a2a2a), bg.?);
+    try std.testing.expectEqual(Color.rgb(0x2a, 0x2a, 0x2a).toClay(), bg.?);
     const bb = cl.getElementData(eid).bounding_box;
     try std.testing.expect(!registry.dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
     try std.testing.expectEqual(@as(usize, 0), click_rec.calls);

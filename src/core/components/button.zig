@@ -1,9 +1,9 @@
 // Agnostic reusable Clay button (toolkit-style, library only).
-// Imports: std + zclay + core/render_common + sibling components ONLY.
+// Imports: std + zclay + core/color + core/render_common + sibling components ONLY.
 // Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
-const render = @import("../render_common.zig");
+const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
 
@@ -32,9 +32,9 @@ pub const ButtonProps = struct {
     id: []const u8,
     label: []const u8,
     font_size: u16 = 14,
-    bg: u32 = 0x1e1e1e,
-    fg: u32 = 0xe8e8e8,
-    hover_bg: u32 = 0x2d2d2d,
+    bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
+    fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
+    hover_bg: Color = Color.rgb(0x2d, 0x2d, 0x2d),
     radius: u32 = 8,
     w: ?u32 = null,
     h: ?u32 = null,
@@ -43,10 +43,10 @@ pub const ButtonProps = struct {
     max_w: ?u32 = null,
     max_h: ?u32 = null,
     border_width: u16 = 0,
-    border_color: u32 = 0x000000,
+    border_color: Color = Color.rgb(0x00, 0x00, 0x00),
     disabled: bool = false,
-    disabled_bg: u32 = 0x1a1a1a,
-    disabled_fg: u32 = 0x777777,
+    disabled_bg: Color = Color.rgb(0x1a, 0x1a, 0x1a),
+    disabled_fg: Color = Color.rgb(0x77, 0x77, 0x77),
     pad_tb: u16 = 8,
     pad_lr: u16 = 16,
     on_click: ClickFn = null,
@@ -79,7 +79,7 @@ pub fn button(props: ButtonProps) void {
     // Disabled buttons never take hover chrome and never register clicks.
     // NOTE: cl.hovered() stays INSIDE the UI() literal below (while this
     // element is open) — hoisting it here would query the parent/root.
-    const fg: u32 = if (props.disabled) props.disabled_fg else props.fg;
+    const fg: Color = if (props.disabled) props.disabled_fg else props.fg;
     cl.UI()(.{
         .id = .ID(props.id),
         .layout = .{
@@ -90,16 +90,16 @@ pub fn button(props: ButtonProps) void {
             .padding = .axes(props.pad_tb, props.pad_lr),
             .child_alignment = .center,
         },
-        .background_color = render.u32ToClayColor(if (props.disabled) props.disabled_bg else if (cl.hovered()) props.hover_bg else props.bg),
+        .background_color = (if (props.disabled) props.disabled_bg else if (cl.hovered()) props.hover_bg else props.bg).toClay(),
         .corner_radius = .all(@floatFromInt(props.radius)),
         .border = if (props.border_width > 0) .{
-            .color = render.u32ToClayColor(props.border_color),
+            .color = props.border_color.toClay(),
             .width = .outside(props.border_width),
         } else .{},
     })({
         cl.text(props.label, .{
             .font_size = props.font_size,
-            .color = render.u32ToClayColor(fg),
+            .color = fg.toClay(),
         });
     });
     // Semantics: registered for EVERY button, not only the ones with a click
@@ -178,9 +178,9 @@ test "button emits rectangle + text render commands" {
 test "ButtonProps carries neutral dark defaults" {
     const p = ButtonProps{ .id = "x", .label = "y" };
     try std.testing.expectEqual(@as(u16, 14), p.font_size);
-    try std.testing.expectEqual(@as(u32, 0x1e1e1e), p.bg);
-    try std.testing.expectEqual(@as(u32, 0xe8e8e8), p.fg);
-    try std.testing.expectEqual(@as(u32, 0x2d2d2d), p.hover_bg);
+    try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.bg);
+    try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.fg);
+    try std.testing.expectEqual(Color.rgb(0x2d, 0x2d, 0x2d), p.hover_bg);
     try std.testing.expectEqual(@as(u32, 8), p.radius);
     try std.testing.expect(p.w == null);
     try std.testing.expect(p.h == null);
@@ -189,10 +189,10 @@ test "ButtonProps carries neutral dark defaults" {
     try std.testing.expect(p.max_w == null);
     try std.testing.expect(p.max_h == null);
     try std.testing.expectEqual(@as(u16, 0), p.border_width);
-    try std.testing.expectEqual(@as(u32, 0x000000), p.border_color);
+    try std.testing.expectEqual(Color.rgb(0x00, 0x00, 0x00), p.border_color);
     try std.testing.expect(!p.disabled);
-    try std.testing.expectEqual(@as(u32, 0x1a1a1a), p.disabled_bg);
-    try std.testing.expectEqual(@as(u32, 0x777777), p.disabled_fg);
+    try std.testing.expectEqual(Color.rgb(0x1a, 0x1a, 0x1a), p.disabled_bg);
+    try std.testing.expectEqual(Color.rgb(0x77, 0x77, 0x77), p.disabled_fg);
     try std.testing.expectEqual(@as(u16, 8), p.pad_tb);
     try std.testing.expectEqual(@as(u16, 16), p.pad_lr);
     try std.testing.expect(p.on_click == null);
@@ -232,8 +232,8 @@ test "button hover switches bg to hover_bg when pointer is over" {
     cl.setMeasureTextFunction(void, {}, stubMeasure);
 
     const props = ButtonProps{ .id = "test-button-hover", .label = "OK" };
-    const rest_c = render.u32ToClayColor(props.bg);
-    const hover_c = render.u32ToClayColor(props.hover_bg);
+    const rest_c = props.bg.toClay();
+    const hover_c = props.hover_bg.toClay();
     const eid = cl.getElementId(props.id);
 
     // Frame 1: pointer parked offscreen — resting bg, not hovered.
@@ -396,7 +396,7 @@ test "disabled button uses disabled_bg and registers no click" {
     const eid = cl.getElementId("test-disabled-button");
     const bg = rectColorForId(cmds, eid.id);
     try std.testing.expect(bg != null);
-    try std.testing.expectEqual(render.u32ToClayColor(0x1a1a1a), bg.?);
+    try std.testing.expectEqual(Color.rgb(0x1a, 0x1a, 0x1a).toClay(), bg.?);
     const bb = cl.getElementData(eid).bounding_box;
     try std.testing.expect(!registry.dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
     try std.testing.expectEqual(@as(usize, 0), click_rec.calls);

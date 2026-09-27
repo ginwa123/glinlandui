@@ -240,6 +240,7 @@ test "a press that starts outside the client area is not fired on release" {
 const host_mod = @import("../core/host.zig");
 const box_widget = @import("../core/components/box.zig");
 const cl = @import("zclay");
+const Color = @import("../core/color.zig").Color;
 
 const Hit = struct {
     fired: usize = 0,
@@ -255,7 +256,7 @@ const App = struct {
             .direction = .column,
             .w = .grow,
             .h = .grow,
-            .bg = 0x334455,
+            .bg = Color.rgb(0x33, 0x44, 0x55),
         }, self, App.child);
     }
 

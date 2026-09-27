@@ -2,11 +2,11 @@
 // NOTE: this `text.zig` is the label widget — NOT font utils. Font
 // measurement/rendering lives in wayland.text (glinlandui); the name
 // overlap is coincidental. This file never imports wayland.text.
-// Imports: std + zclay + core/render_common ONLY.
+// Imports: std + zclay + core/color + core/render_common ONLY.
 // Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
-const render = @import("../render_common.zig");
+const Color = @import("../color.zig").Color;
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
 /// Stored in TextProps for future ID-lookup dispatch; label() itself
@@ -21,10 +21,10 @@ pub const ClickFn = ?*const fn (?*anyopaque) void;
 pub const TextProps = struct {
     str: []const u8,
     font_size: u16 = 14,
-    color: u32 = 0xe8e8e8,
+    color: Color = Color.rgb(0xe8, 0xe8, 0xe8),
     wrap: bool = false,
     disabled: bool = false,
-    disabled_color: u32 = 0x777777,
+    disabled_color: Color = Color.rgb(0x77, 0x77, 0x77),
     on_click: ClickFn = null,
     ctx: ?*anyopaque = null,
 };
@@ -35,7 +35,7 @@ pub const TextProps = struct {
 pub fn label(props: TextProps) void {
     cl.text(props.str, .{
         .font_size = props.font_size,
-        .color = render.u32ToClayColor(if (props.disabled) props.disabled_color else props.color),
+        .color = (if (props.disabled) props.disabled_color else props.color).toClay(),
         .wrap_mode = if (props.wrap) .words else .none,
     });
 }
@@ -89,10 +89,10 @@ test "label emits exactly one text command, no rectangles" {
 test "TextProps carries neutral defaults" {
     const p = TextProps{ .str = "x" };
     try std.testing.expectEqual(@as(u16, 14), p.font_size);
-    try std.testing.expectEqual(@as(u32, 0xe8e8e8), p.color);
+    try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.color);
     try std.testing.expectEqual(false, p.wrap);
     try std.testing.expect(!p.disabled);
-    try std.testing.expectEqual(@as(u32, 0x777777), p.disabled_color);
+    try std.testing.expectEqual(Color.rgb(0x77, 0x77, 0x77), p.disabled_color);
     try std.testing.expect(p.on_click == null);
     try std.testing.expect(p.ctx == null);
 }
@@ -138,7 +138,7 @@ test "disabled label emits one text with the disabled color" {
     for (cmds) |c| {
         if (c.command_type == .text) {
             texts += 1;
-            try std.testing.expectEqual(render.u32ToClayColor(0x777777), c.render_data.text.text_color);
+            try std.testing.expectEqual(Color.rgb(0x77, 0x77, 0x77).toClay(), c.render_data.text.text_color);
         }
     }
     try std.testing.expectEqual(@as(usize, 1), texts);

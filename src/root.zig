@@ -22,6 +22,11 @@ pub const render = @import("core/render.zig");
 pub const text = @import("core/text_backend.zig");
 pub const frame = @import("core/frame.zig");
 pub const host = @import("core/host.zig");
+/// The library's color type. Build one from a CSS hex string, 0-255 ints,
+/// 0-1 floats, or an ARGB literal, and hand it straight to a widget prop --
+/// every color-bearing prop is a `Color`, not a `u32`. Pure and
+/// platform-agnostic like the rest of core/.
+pub const Color = @import("core/color.zig").Color;
 /// Portable software rasterizer surface. Exposed so applications (and the
 /// demo's headless fallback) can render real pixels without a display.
 pub const software_render = @import("core/render_software.zig");
@@ -103,6 +108,11 @@ test {
     _ = @import("core/render_pixels_test.zig");
     _ = @import("core/protocol_consts.zig");
     _ = @import("core/window_contract.zig");
+    // The Color type every color-bearing prop uses. Pure Zig and
+    // platform-free, so it belongs in the parity suite like every other core
+    // module: a hex-parsing bug is a bug on both OSes, not just CI's Linux
+    // leg.
+    _ = @import("core/color.zig");
     // The macOS backend's keycode translation. It is a pure table, so it
     // belongs in the parity suite on every platform: it proves macOS hands the
     // Delegate the same evdev codes Linux does, which is what keeps the widget

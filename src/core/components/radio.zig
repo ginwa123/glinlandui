@@ -1,9 +1,9 @@
 // Agnostic reusable Clay radio button (toolkit-style, library only).
-// Imports: std + zclay + core/render_common + sibling components ONLY.
+// Imports: std + zclay + core/color + core/render_common + sibling components ONLY.
 // Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
-const render = @import("../render_common.zig");
+const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
 
@@ -31,14 +31,14 @@ pub const RadioProps = struct {
     id: []const u8,
     selected: bool = false,
     size: u32 = 20,
-    outer_bg: u32 = 0x1e1e1e,
-    selected_border: u32 = 0x4caf50,
-    border_color: u32 = 0x555555,
-    dot_color: u32 = 0x4caf50,
+    outer_bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
+    selected_border: Color = Color.rgb(0x4c, 0xaf, 0x50),
+    border_color: Color = Color.rgb(0x55, 0x55, 0x55),
+    dot_color: Color = Color.rgb(0x4c, 0xaf, 0x50),
     border_width: u16 = 2,
-    hover_bg: ?u32 = null,
+    hover_bg: ?Color = null,
     disabled: bool = false,
-    disabled_bg: u32 = 0x2a2a2a,
+    disabled_bg: Color = Color.rgb(0x2a, 0x2a, 0x2a),
     on_click: ClickFn = null,
     ctx: ?*anyopaque = null,
 };
@@ -68,10 +68,10 @@ pub fn radio(props: RadioProps) void {
             },
             .child_alignment = .center,
         },
-        .background_color = render.u32ToClayColor(if (props.disabled) props.disabled_bg else if (cl.hovered()) (props.hover_bg orelse props.outer_bg) else props.outer_bg),
+        .background_color = (if (props.disabled) props.disabled_bg else if (cl.hovered()) (props.hover_bg orelse props.outer_bg) else props.outer_bg).toClay(),
         .corner_radius = .all(@as(f32, @floatFromInt(props.size)) / 2.0),
         .border = if (props.border_width > 0) .{
-            .color = render.u32ToClayColor(if (props.selected) props.selected_border else props.border_color),
+            .color = (if (props.selected) props.selected_border else props.border_color).toClay(),
             .width = .outside(props.border_width),
         } else .{},
     })({
@@ -83,7 +83,7 @@ pub fn radio(props: RadioProps) void {
                         .h = .fixed(@as(f32, @floatFromInt(props.size)) / 2.0),
                     },
                 },
-                .background_color = render.u32ToClayColor(props.dot_color),
+                .background_color = props.dot_color.toClay(),
                 .corner_radius = .all(@as(f32, @floatFromInt(props.size)) / 4.0),
             })({});
         }
@@ -163,14 +163,14 @@ test "RadioProps carries neutral defaults" {
     const p = RadioProps{ .id = "x" };
     try std.testing.expect(!p.selected);
     try std.testing.expectEqual(@as(u32, 20), p.size);
-    try std.testing.expectEqual(@as(u32, 0x1e1e1e), p.outer_bg);
-    try std.testing.expectEqual(@as(u32, 0x4caf50), p.selected_border);
-    try std.testing.expectEqual(@as(u32, 0x555555), p.border_color);
-    try std.testing.expectEqual(@as(u32, 0x4caf50), p.dot_color);
+    try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.outer_bg);
+    try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50), p.selected_border);
+    try std.testing.expectEqual(Color.rgb(0x55, 0x55, 0x55), p.border_color);
+    try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50), p.dot_color);
     try std.testing.expectEqual(@as(u16, 2), p.border_width);
     try std.testing.expect(p.hover_bg == null);
     try std.testing.expect(!p.disabled);
-    try std.testing.expectEqual(@as(u32, 0x2a2a2a), p.disabled_bg);
+    try std.testing.expectEqual(Color.rgb(0x2a, 0x2a, 0x2a), p.disabled_bg);
     try std.testing.expect(p.on_click == null);
     try std.testing.expect(p.ctx == null);
 }
@@ -196,8 +196,8 @@ fn borderColorForSelected(selected: bool) !cl.Color {
 test "radio selected/unselected border colors differ" {
     const unselected_c = try borderColorForSelected(false);
     const selected_c = try borderColorForSelected(true);
-    try std.testing.expectEqual(render.u32ToClayColor(0x555555), unselected_c);
-    try std.testing.expectEqual(render.u32ToClayColor(0x4caf50), selected_c);
+    try std.testing.expectEqual(Color.rgb(0x55, 0x55, 0x55).toClay(), unselected_c);
+    try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50).toClay(), selected_c);
     try std.testing.expect(!std.meta.eql(unselected_c, selected_c));
 }
 
@@ -261,7 +261,7 @@ test "disabled radio uses disabled_bg and registers no click" {
     const eid = cl.getElementId("test-disabled-radio");
     const bg = rectColorForId(cmds, eid.id);
     try std.testing.expect(bg != null);
-    try std.testing.expectEqual(render.u32ToClayColor(0x2a2a2a), bg.?);
+    try std.testing.expectEqual(Color.rgb(0x2a, 0x2a, 0x2a).toClay(), bg.?);
     const bb = cl.getElementData(eid).bounding_box;
     try std.testing.expect(!registry.dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
     try std.testing.expectEqual(@as(usize, 0), click_rec.calls);
