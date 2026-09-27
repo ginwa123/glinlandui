@@ -40,8 +40,9 @@ pub const window = if (builtin.is_test)
 else switch (builtin.os.tag) {
     .linux => @import("linux/window.zig"),
     .macos => @import("mac/window.zig"),
+    .windows => @import("windows/window.zig"),
     .freestanding, .wasi => if (builtin.cpu.arch.isWasm()) @import("web/window.zig") else @import("core/window_portable.zig"),
-    // No backend yet (Windows): the CPU-only path, so the library still
+    // No backend yet for anything else: the CPU-only path, so the library still
     // compiles and its headless render still proves pixels.
     else => @import("core/window_portable.zig"),
 };
@@ -60,6 +61,9 @@ pub const render_impl = if (builtin.is_test)
 else switch (builtin.os.tag) {
     .linux => @import("linux/renderer.zig"),
     .macos => @import("mac/renderer.zig"),
+    // Windows presents through D3D11 but rasterises on the CPU, exactly as
+    // macOS does through CoreGraphics; see windows/renderer.zig.
+    .windows => @import("windows/renderer.zig"),
     // The browser draws with the same CPU rasterizer macOS does, because
     // `Surface` is already `ImageData`'s exact layout. `web/renderer.zig` is the
     // two-line re-export that says so where a reader will look for it.
@@ -78,6 +82,7 @@ pub const text_impl = if (builtin.is_test)
 else switch (builtin.os.tag) {
     .linux => @import("linux/text.zig"),
     .macos => @import("mac/text.zig"),
+    .windows => @import("windows/text.zig"),
     // A browser needs this arm specifically, and not merely for tidiness:
     // `core/text_portable.zig` probes font paths through `std.Io`, whose threaded
     // reactor cannot be analysed for a freestanding target, so selecting it here

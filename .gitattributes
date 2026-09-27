@@ -1,0 +1,26 @@
+# The working tree is LF, everywhere, on every platform.
+#
+# This file exists because `zig fmt --check` is a CI GATE, and Zig's
+# formatter emits LF and reports a CRLF file as unformatted. Without this,
+# git's default `core.autocrlf=true` on Windows rewrites every LF file in the
+# checkout to CRLF, which makes the formatter's gate unsatisfiable there: not
+# one `.zig` file in the tree passes, including files nobody has edited. The
+# gate could only ever be satisfied on Linux and macOS, and the moment a
+# Windows job ran it, `zig fmt --check` failed on `build.zig` and every file
+# under `src/` and `examples/` at once.
+#
+# The fix belongs here rather than in the workflow. Setting `core.autocrlf`
+# in a CI step would make the gate pass on the runner while leaving every
+# Windows developer permanently unable to run the same check locally — and
+# would hide the real invariant, which is that the tree is LF.
+#
+# `text=auto` keeps git's binary sniffing (nothing in this repository is
+# binary today, but vendor/ is third-party code that may change).
+* text=auto eol=lf
+
+# The CI scripts are bash, and bash does not accept CRLF in a script: a
+# shebang line ending in \r makes the kernel hand the file to a different
+# interpreter, and a `\r` in the middle of a command silently becomes part of
+# an argument. Same reason, already covered above, called out because these
+# are the files a Windows checkout would most visibly break.
+*.sh text eol=lf
