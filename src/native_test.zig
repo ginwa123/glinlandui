@@ -16,4 +16,10 @@ test {
     _ = @import("linux/text.zig");
     _ = @import("linux/renderer.zig");
     _ = @import("linux/window.zig");
+    // The file dialog's live half: a D-Bus client that talks to a real session
+    // bus, and a fake portal that answers it. This is the only place those can
+    // run — they need a bus, and a CI runner has none, so they SKIP there and
+    // RUN on a developer machine with a session (see the file's own notes on
+    // the two bugs only a live bus can find).
+    _ = @import("linux/file_dialog.zig");
 }

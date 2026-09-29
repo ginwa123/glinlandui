@@ -31,6 +31,7 @@ versa.
 - [Using it as a dependency](#using-it-as-a-dependency)
 - [Hello world](#hello-world)
 - [Colors](#colors)
+- [File and folder dialogs](#file-and-folder-dialogs)
 - [Architecture](#architecture)
 - [Testing](#testing)
 - [End-to-end UI testing](#end-to-end-ui-testing)
@@ -67,8 +68,8 @@ env WAYLAND_DISPLAY= ./zig-out/bin/glinlandui-calculator
 
 # The full gate — all of these must pass before pushing.
 zig fmt --check build.zig src examples
-zig build test --summary all     # 443/458 tests passed (15 skipped)
-./ci/check_test_parity.sh        # parity: 458 tests (matches tests.lock)
+zig build test --summary all     # 656/672 tests passed (16 skipped)
+./ci/check_test_parity.sh        # parity: 672 tests (matches tests.lock)
 ./ci/check_layering.sh           # layering: ok
 ```
 
@@ -230,6 +231,74 @@ pre-`Color` caller and now delegates to the same `Color` rule, so the GLES3 and
 CPU backends cannot drift apart.
 
 ---
+
+## File and folder dialogs
+
+`glinlandui.file_dialog` opens the system file picker. On Linux that is the
+**XDG Desktop Portal** — and this toolkit speaks to it over D-Bus in **pure
+Zig**, with no `libdbus` and no new system dependency:
+
+```zig
+const pick = glinlandui.file_dialog.openFolder(alloc, .{
+    .title = "Choose a workspace",
+    .current_folder = "/home/u",
+}) catch |err| switch (err) {
+    error.Unsupported => return,     // no dialog backend on this platform
+    error.NoPortal => tellUser("install xdg-desktop-portal"),
+    else => return err,
+};
+defer pick.deinit(alloc);
+
+switch (pick.status) {
+    .selected => openWorkspace(pick.first().?),
+    .cancelled => {},                 // the user pressed Escape: not a failure
+    .other => {},
+}
+```
+
+`openFile`, `openFolder` and `saveFile` take one `Options` and return one
+`Selection`. The types are shared across every platform (see
+`src/core/file_dialog_contract.zig`), so the call above compiles everywhere;
+on a host with no dialog backend yet the three functions return
+`error.Unsupported`, and `glinlandui.file_dialog.available()` is a constant
+`false` there — which is what a UI checks to decide whether to draw the button
+at all.
+
+Three things about the Linux backend are worth knowing before using it:
+
+- **It blocks.** A file dialog is modal: the application cannot do anything
+  else while it is open, and on the Wayland backend the event loop is parked
+  anyway. `Options.timeout_ms` is the escape hatch for an app with a deadline
+  of its own; without it the call waits as long as the user takes.
+- **A cancelled dialog is a `Status`, not an error.** The user closed the
+  window on purpose. An app that treats that as a failure shows an error
+  message for something nobody mistook.
+- **The portal is a separate service.** A Wayland session with no desktop
+  portal installed gets `error.NoPortal`, which is a different problem from
+  "the user cancelled" and deserves a different message.
+
+The D-Bus client lives in three files, split so that the protocol is testable
+and the socket is not:
+
+| file | what it is | in the parity suite? |
+|---|---|---|
+| `src/linux/dbus.zig` | the wire format: framing, alignment, SASL, addresses | **yes** — pure, 30+ tests on every OS |
+| `src/linux/portal.zig` | the FileChooser protocol: options, request path, response | **yes** — pure, 20+ tests on every OS |
+| `src/linux/file_dialog.zig` | the socket, the handshake, the wait | no — needs a real bus; tested in `native-test` |
+
+The split is not tidiness. `zig build test` runs the same suite on Linux,
+macOS and Windows, so the encoding of a request and the decoding of a response
+are checked on every platform; only the handful of lines that talk to a socket
+are Linux-only.
+
+`zig build native-test` additionally runs a **live round trip**: the test
+provides its own portal on the session bus, answers a real FileChooser call and
+emits a real `Response`, and the client decodes it. It skips where there is no
+session bus (a CI runner), and on a machine where a real portal holds the
+`org.freedesktop.portal.Desktop` name it uses a name of its own instead. It is
+worth the length: two bugs in this feature — a wrong SASL identity and an
+object path announced as a string — produced no error at all. The bus simply
+closed the connection, and only talking to a real bus found them.
 
 ## Architecture
 
@@ -658,6 +727,8 @@ src/
 │   ├── frame.zig             per-frame boilerplate + command stream
 │   ├── window_contract.zig   WindowConfig · Delegate · WindowState · geometry
 │   ├── window_portable.zig   headless/CPU backend — ALSO the test backend
+│   ├── file_dialog_contract.zig  ★ the file dialog's shared types (every OS)
+│   ├── file_dialog_portable.zig  the dialog on hosts that have none yet
 │   ├── select.zig            ← the one bridge from core to platform.zig
 │   ├── render.zig            renderer facade        (consumes select.zig)
 │   ├── color.zig            the Color type: every prop is one, not a u32
@@ -677,7 +748,12 @@ src/
 │   └── stb_{truetype,image}_impl.c   vendored library TUs
 │
 ├── linux/            the Linux backend.  9 files, mirrored 1:1 with mac/
+│   ├── file_dialog.zig   ★ the XDG portal client (socket + handshake + wait)
+│   ├── dbus.zig          ★ the D-Bus wire codec — PURE, tested on every OS
+│   └── portal.zig        ★ the FileChooser protocol — PURE, same
 └── mac/              the macOS backend.  9 files, mirrored 1:1 with linux/
+
+★ = the file dialog. See "File and folder dialogs" above.
 
 examples/
 ├── calculator.zig            the example app (+ 36 tests)

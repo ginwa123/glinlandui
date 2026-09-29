@@ -71,6 +71,30 @@ else switch (builtin.os.tag) {
     else => @import("core/render_software.zig"),
 };
 
+/// The file-dialog backend: "let the user pick a file, a folder or a save
+/// target".
+///
+/// One OS branch, in the one file allowed to have it, for the same reason the
+/// three above are here. A TEST build takes the portable stub on EVERY
+/// platform, so the parity suite asserts the contract's types without a
+/// compositor, a session bus or a window anywhere in sight — and so a Linux
+/// runner and a macOS runner still report the same test count.
+///
+/// Only Linux is implemented. The stub returns `error.Unsupported`, which is
+/// the honest answer for a host with no portal wired up yet: macOS's
+/// `NSOpenPanel`, Windows' `IFileDialog` and the browser's `<input type=file>`
+/// are each a small file in their own platform folder, and pretending
+/// otherwise would mean a button that opens nothing.
+pub const file_dialog = if (builtin.is_test)
+    @import("core/file_dialog_portable.zig")
+else switch (builtin.os.tag) {
+    .linux => @import("linux/file_dialog.zig"),
+    // macOS: NSOpenPanel. Windows: IFileDialog. wasm: <input type="file">.
+    // Until one of those exists, the stub — which is a real answer, not a
+    // missing one. See core/file_dialog_portable.zig.
+    else => @import("core/file_dialog_portable.zig"),
+};
+
 /// The text backend. Production on Linux is the pangocairo shim; macOS uses the
 /// deterministic portable estimator (see mac/text.zig). Every TEST build uses
 /// the estimator on every OS, for the same parity reason as above.
@@ -104,6 +128,18 @@ else switch (builtin.os.tag) {
 pub const Window = window.Window;
 pub const WindowConfig = window.WindowConfig;
 pub const Delegate = window.Delegate;
+
+// ---- The file dialog's public surface ----
+//
+// The types come from the contract, the behaviour from the backend selected
+// above, so `glinlandui.file_dialog.Options` means one thing on every host.
+pub const FileDialogKind = file_dialog.Kind;
+pub const FileDialogRule = file_dialog.Rule;
+pub const FileDialogFilter = file_dialog.Filter;
+pub const FileDialogOptions = file_dialog.Options;
+pub const FileDialogStatus = file_dialog.Status;
+pub const FileDialogSelection = file_dialog.Selection;
+pub const FileDialogError = file_dialog.Error;
 
 // ---- The two things an APPLICATION needs to know about the platform ----
 //

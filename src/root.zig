@@ -69,6 +69,46 @@ pub const parseTestFrames = platform.parseTestFrames;
 /// the top-level names (`glinlandui.Window`, `glinlandui.render`, …).
 pub const wayland_lib = platform;
 
+/// The file / folder / save-target dialog.
+///
+/// `openFile`, `openFolder` and `saveFile` resolve per platform: the XDG
+/// Desktop Portal on Linux (a pure-Zig D-Bus client, no libdbus), and
+/// `error.Unsupported` everywhere else until a backend lands there. The types
+/// (`Options`, `Filter`, `Status`, `Selection`) come from the shared contract
+/// in `core/`, so an application writes ONE call and gets the same answer shape
+/// on every host.
+///
+///     const pick = glinlandui.file_dialog.openFolder(alloc, .{
+///         .title = "Choose a workspace",
+///         .current_folder = "/home/u",
+///     }) catch |err| switch (err) {
+///         error.Unsupported => return,          // no dialog on this platform
+///         error.NoPortal => showHint("no desktop portal installed"),
+///         else => return err,
+///     };
+///     defer pick.deinit(alloc);
+///     if (pick.status == .selected) use(pick.first().?);
+///
+/// A cancelled dialog is a `Status`, not an error: the user closed it on
+/// purpose, and an app that treats that as a failure shows an error message
+/// for something nobody mistook.
+pub const file_dialog = struct {
+    pub const Kind = platform.FileDialogKind;
+    pub const Rule = platform.FileDialogRule;
+    pub const Filter = platform.FileDialogFilter;
+    pub const Options = platform.FileDialogOptions;
+    pub const Status = platform.FileDialogStatus;
+    pub const Selection = platform.FileDialogSelection;
+    pub const Error = platform.FileDialogError;
+
+    pub const openFile = platform.file_dialog.openFile;
+    pub const openFolder = platform.file_dialog.openFolder;
+    pub const saveFile = platform.file_dialog.saveFile;
+    /// Whether this host can open a dialog at all — so a UI can hide the
+    /// button rather than let the user click something that cannot work.
+    pub const available = platform.file_dialog.available;
+};
+
 /// The browser backend's modules, for the wasm entry point (`src/web_main.zig`).
 ///
 /// ## Why this exists rather than a relative import in the entry point
@@ -181,6 +221,12 @@ test {
     _ = @import("core/render_pixels_test.zig");
     _ = @import("core/protocol_consts.zig");
     _ = @import("core/window_contract.zig");
+    // The file dialog's shared contract, and the portable backend every
+    // non-Linux (and every test) build selects. Both are pure Zig, so the
+    // types and the `error.Unsupported` behaviour are asserted on every
+    // platform rather than only on the one that has a portal.
+    _ = @import("core/file_dialog_contract.zig");
+    _ = @import("core/file_dialog_portable.zig");
     // The Color type every color-bearing prop uses. Pure Zig and
     // platform-free, so it belongs in the parity suite like every other core
     // module: a hex-parsing bug is a bug on both OSes, not just CI's Linux
@@ -221,6 +267,19 @@ test {
     _ = @import("linux/keymap.zig");
     _ = @import("linux/input.zig");
     _ = @import("linux/adapter.zig");
+    // The XDG file dialog's PURE half, for the same reason as the three above:
+    // a D-Bus framing mistake or a mis-encoded `a{sv}` is a file dialog that
+    // silently does the wrong thing, and `linux/file_dialog.zig` — which owns
+    // the socket — is not in this suite. These two carry the entire wire
+    // format, so their tests are the ones that would catch it, on macOS and
+    // Windows as well as on Linux.
+    //
+    // `linux/file_dialog.zig` itself is deliberately ABSENT, exactly like
+    // `linux/window.zig`: it opens a real socket to a real session bus, which
+    // no CI runner has. Its live round trip — a fake portal on a real bus —
+    // lives in the Linux-only `native-test` step (src/native_test.zig).
+    _ = @import("linux/dbus.zig");
+    _ = @import("linux/portal.zig");
     // The Windows backend's PURE role modules — the mirror image of the mac and
     // Linux ones above, for the same mirror-image reason. They live under
     // src/windows/, which the parity suite never compiles (a test build selects

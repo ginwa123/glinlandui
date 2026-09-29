@@ -30,6 +30,8 @@ src/
 │   ├── frame.zig             per-frame boilerplate + command stream
 │   ├── window_contract.zig   WindowConfig · Delegate · WindowState · geometry
 │   ├── window_portable.zig   headless/CPU backend — ALSO the test backend
+│   ├── file_dialog_contract.zig  the file dialog's types (Kind, Options, Status)
+│   ├── file_dialog_portable.zig  the file dialog where there is none (test build)
 │   ├── select.zig            ← the one bridge from core to platform.zig
 │   ├── render.zig            renderer facade      (consumes select.zig)
 │   ├── color.zig            the Color type: every prop is one, not a u32
@@ -71,6 +73,26 @@ counts carry the information:
 | `text.zig` | text engine for this OS | 261 | 38 | 196 | 97 |
 | `shim.h` | this platform's C shim header | 30 | 111 | 190 | 254 |
 | `shim.c` / `shim.m` / `web/shim.js` | this platform's shim TU | 101 | 415 | 1032 | 418 |
+
+**`linux/` also holds three files with no counterpart in the other columns**:
+`file_dialog.zig`, `dbus.zig` and `portal.zig`, the XDG Desktop Portal client.
+They are not a broken mirror, for the same reason `web/compat_heap.zig` is not:
+they implement something only one platform has. The XDG portal is a FreeDesktop
+specification, and the file chooser on macOS is `NSOpenPanel`, on Windows
+`IFileDialog`, and in a browser `<input type="file">` — four unrelated APIs
+that share a name and nothing else. The portable half is
+`core/file_dialog_contract.zig` (the types) and
+`core/file_dialog_portable.zig` (the `error.Unsupported` backend every other
+host selects, and every test build selects).
+
+The split inside the Linux three is the one worth copying:
+`dbus.zig` and `portal.zig` are **pure** — no socket, no `@cImport` — so
+`src/root.zig`'s aggregate test block imports them and their tests run on
+Linux, macOS and Windows alike, exactly like `linux/keymap.zig`. Only
+`file_dialog.zig`, which opens a real socket to a real session bus, is
+Linux-only, and its tests live in the `native-test` step. A wire-format bug is
+a bug the user hits on Linux; it is much cheaper to find it in a suite that
+runs everywhere.
 
 Two names in that last row cannot match, and each says something:
 
