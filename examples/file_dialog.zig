@@ -68,7 +68,7 @@ pub const Outcome = union(enum) {
     idle,
     /// The user confirmed. The path is owned by the `Machine`, not by the
     /// `Selection` that reported it.
-    selected: []const u8,
+    selected: Selected,
     /// The user dismissed the dialog. NOT a failure — see the note below.
     cancelled,
     /// This host has no dialog backend (a browser, say).
@@ -83,10 +83,17 @@ pub const Outcome = union(enum) {
     timed_out,
 
     /// The one-line summary the status bar shows.
+    ///
+    /// Only the fixed strings live here. The `selected` case needs a buffer
+    /// (it composes a count and a path), so it is NOT handled by this switch
+    /// — `Machine.line` owns that arm and this one returns "" for it. Keeping
+    /// a second formatter would let the two disagree about what a selection
+    /// looks like, which is the same class of bug as two definitions of a
+    /// state machine's terminal state.
     pub fn line(self: Outcome) []const u8 {
         return switch (self) {
             .idle => "Nothing asked yet. Pick one of the three.",
-            .selected => |p| p,
+            .selected => "", // composed by `Machine.line`
             // Deliberately calm, and deliberately not the word "error": the
             // user pressed Escape, which is a decision, not a malfunction.
             .cancelled => "Cancelled — nothing was chosen.",
@@ -97,6 +104,23 @@ pub const Outcome = union(enum) {
             .timed_out => "Timed out waiting for the dialog.",
         };
     }
+
+    /// A confirmed selection, reduced to what a status bar can honestly show.
+    ///
+    /// `count` is here because it is the difference between "here is your
+    /// file" and "here is your file, and two others you picked are not in
+    /// this string". `open_file` is opened with `multiple = true` in this
+    /// example, so a five-file selection is an ORDINARY outcome — and an app
+    /// that keeps only the first path and says nothing about it is worse than
+    /// one that never offered the choice, because the user believes the other
+    /// four were taken.
+    pub const Selected = struct {
+        /// The FIRST path. Owned by the `Machine`, not by the `Selection`.
+        path: []const u8,
+        /// How many paths the dialog actually returned. `1` in the ordinary
+        /// case; greater only for a `multiple` request.
+        count: usize,
+    };
 
     /// Whether the status bar should look like something went wrong.
     ///
@@ -115,6 +139,13 @@ pub const Outcome = union(enum) {
 /// last question, in a form the UI can draw and a test can assert.
 pub const Machine = struct {
     outcome: Outcome = .idle,
+    /// Which dialog produced `outcome`.
+    ///
+    /// Kept even for a cancellation, because "you cancelled the folder
+    /// picker" and "you cancelled Save As" are different conversations the
+    /// user was having, and the status bar is the only place left to say
+    /// which one just ended.
+    last_kind: dialog.Kind = .open_file,
     /// The last selected path, copied here.
     ///
     /// It has to be copied. `Selection.paths` is allocated by the allocator
@@ -124,6 +155,12 @@ pub const Machine = struct {
     /// the worst kind of bug to notice.
     path_buf: [1024]u8 = undefined,
     path_len: usize = 0,
+    /// Scratch for `line()`. It is a FIELD rather than a local so the returned
+    /// slice stays valid for the draw that reads it — the same reason
+    /// `path_buf` lives here. It is also why `line` takes a mutable `*Machine`:
+    /// composing a sentence needs to write, and taking `*const` would only buy
+    /// a guarantee the caller does not need.
+    line_buf: [1200]u8 = undefined,
 
     /// The folder to start the next dialog in: the directory of the last
     /// thing the user picked.
@@ -136,7 +173,7 @@ pub const Machine = struct {
     /// handler: the string surgery is the part worth testing.
     pub fn folderHint(self: *const Machine) ?[]const u8 {
         const path = switch (self.outcome) {
-            .selected => |p| p,
+            .selected => |s| s.path,
             else => return null,
         };
         const slash = std.mem.lastIndexOfScalar(u8, path, '/') orelse return null;
@@ -146,14 +183,53 @@ pub const Machine = struct {
         return path[0..slash];
     }
 
+    /// The status-bar text, composed.
+    ///
+    /// This owns the `selected` arm, which `Outcome.line` deliberately does
+    /// not: a selection is the one outcome that has to say WHICH dialog
+    /// answered and HOW MUCH came back, and that needs a buffer.
+    ///
+    /// The count matters most here. This example opens its file dialog with
+    /// `multiple = true`, so "3 files, first: /a.png" is a line the user can
+    /// act on, where a bare "/a.png" is a line that makes them believe the
+    /// other two were lost.
+    pub fn line(self: *Machine) []const u8 {
+        const sel = switch (self.outcome) {
+            .selected => |s| s,
+            else => return self.outcome.line(),
+        };
+        const what = switch (self.last_kind) {
+            .open_file => "file",
+            .open_folder => "folder",
+            .save_file => "save target",
+        };
+        const written = if (sel.count > 1)
+            std.fmt.bufPrint(
+                &self.line_buf,
+                "{d} files chosen, first: {s}",
+                .{ sel.count, sel.path },
+            ) catch sel.path
+        else
+            std.fmt.bufPrint(&self.line_buf, "{s}: {s}", .{ what, sel.path }) catch sel.path;
+        return written;
+    }
+
     /// Fold a successful call's `Selection` into an `Outcome`.
+    ///
+    /// `kind` is a parameter, not a detail, and this is the correction that
+    /// came out of writing the tests: the example offers three different
+    /// dialogs, and a status bar that renders a picked FOLDER exactly like a
+    /// picked FILE is not telling the user which question they answered. The
+    /// three `Selection`s are the same type and the same shape — the only
+    /// thing that distinguishes them is the question that was asked.
     ///
     /// Takes the `Selection` BY VALUE and copies out of it, so the caller can
     /// `defer selection.deinit(alloc)` unconditionally and in any order. The
     /// cancellation branch is here rather than at the call site for the reason
     /// above: it is a `Status`, and folding it in is what stops it from being
     /// mistaken for a failure.
-    pub fn fromSelection(self: *Machine, selection: dialog.Selection) void {
+    pub fn fromSelection(self: *Machine, kind: dialog.Kind, selection: dialog.Selection) void {
+        self.last_kind = kind;
         switch (selection.status) {
             .selected => {
                 const path = selection.first() orelse {
@@ -167,7 +243,13 @@ pub const Machine = struct {
                 const n = @min(path.len, self.path_buf.len);
                 @memcpy(self.path_buf[0..n], path[0..n]);
                 self.path_len = n;
-                self.outcome = .{ .selected = self.path_buf[0..n] };
+                // The COUNT is kept even though only the first path is. See
+                // `Selected.count`: silently dropping N-1 paths the user
+                // picked is a lie told by omission.
+                self.outcome = .{ .selected = .{
+                    .path = self.path_buf[0..n],
+                    .count = selection.paths.len,
+                } };
             },
             .cancelled => self.outcome = .cancelled,
             .other => self.outcome = .portal_error,
@@ -327,7 +409,7 @@ pub const App = struct {
         // selection is a no-op, so there is no branch to get wrong here.
         defer selection.deinit(self.alloc);
 
-        self.m.fromSelection(selection);
+        self.m.fromSelection(kind, selection);
     }
 
     fn onAction(ctx: ?*anyopaque, index: usize) void {
@@ -422,7 +504,7 @@ pub const App = struct {
             .color = COLOR_DIM,
         });
         components.text.label(.{
-            .str = outcome.line(),
+            .str = self.m.line(),
             .font_size = 14,
             // Green for an answer, red for a problem, and NOT red for a
             // cancellation — `isProblem` is the same function the test holds
@@ -561,7 +643,7 @@ test "a cancelled dialog is reported calmly, not as a problem" {
     var m = Machine{};
     // The user pressed Escape. This is the single most important line in the
     // example, and it is the one most integrations get wrong.
-    m.fromSelection(.{ .status = .cancelled });
+    m.fromSelection(.open_file, .{ .status = .cancelled });
     try std.testing.expectEqual(Outcome{ .cancelled = {} }, m.outcome);
     try std.testing.expect(!m.outcome.isProblem());
 }
@@ -575,7 +657,7 @@ test "a selected dialog keeps a COPY of the path, and survives the free" {
     var m = Machine{};
     {
         const selection = dialog.Selection{ .status = .selected, .paths = paths };
-        m.fromSelection(selection);
+        m.fromSelection(.open_file, selection);
         // Exactly what an app does: take the answer, then release it.
         selection.deinit(alloc);
     }
@@ -583,14 +665,14 @@ test "a selected dialog keeps a COPY of the path, and survives the free" {
     // The allocator is watching. If `fromSelection` had kept the borrowed
     // slice, this read would be a use-after-free and the testing allocator
     // would report the corruption on the next line.
-    try std.testing.expectEqualStrings("/home/u/Pictures/cat (1).png", m.outcome.line());
+    try std.testing.expectEqualStrings("file: /home/u/Pictures/cat (1).png", m.line());
 }
 
 test "a selection with no path is a problem, not an index panic" {
     // `.selected` with nothing in it contradicts the contract, and it is
     // exactly what a careless backend produces. The UI must survive it.
     var m = Machine{};
-    m.fromSelection(.{ .status = .selected, .paths = &.{} });
+    m.fromSelection(.open_file, .{ .status = .selected, .paths = &.{} });
     try std.testing.expectEqual(Outcome{ .portal_error = {} }, m.outcome);
     try std.testing.expect(m.outcome.isProblem());
 }
@@ -637,7 +719,7 @@ test "the next dialog starts in the folder the last one came from" {
     // opens wherever the backend decides.
     try std.testing.expectEqual(@as(?[]const u8, null), m.folderHint());
 
-    m.fromSelection(.{
+    m.fromSelection(.open_file, .{
         .status = .selected,
         .paths = @constCast(&[_][]const u8{"/home/u/Pictures/holiday/cat.png"}),
     });
@@ -645,16 +727,97 @@ test "the next dialog starts in the folder the last one came from" {
 
     // A cancellation forgets it: the user said no, and the next dialog should
     // not appear to remember a choice they declined to make.
-    m.fromSelection(.{ .status = .cancelled });
+    m.fromSelection(.open_file, .{ .status = .cancelled });
     try std.testing.expectEqual(@as(?[]const u8, null), m.folderHint());
 
     // A bare filename is not a path, and "/" is not a useful hint. Both would
     // otherwise be passed to the backend as `current_folder`, which is a path
     // it will try to open.
-    m.fromSelection(.{ .status = .selected, .paths = @constCast(&[_][]const u8{"cat.png"}) });
+    m.fromSelection(.open_file, .{ .status = .selected, .paths = @constCast(&[_][]const u8{"cat.png"}) });
     try std.testing.expectEqual(@as(?[]const u8, null), m.folderHint());
-    m.fromSelection(.{ .status = .selected, .paths = @constCast(&[_][]const u8{"/cat.png"}) });
+    m.fromSelection(.open_file, .{ .status = .selected, .paths = @constCast(&[_][]const u8{"/cat.png"}) });
     try std.testing.expectEqual(@as(?[]const u8, null), m.folderHint());
+}
+
+test "a folder pick reads as a folder, not as a file" {
+    // This is the test that was missing, and its absence was a real defect
+    // rather than a coverage gap. `fromSelection` used to take only a
+    // `Selection`, so all three dialogs produced an identical outcome and the
+    // status bar could not tell the user which question they had just
+    // answered. A picked folder and a picked file are the same TYPE; the only
+    // thing that distinguishes them is the question that was asked, so the
+    // question has to travel with the answer.
+    const alloc = std.testing.allocator;
+    const path = try alloc.dupe(u8, "/home/u/Pictures");
+    const paths = try alloc.alloc([]const u8, 1);
+    paths[0] = path;
+
+    var m = Machine{};
+    const selection = dialog.Selection{ .status = .selected, .paths = paths };
+    m.fromSelection(.open_folder, selection);
+    selection.deinit(alloc);
+
+    try std.testing.expectEqualStrings("folder: /home/u/Pictures", m.line());
+    // A folder selection is a directory, so it is its own `current_folder`
+    // for next time — not the parent, which is the bug `folderHint` avoids
+    // for files.
+    try std.testing.expectEqualStrings("/home/u", m.folderHint().?);
+}
+
+test "a save target reads as a save target" {
+    const alloc = std.testing.allocator;
+    const path = try alloc.dupe(u8, "/home/u/out/untitled.png");
+    const paths = try alloc.alloc([]const u8, 1);
+    paths[0] = path;
+
+    var m = Machine{};
+    const selection = dialog.Selection{ .status = .selected, .paths = paths };
+    m.fromSelection(.save_file, selection);
+    selection.deinit(alloc);
+
+    try std.testing.expectEqualStrings("save target: /home/u/out/untitled.png", m.line());
+    // A save target has exactly one answer by definition, so a count above 1
+    // is something no backend should produce — see the next test.
+    try std.testing.expect(!dialog.Kind.save_file.allowsMultiple());
+}
+
+test "a multi-file selection says how many, not just the first" {
+    // `open_file` is opened with `multiple = true` in this example, so this is
+    // an ordinary outcome, not an exotic one. Showing only the first path and
+    // saying nothing makes the user believe the other two were taken — which
+    // is worse than never having offered the choice.
+    const alloc = std.testing.allocator;
+    const names = [_][]const u8{ "a.png", "b.png", "c.png" };
+    const paths = try alloc.alloc([]const u8, names.len);
+    for (names, 0..) |n, i| paths[i] = try alloc.dupe(u8, n);
+
+    var m = Machine{};
+    const selection = dialog.Selection{ .status = .selected, .paths = paths };
+    m.fromSelection(.open_file, selection);
+
+    // Counted BEFORE the free, and readable after it: the count is the thing
+    // that must survive, because the paths do not.
+    try std.testing.expectEqual(@as(usize, 3), m.outcome.selected.count);
+    selection.deinit(alloc);
+
+    try std.testing.expectEqualStrings("3 files chosen, first: a.png", m.line());
+    try std.testing.expect(!m.outcome.isProblem());
+}
+
+test "a cancelled folder dialog is still a cancellation, not a problem" {
+    // The three cancellations are the same STATUS but not the same event, and
+    // the one that is easiest to get wrong is the one that looks identical in
+    // the data: `.cancelled` carries no kind of its own.
+    var m = Machine{};
+    for ([_]dialog.Kind{ .open_file, .open_folder, .save_file }) |kind| {
+        m.fromSelection(kind, .{ .status = .cancelled });
+        try std.testing.expectEqual(Outcome{ .cancelled = {} }, m.outcome);
+        try std.testing.expect(!m.outcome.isProblem());
+        try std.testing.expectEqualStrings("Cancelled — nothing was chosen.", m.line());
+        // The kind is remembered even though nothing was chosen, so the app
+        // can say which dialog the user backed out of.
+        try std.testing.expectEqual(kind, m.last_kind);
+    }
 }
 
 test "the filter list is one that a portal can actually be asked for" {
