@@ -813,8 +813,17 @@ pub fn build(b: *std.Build) void {
         const probe = b.addSystemCommand(&.{ "zig", "cc", "-O1" });
         probe.addFileArg(b.path("ci/check_windows_colors.c"));
         probe.addFileArg(b.path("src/windows/shim.c"));
+        // MUST stay the same set `addWindowsShim` links, and for the same
+        // reason the shim TU is compiled in rather than copied: the probe is
+        // only worth running if it links the same way the window does. A
+        // library the probe omits is a link error here and not in the build —
+        // `ole32` was exactly that, added for the file dialog
+        // (CoCreateInstance / CoTaskMemFree) and missing from this list, so
+        // `zig build check-colors` failed with `undefined symbol` while
+        // `zig build` itself was fine.
         probe.addArgs(&.{
-            "-ld3d11", "-ldxgi", "-ld3dcompiler_47", "-luser32", "-lgdi32",
+            "-ld3d11", "-ldxgi",    "-ld3dcompiler_47", "-luser32",
+            "-lgdi32", "-lshell32", "-lole32",
         });
 
         const probe_dir = "zig-out/.ci";

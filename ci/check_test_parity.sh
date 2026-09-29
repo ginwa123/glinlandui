@@ -12,7 +12,21 @@
 set -euo pipefail
 
 EXPECTED="$(tr -d '[:space:]' < tests.lock)"
-OUT="$(zig build test --summary all 2>&1)"
+
+# `zig build test` failing and `zig build test` PASSING with a different count
+# are two different problems, and this script used to look identical for both:
+# a build failure puts a compile error in $OUT, the `grep` below finds no
+# "tests passed" line, and the script then exits 1 having printed NOTHING.
+#
+# That is how a macOS `expected ']'` in src/mac/shim.m sat behind a bare
+# "Process completed with exit code 1" for two commits before anyone knew a
+# syntax error was involved. A gate that fails without saying why is a gate
+# that gets ignored.
+if ! OUT="$(zig build test --summary all 2>&1)"; then
+  printf '%s\n' "$OUT" >&2
+  echo "parity: 'zig build test' did not build — a COMPILE failure, not a count mismatch" >&2
+  exit 1
+fi
 echo "$OUT" | grep -E "tests passed" || true
 
 # `zig build --summary all` appends a ` (N skipped)` suffix when any test
