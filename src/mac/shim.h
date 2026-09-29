@@ -104,6 +104,67 @@ void glin_cocoa_quit(GlinCocoaWindow *win);
 /// The window's current content size in points (0 if the window is gone).
 void glin_cocoa_content_size(GlinCocoaWindow *win, int *out_w, int *out_h);
 
+// ---------------------------------------------------------------------------
+// The file dialog.
+//
+// Same rules as everything above this line: plain C in, no Objective-C type
+// ever appears in this header, and NO DECISIONS. Which panel a request turns
+// into, and what a modal answer means, are in `mac/file_dialog_model.zig`,
+// which is pure Zig and unit-tested on every platform. This section owns the
+// NSOpenPanel and nothing else.
+// ---------------------------------------------------------------------------
+
+/// One `allowedFileTypes` entry: a display name and its comma-separated
+/// extensions/globs. The patterns are already flattened by
+/// `model.flattenFilters`, which is where the comma-joining is tested.
+typedef struct {
+    const char *name;
+    const char *patterns;
+} GlinCocoaFileFilter;
+
+/// Everything the panel needs. A struct of plain C so the shim takes one
+/// pointer and Zig builds it in one place.
+typedef struct {
+    /// 0 = open a file, 1 = choose a folder, 2 = choose a save target.
+    int kind;
+    int can_choose_files;
+    int can_choose_directories;
+    int allows_multiple;
+    int can_create_files;
+    /// Title, or NULL for AppKit's own.
+    const char *title;
+    /// Directory to open in, or NULL.
+    const char *directory;
+    /// Name to pre-fill, or NULL.
+    const char *file_name;
+    /// Label for the confirming button, or NULL.
+    const char *prompt;
+    /// Filter list, or NULL for "all files".
+    const GlinCocoaFileFilter *filters;
+    int filter_count;
+} GlinCocoaFileRequest;
+
+/// One selected path, delivered as a UTF-8 C string valid ONLY for the
+/// duration of the call. That lifetime is why this is a callback and not a
+/// returned array: AppKit owns the `NSURL`s until the panel is gone, so
+/// anything the shim handed back would be a pointer into an object the user
+/// just dismissed.
+typedef void (*GlinCocoaOnPath)(void *user, const char *path_utf8);
+
+/// Run the panel modally and return the raw `NSModalResponse`.
+///
+/// The response is returned as an int, not interpreted: `NSModalResponse` is
+/// an enum whose OK is 1 and whose Cancel is **2**, and deciding what that
+/// means is `model.statusForResponse`'s job, in a file that is unit-tested on
+/// every platform. The selected paths arrive through `on_path`.
+///
+/// `on_path` is never called for a cancelled panel. A NULL request or a NULL
+/// callback returns `NSModalResponseAbort` (4) rather than crashing, because
+/// a shim that can be crashed by a null pointer is a shim with no useful
+/// failure mode.
+int glin_cocoa_file_dialog(const GlinCocoaFileRequest *request,
+                           GlinCocoaOnPath on_path, void *user);
+
 #ifdef __cplusplus
 }
 #endif

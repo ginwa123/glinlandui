@@ -58,8 +58,8 @@ src/
 
 ### The platform mirror
 
-`linux/`, `mac/`, `windows/` and `web/` expose the **same nine file names**, so
-you can read and diff them side by side. **Same role, not same code** — the line
+`linux/`, `mac/`, `windows/` and `web/` expose the **same file names**, so you
+can read and diff them side by side. **Same role, not same code** — the line
 counts carry the information:
 
 | file | role | linux | mac | windows | web |
@@ -73,26 +73,41 @@ counts carry the information:
 | `text.zig` | text engine for this OS | 261 | 38 | 196 | 97 |
 | `shim.h` | this platform's C shim header | 30 | 111 | 190 | 254 |
 | `shim.c` / `shim.m` / `web/shim.js` | this platform's shim TU | 101 | 415 | 1032 | 418 |
+| `file_dialog.zig` | the system file dialog | 1041 | 225 | 210 | — |
+| `file_dialog_model.zig` | the dialog's decisions, pure | — | 317 | 347 | — |
 
-**`linux/` also holds three files with no counterpart in the other columns**:
-`file_dialog.zig`, `dbus.zig` and `portal.zig`, the XDG Desktop Portal client.
-They are not a broken mirror, for the same reason `web/compat_heap.zig` is not:
-they implement something only one platform has. The XDG portal is a FreeDesktop
-specification, and the file chooser on macOS is `NSOpenPanel`, on Windows
-`IFileDialog`, and in a browser `<input type="file">` — four unrelated APIs
-that share a name and nothing else. The portable half is
-`core/file_dialog_contract.zig` (the types) and
-`core/file_dialog_portable.zig` (the `error.Unsupported` backend every other
-host selects, and every test build selects).
+**The file dialog is a row, and `linux/` still holds two files with no
+counterpart anywhere: `dbus.zig` and `portal.zig`.** They are not a broken
+mirror, for the same reason `web/compat_heap.zig` is not: they implement
+something only one platform has. The XDG Desktop Portal is a FreeDesktop
+specification, and D-Bus is a wire protocol with frames, headers and
+alignment — which is why its protocol layer needs two files, while AppKit's
+(a few booleans and an enum) and COM's (a class id and a bit field) each fit in
+one. The portable half is `core/file_dialog_contract.zig` (the types, and the
+`file://` codec two of the three backends share) and
+`core/file_dialog_portable.zig` (the `error.Unsupported` backend every host
+without a dialog selects — and every test build selects, which is what keeps
+the parity count identical).
 
-The split inside the Linux three is the one worth copying:
-`dbus.zig` and `portal.zig` are **pure** — no socket, no `@cImport` — so
-`src/root.zig`'s aggregate test block imports them and their tests run on
-Linux, macOS and Windows alike, exactly like `linux/keymap.zig`. Only
-`file_dialog.zig`, which opens a real socket to a real session bus, is
-Linux-only, and its tests live in the `native-test` step. A wire-format bug is
-a bug the user hits on Linux; it is much cheaper to find it in a suite that
-runs everywhere.
+**The split inside each backend is the one worth copying.** The models are
+**pure** — no socket, no `@cImport` — so `src/root.zig`'s aggregate test block
+imports all three and their tests run on Linux, macOS and Windows alike,
+exactly like `linux/keymap.zig`. Only the file that calls into the system
+dialog is platform-only, and the three of them are as untestable as their
+shims: a socket needs a real bus, `NSOpenPanel` needs AppKit, COM needs a
+desktop.
+
+That is the whole point of the arrangement, and it is why the two mistakes
+that would be invisible in review are tested functions:
+
+  - `NSModalResponse` is OK = 1 and Cancel = **2** — the opposite of the order
+    they read in. Swapped, every cancel reports a selection of nothing and
+    every real selection reports a cancel.
+  - `IFileDialog::SetFileTypeIndex` is **1-based**, and 0 means "no filter" to
+    the model's caller but "the first filter" to the platform.
+  - A save dialog must not set `file_must_exist` next to `path_must_exist`:
+    with both, it refuses to save anything that does not exist, which is
+    everything.
 
 Two names in that last row cannot match, and each says something:
 

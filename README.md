@@ -68,8 +68,8 @@ env WAYLAND_DISPLAY= ./zig-out/bin/glinlandui-calculator
 
 # The full gate — all of these must pass before pushing.
 zig fmt --check build.zig src examples
-zig build test --summary all     # 656/672 tests passed (16 skipped)
-./ci/check_test_parity.sh        # parity: 672 tests (matches tests.lock)
+zig build test --summary all     # 682/698 tests passed (16 skipped)
+./ci/check_test_parity.sh        # parity: 698 tests (matches tests.lock)
 ./ci/check_layering.sh           # layering: ok
 ```
 
@@ -234,9 +234,17 @@ CPU backends cannot drift apart.
 
 ## File and folder dialogs
 
-`glinlandui.file_dialog` opens the system file picker. On Linux that is the
-**XDG Desktop Portal** — and this toolkit speaks to it over D-Bus in **pure
-Zig**, with no `libdbus` and no new system dependency:
+`glinlandui.file_dialog` opens the system file picker, on all three desktop
+platforms:
+
+| host | what it runs | how it is reached |
+|---|---|---|
+| Linux | the **XDG Desktop Portal** | D-Bus, in **pure Zig** — no `libdbus`, no new system dependency |
+| macOS | `NSOpenPanel` | through `mac/shim.m` |
+| Windows | `IFileDialog` | through `windows/shim.c` |
+| browser | — | `error.Unsupported`; see below |
+
+One API, three unrelated system dialogs:
 
 ```zig
 const pick = glinlandui.file_dialog.openFolder(alloc, .{
@@ -257,12 +265,16 @@ switch (pick.status) {
 ```
 
 `openFile`, `openFolder` and `saveFile` take one `Options` and return one
-`Selection`. The types are shared across every platform (see
-`src/core/file_dialog_contract.zig`), so the call above compiles everywhere;
-on a host with no dialog backend yet the three functions return
-`error.Unsupported`, and `glinlandui.file_dialog.available()` is a constant
-`false` there — which is what a UI checks to decide whether to draw the button
-at all.
+`Selection`, and the types are shared across every platform (see
+`src/core/file_dialog_contract.zig`) — so the call above compiles on Linux,
+macOS and Windows alike.
+
+The browser is the one host without a backend, and it is not a smaller version
+of the same problem: a page's `<input type="file">` has no filesystem paths
+and answers asynchronously, through a file handle the page can read but the
+application cannot. The three functions return `error.Unsupported` there, and
+`glinlandui.file_dialog.available()` is a constant `false` — which is what a UI
+checks to decide whether to draw the button at all.
 
 Three things about the Linux backend are worth knowing before using it:
 
@@ -275,21 +287,38 @@ Three things about the Linux backend are worth knowing before using it:
   message for something nobody mistook.
 - **The portal is a separate service.** A Wayland session with no desktop
   portal installed gets `error.NoPortal`, which is a different problem from
-  "the user cancelled" and deserves a different message.
+  "the user cancelled" and deserves a different message. macOS and Windows
+  have no such failure: the dialog is a window in the process.
+- **`timeout_ms` is Linux-only.** It bounds the wait for the portal's answer.
+  AppKit and COM own their own modal loops, and the only way to stop one is to
+  post a cancel from a timer the host does not run while it is blocked. A host
+  that needs a deadline should open the dialog on a worker thread.
 
-The D-Bus client lives in three files, split so that the protocol is testable
-and the socket is not:
+### How it is put together
+
+Every backend is the same two halves, and the halves are not the same size:
 
 | file | what it is | in the parity suite? |
 |---|---|---|
-| `src/linux/dbus.zig` | the wire format: framing, alignment, SASL, addresses | **yes** — pure, 30+ tests on every OS |
-| `src/linux/portal.zig` | the FileChooser protocol: options, request path, response | **yes** — pure, 20+ tests on every OS |
+| `src/linux/dbus.zig` | the D-Bus wire format: framing, alignment, SASL, addresses | **yes** — pure, 30+ tests on every OS |
+| `src/linux/portal.zig` | the FileChooser protocol: options, request path, response | **yes** — pure, 19 tests on every OS |
+| `src/mac/file_dialog_model.zig` | the AppKit panel: which panel, and what a modal answer means | **yes** — pure, 14 tests |
+| `src/windows/file_dialog_model.zig` | the IFileDialog: which COM class, which options, the 1-based filter index | **yes** — pure, 14 tests |
 | `src/linux/file_dialog.zig` | the socket, the handshake, the wait | no — needs a real bus; tested in `native-test` |
+| `src/mac/file_dialog.zig` / `src/windows/file_dialog.zig` | the wiring to the shim | no — needs AppKit or COM |
 
-The split is not tidiness. `zig build test` runs the same suite on Linux,
-macOS and Windows, so the encoding of a request and the decoding of a response
-are checked on every platform; only the handful of lines that talk to a socket
-are Linux-only.
+So the two things most likely to be wrong in each backend — *what to ask for*
+and *what the answer means* — are in files the parity suite runs on **every**
+platform, and only the call into the system dialog is untested. That is the
+same bargain the rest of this repository makes with its shims, and it is why
+`NSModalResponse` being OK = 1 and Cancel = **2** is a tested function rather
+than an `if` in a file a Linux runner never opens.
+
+What the macOS backend returns is a `file://` URL, and what the Windows one
+returns is already a path — so the URI codec in
+`src/core/file_dialog_contract.zig` has two users and the Windows backend does
+not need it at all. One implementation, tested everywhere, beats two where one
+of them is only tested on the OS that has it.
 
 `zig build native-test` additionally runs a **live round trip**: the test
 provides its own portal on the session bus, answers a real FileChooser call and
@@ -747,11 +776,13 @@ src/
 │   │   └── assertions.zig        node assertions
 │   └── stb_{truetype,image}_impl.c   vendored library TUs
 │
-├── linux/            the Linux backend.  9 files, mirrored 1:1 with mac/
+├── linux/            the Linux backend.  12 files, mirrored 1:1 with mac/
 │   ├── file_dialog.zig   ★ the XDG portal client (socket + handshake + wait)
+│   ├── file_dialog_model.zig  ★ the AppKit panel — PURE, tested on every OS
 │   ├── dbus.zig          ★ the D-Bus wire codec — PURE, tested on every OS
 │   └── portal.zig        ★ the FileChooser protocol — PURE, same
-└── mac/              the macOS backend.  9 files, mirrored 1:1 with linux/
+├── mac/              the macOS backend.  10 files, mirrored 1:1 with linux/
+├── windows/          the Windows backend.  11 files, mirrored 1:1 with linux/
 
 ★ = the file dialog. See "File and folder dialogs" above.
 

@@ -1101,6 +1101,12 @@ fn addWindowsShim(b: *std.Build, m: *std.Build.Module) void {
     m.linkSystemLibrary("user32", .{});
     m.linkSystemLibrary("gdi32", .{});
     m.linkSystemLibrary("shell32", .{});
+    // ole32 for the file dialog: CoCreateInstance (which CLSID_FileOpenDialog
+    // and CLSID_FileSaveDialog are) and CoTaskMemFree (which frees the
+    // SIGDN_FILESYSPATH string IShellItem_GetDisplayName allocates). Without
+    // it the dialog links to an undefined symbol, and the other eleven
+    // libraries would all still be there looking correct.
+    m.linkSystemLibrary("ole32", .{});
 }
 
 /// Keep the stb implementation headers identical on every Linux runner and

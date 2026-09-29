@@ -80,18 +80,22 @@ else switch (builtin.os.tag) {
 /// compositor, a session bus or a window anywhere in sight — and so a Linux
 /// runner and a macOS runner still report the same test count.
 ///
-/// Only Linux is implemented. The stub returns `error.Unsupported`, which is
-/// the honest answer for a host with no portal wired up yet: macOS's
-/// `NSOpenPanel`, Windows' `IFileDialog` and the browser's `<input type=file>`
-/// are each a small file in their own platform folder, and pretending
-/// otherwise would mean a button that opens nothing.
+/// Linux asks the XDG Desktop Portal over D-Bus, macOS runs an `NSOpenPanel`
+/// and Windows an `IFileDialog` — three unrelated APIs behind one question.
+/// Each is a small file in its own platform folder, and the browser is the
+/// stub: a page's `<input type="file">` has no filesystem paths and answers
+/// asynchronously, which is a different problem rather than a smaller version
+/// of this one.
 pub const file_dialog = if (builtin.is_test)
     @import("core/file_dialog_portable.zig")
 else switch (builtin.os.tag) {
     .linux => @import("linux/file_dialog.zig"),
-    // macOS: NSOpenPanel. Windows: IFileDialog. wasm: <input type="file">.
-    // Until one of those exists, the stub — which is a real answer, not a
-    // missing one. See core/file_dialog_portable.zig.
+    .macos => @import("mac/file_dialog.zig"),
+    .windows => @import("windows/file_dialog.zig"),
+    // A browser: `<input type="file">` through the page, which is async and
+    // has no filesystem paths at all — a different problem, not a smaller
+    // version of this one. Until it is written, the stub, which is a real
+    // answer rather than a missing one.
     else => @import("core/file_dialog_portable.zig"),
 };
 

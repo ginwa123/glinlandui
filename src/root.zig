@@ -245,6 +245,12 @@ test {
     // normalisation. Pure, so the translations AppKit needs are tested here
     // rather than only observable in a running window.
     _ = @import("mac/adapter.zig");
+    // The AppKit file panel's PURE half: which panel a request turns into,
+    // and what a modal answer MEANS. `NSModalResponse` has OK = 1 and
+    // Cancel = 2, which is the opposite of the order they are usually
+    // written in, so that mapping is a tested function rather than an `if`
+    // in a file a Linux runner never opens.
+    _ = @import("mac/file_dialog_model.zig");
     // The macOS pointer/button translation into the Delegate contract. The evdev
     // button code is what dispatch keys on, so a backend that reports 0 makes
     // every click a silent no-op; these tests drive the real dispatcher.
@@ -303,6 +309,12 @@ test {
     _ = @import("windows/present.zig");
     _ = @import("windows/renderer.zig");
     _ = @import("windows/text.zig");
+    // The IFileDialog's PURE half: which COM class a request creates, the
+    // FILEOPENDIALOGOPTIONS it needs, and the 1-based filter index
+    // SetFileTypeIndex wants. The save case is the one worth testing — a
+    // dialog that sets both `file_must_exist` and `path_must_exist` refuses
+    // to save anything that does not exist, which is everything.
+    _ = @import("windows/file_dialog_model.zig");
     // The portable window backend + its headless-render test. This file has no
     // C imports and compiles identically everywhere, so its tests are part of
     // the parity count on Linux AND macOS. (It is NOT the platform selected by

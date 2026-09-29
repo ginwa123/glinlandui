@@ -150,6 +150,90 @@ pub const Selection = struct {
     }
 };
 
+/// Turn a filesystem path into a `file://` URI.
+///
+/// Two backends need this, which is why it lives in the contract rather than
+/// in either of them. The XDG portal takes a URI for `current_folder` and
+/// returns URIs in `results`; AppKit takes an `NSURL` and its `absoluteString`
+/// is a `file://` URI with exactly the same percent-encoding. A file called
+/// "notes (final) #2.txt" has to survive the round trip in both, and one
+/// implementation tested on every platform is worth more than two where only
+/// one of them is.
+pub fn pathToFileUri(path: []const u8, out: []u8) ![]const u8 {
+    const prefix = "file://";
+    if (out.len < prefix.len) return error.NoSpaceLeft;
+    @memcpy(out[0..prefix.len], prefix);
+    var i: usize = prefix.len;
+    for (path) |ch| {
+        const unreserved = (ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z') or
+            (ch >= '0' and ch <= '9') or
+            ch == '-' or ch == '.' or ch == '_' or ch == '~' or ch == '/';
+        if (unreserved) {
+            if (i >= out.len) return error.NoSpaceLeft;
+            out[i] = ch;
+            i += 1;
+        } else {
+            if (i + 3 > out.len) return error.NoSpaceLeft;
+            out[i] = '%';
+            out[i + 1] = hexUpperDigit(ch >> 4);
+            out[i + 2] = hexUpperDigit(ch & 0x0f);
+            i += 3;
+        }
+    }
+    return out[0..i];
+}
+
+/// Turn a `file://` URI back into a path.
+///
+/// Anything else — an `http:` URI, an `sftp:` one, a bare path — is an error
+/// rather than a best effort, because returning a URI where the caller
+/// expects a path produces a file that cannot be opened and an error message
+/// nobody can interpret. AppKit hands out a `file://` URL for a local pick and
+/// something else for a cloud placeholder, so "not a local file" is a real
+/// case there, not a defensive branch.
+pub fn fileUriToPath(uri: []const u8, out: []u8) ![]const u8 {
+    const prefix = "file://";
+    if (!std.mem.startsWith(u8, uri, prefix)) return error.UnsupportedScheme;
+    var rest = uri[prefix.len..];
+    // `file://host/path` is legal; the host is empty for every local file,
+    // and a non-empty one is not something a local path can express.
+    if (std.mem.indexOfScalar(u8, rest, '/')) |slash| {
+        if (slash != 0) return error.RemoteHost;
+        rest = rest[slash..];
+    }
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < rest.len) {
+        if (n >= out.len) return error.NoSpaceLeft;
+        if (rest[i] == '%') {
+            if (i + 2 >= rest.len) return error.BadValue;
+            const hi = hexDigitValue(rest[i + 1]) orelse return error.BadValue;
+            const lo = hexDigitValue(rest[i + 2]) orelse return error.BadValue;
+            out[n] = hi * 16 + lo;
+            n += 1;
+            i += 3;
+        } else {
+            out[n] = rest[i];
+            n += 1;
+            i += 1;
+        }
+    }
+    return out[0..n];
+}
+
+fn hexUpperDigit(v: u8) u8 {
+    return if (v < 10) '0' + v else 'A' + (v - 10);
+}
+
+fn hexDigitValue(c: u8) ?u8 {
+    return switch (c) {
+        '0'...'9' => c - '0',
+        'a'...'f' => c - 'a' + 10,
+        'A'...'F' => c - 'A' + 10,
+        else => null,
+    };
+}
+
 /// Everything a backend can fail to do, in ONE error set.
 ///
 /// The reason it is here rather than per backend: a consumer writes
@@ -217,6 +301,32 @@ test "an explicit title wins over the kind's default" {
     // means the behaviour is asserted rather than assumed.
     const opts = Options{ .kind = .open_folder, .title = "Choose a workspace" };
     try std.testing.expectEqualStrings("Choose a workspace", opts.title);
+}
+
+test "a path with spaces and punctuation survives the URI round trip" {
+    var uri_buf: [128]u8 = undefined;
+    const uri = try pathToFileUri("/home/u/notes (final) #2.txt", &uri_buf);
+    try std.testing.expectEqualStrings("file:///home/u/notes%20%28final%29%20%232.txt", uri);
+
+    var path_buf: [128]u8 = undefined;
+    const path = try fileUriToPath(uri, &path_buf);
+    try std.testing.expectEqualStrings("/home/u/notes (final) #2.txt", path);
+}
+
+test "a non-ASCII byte is percent-encoded and comes back unchanged" {
+    var uri_buf: [128]u8 = undefined;
+    const uri = try pathToFileUri("/home/u/caf\xC3\xA9", &uri_buf);
+    try std.testing.expectEqualStrings("file:///home/u/caf%C3%A9", uri);
+    var path_buf: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("/home/u/caf\xC3\xA9", try fileUriToPath(uri, &path_buf));
+}
+
+test "a URI that is not a local file is an error, not a mangled path" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectError(error.UnsupportedScheme, fileUriToPath("http://example.com/x", &buf));
+    try std.testing.expectError(error.RemoteHost, fileUriToPath("file://host/x", &buf));
+    // A truncated escape is a corrupt URI, not a literal "%2".
+    try std.testing.expectError(error.BadValue, fileUriToPath("file:///a%2", &buf));
 }
 
 test "a cancelled selection has no paths, and first() says so" {

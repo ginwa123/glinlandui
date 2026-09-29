@@ -458,3 +458,117 @@ void glin_cocoa_content_size(GlinCocoaWindow *win, int *out_w, int *out_h) {
         if (out_h) *out_h = (int)r.size.height;
     }
 }
+
+// ---------------------------------------------------------------------------
+// The file dialog.
+//
+// Deliberately dumb in the same way as everything above: build an
+// NSOpenPanel, set what the caller asked for, run it modally, and hand each
+// selected URL's path back through a callback. It decides nothing — which
+// panel a request becomes, and what the answer means, are in
+// `mac/file_dialog_model.zig`, which is pure Zig and tested on every
+// platform.
+//
+// Two details that are easy to get wrong and impossible to see:
+//
+//   * `absoluteString` is a `file://` URL, not a path. A file called
+//     "notes (final).txt" comes back percent-encoded, and handing that to an
+//     application as a path gives a file that does not exist. That is why the
+//     callback delivers a URL and `core/file_dialog_contract.zig` owns the one
+//     decoder — the same one the XDG portal's answers go through.
+//
+//   * `runModal` blocks on the AppKit MAIN thread. Calling it from anywhere
+//     else, or calling it twice, deadlocks; and the app is frozen for the
+//     duration, which is correct for a modal dialog and not a bug.
+// ---------------------------------------------------------------------------
+
+/// UTF-8 helper: a C string in, an NSString out, or nil for a NULL/absent
+/// string. Absent is the common case (no title, no directory) and is exactly
+/// what AppKit wants to mean "use your own default".
+static NSString *GlinNSString(const char *s) {
+    if (!s || !*s) return nil;
+    return [NSString stringWithUTF8String:s];
+}
+
+/// Build the panel for a request. Separate from running it so the whole
+/// configuration is visible in one place — and so a request that cannot be
+/// honoured fails HERE, before the user is looking at a window.
+static NSOpenPanel *GlinBuildPanel(const GlinCocoaFileRequest *req) {
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+
+    // canChooseFiles is what makes this a file chooser rather than a
+    // directory chooser. Setting both is what a "pick anything" dialog is,
+    // and it is NOT what either of our kinds asked for.
+    panel.canChooseFiles = req->can_choose_files ? YES : NO;
+    panel.canChooseDirectories = req->can_choose_directories ? YES : NO;
+    panel.allowsMultipleSelection = req->allows_multiple ? YES : NO;
+    // canCreateDirectories is needed for the "navigate into a folder that does
+    // not exist yet" case in a save panel, and is harmless otherwise.
+    panel.canCreateDirectories = req->can_create_files ? YES : NO;
+
+    NSString *title = GlinNSString(req->title);
+    if (title) panel.message = title;
+
+    NSString *prompt = GlinNSString(req->prompt);
+    if (prompt) panel.prompt = prompt;
+
+    NSString *name = GlinNSString(req->file_name);
+    if (name) panel.nameFieldStringValue = name;
+
+    NSString *dir = GlinNSString(req->directory);
+    if (dir) {
+        // A directory that is not there is a normal state (the user's start
+        // folder may have been unmounted since the app last ran), and
+        // AppKit's answer to a bad directory is to refuse to open AT ALL. So
+        // the URL is only set when it resolves.
+        NSURL *url = [NSURL fileURLWithPath:dir isDirectory:YES];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:dir]) {
+            [panel setDirectoryURL:url];
+        }
+    }
+
+    if (req->filters && req->filter_count > 0) {
+        NSMutableArray<NSString *> *types = [NSMutableArray array];
+        for (int i = 0; i < req->filter_count; i++) {
+            const char *patterns = req->filters[i].patterns;
+            if (!patterns || !*patterns) continue;
+            // One filter's patterns arrive as "a,b,c" and AppKit wants them as
+            // one string per extension. Splitting here — rather than sending
+            // the joined string — is the difference between "the dialog shows
+            // three file types" and "the dialog shows none".
+            [types addObjectsFromArray:
+                [[GlinNSString(patterns) componentsSeparatedByString:@","]
+                    filteredArrayUsingPredicate:
+                        [NSPredicate predicateWithBlock:^BOOL(id obj, NSDictionary *_) {
+                            return [(NSString *)obj length] > 0;
+                        }]];
+        }
+        if ([types count] > 0) panel.allowedFileTypes = types;
+    }
+
+    return panel;
+}
+
+int glin_cocoa_file_dialog(const GlinCocoaFileRequest *request,
+                           GlinCocoaOnPath on_path, void *user) {
+    if (!request || !on_path) return 4; // NSModalResponseAbort
+    @autoreleasepool {
+        NSOpenPanel *panel = GlinBuildPanel(request);
+        NSModalResponse response = [panel runModal];
+
+        // No paths for anything but a confirmed selection. A cancelled panel
+        // still has a `URLs` array, and reporting its (empty) contents is how
+        // a cancel turns into a selection of nothing.
+        if (response == NSModalResponseOK) {
+            for (NSURL *url in [panel URLs]) {
+                // absoluteString, not `path`: this callback's contract is a
+                // file:// URL, and mac/file_dialog.zig decodes it with the
+                // shared codec. Sending the percent-encoded form is what makes
+                // a space in a filename survive.
+                const char *utf8 = [[url absoluteString] UTF8String];
+                if (utf8) on_path(user, utf8);
+            }
+        }
+        return (int)response;
+    }
+}

@@ -176,6 +176,83 @@ int glin_win_presented_frames(GlinWinWindow *win);
 int glin_win_probe_color(const unsigned char *rgba, int w, int h,
                          unsigned char *out, int out_stride);
 
+// ---------------------------------------------------------------------------
+// The file dialog.
+//
+// Same rules as everything above: plain C in, no COM type in this header, and
+// NO DECISIONS. Which COM class a request creates, which
+// FILEOPENDIALOGOPTIONS it needs and what the answer means are in
+// `windows/file_dialog_model.zig`, which is pure Zig and unit-tested on
+// every platform. This section owns the IFileDialog and nothing else.
+// ---------------------------------------------------------------------------
+
+/// One `COMDLG_FILTERSPEC` pair, flattened to plain C: a display name and a
+/// SEMICOLON-separated spec ("*.png;*.jpg"). The joining is done by
+/// `model.flattenFilters`, which is where the separator is tested — Windows
+/// splits on ';', so a comma here produces one filter that matches nothing.
+typedef struct {
+    const char *name;
+    const char *spec;
+} GlinWinFileFilter;
+
+/// Everything the dialog needs. Plain C so the shim takes one pointer and
+/// Zig builds it in one place.
+typedef struct {
+    /// 0 = open a file, 1 = choose a folder, 2 = choose a save target.
+    int kind;
+    /// `FILEOPENDIALOGOPTIONS` as a bit field. Computed by the model, never
+    /// here — the combinability rules (a folder dialog must not also insist on
+    /// a file) are the part worth testing, and they live in the model.
+    unsigned int options;
+    /// 1-based, exactly as `SetFileTypeIndex` wants. 0 means "do not call it".
+    unsigned int file_type_index;
+    /// 0 means "no SetFileTypes call at all": passing an empty array installs
+    /// a filter that matches nothing.
+    int filter_count;
+    const GlinWinFileFilter *filters;
+    const char *title;
+    const char *accept_label;
+    const char *current_folder;
+    const char *current_name;
+    /// 1 when the dialog is modal to the calling window.
+    int modal;
+    /// The owner window as a raw HWND, or 0 for none.
+    ///
+    /// `IFileDialog::Show` takes this, and it is the difference between a
+    /// dialog that is a child of the application window and one that merely
+    /// looks like one: an unowned dialog can be moved independently and does
+    /// not disable the window behind it. The toolkit has no portable handle to
+    /// give here yet (see `windows/file_dialog.zig`), so this is 0 and the
+    /// field exists so that fixing it is a one-line change rather than an ABI
+    /// one.
+    /// `unsigned long long`, not `uintptr_t`: this header deliberately has NO
+    /// #include at all, so that @cImport never has to survive a platform
+    /// header. That is why the cast in the shim goes through
+    /// `(uintptr_t)` and not from here.
+    unsigned long long owner_hwnd;
+} GlinWinFileRequest;
+
+/// One selected path, delivered as a UTF-8 C string valid ONLY for the
+/// duration of the call.
+///
+/// Two things make this a callback rather than a returned array. The
+/// `IShellItem` is released as soon as the loop moves on, so the shim cannot
+/// keep it; and the path comes from a COM `LPWSTR` that the shim owns and
+/// frees, so a pointer into it would be freed before the caller looked at it.
+typedef void (*GlinWinOnPath)(void *user, const char *path_utf8);
+
+/// Run the dialog and return 0 on success, or a negative value when it could
+/// not be created, could not be shown, or the user cancelled.
+///
+/// Deliberately NOT a "response enum": Win32 has no such thing, and inventing
+/// one that looks like AppKit's `NSModalResponse` would invite the two
+/// backends' results to be read interchangeably — which is exactly the mistake
+/// `mac/file_dialog_model.zig` documents (OK is 1, Cancel is 2) as easy to
+/// make. 0 = the user chose something, -1 = cancelled, -2 = the dialog could
+/// not be created, -3 = showing it failed.
+int glin_win_file_dialog(const GlinWinFileRequest *request,
+                        GlinWinOnPath on_path, void *user);
+
 /// The byte order the D3D11 swap chain and the probe target are created in:
 /// straight (non-premultiplied) R,G,B,A, alpha ignored by the blend stage
 /// because the pipeline uses no blending. Exposed as a number rather than a

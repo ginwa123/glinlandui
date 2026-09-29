@@ -156,12 +156,15 @@ fi
 # linux/window.zig, linux/present.zig, mac/window.zig, windows/window.zig.
 # ---------------------------------------------------------------------------
 for f in src/mac/present.zig src/mac/keymap.zig src/mac/adapter.zig src/mac/input.zig \
-         src/mac/renderer.zig src/mac/text.zig \
+         src/mac/renderer.zig src/mac/text.zig src/mac/file_dialog_model.zig \
          src/linux/keymap.zig src/linux/input.zig src/linux/adapter.zig \
+         src/linux/dbus.zig src/linux/portal.zig \
          src/windows/keymap.zig src/windows/input.zig src/windows/adapter.zig \
          src/windows/present.zig src/windows/renderer.zig src/windows/text.zig \
+         src/windows/file_dialog_model.zig \
          src/web/present.zig src/web/keymap.zig src/web/adapter.zig src/web/input.zig \
-         src/web/renderer.zig src/web/text.zig src/web/compat_heap.zig; do
+         src/web/renderer.zig src/web/text.zig src/web/compat_heap.zig \
+         src/core/file_dialog_contract.zig src/core/file_dialog_portable.zig; do
   # Match the CALL, not a mention: these files legitimately discuss @cImport in
   # their doc comments ("this module needs no @cImport"), and a rule that cannot
   # tell a comment from a call would forbid explaining the rule.

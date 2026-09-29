@@ -52,6 +52,12 @@
 #include <d3dcompiler.h>
 #include <dxgi.h>
 
+// The file dialog's half: IFileDialog, COMDLG_FILTERSPEC and the shell item
+// namespace. It comes after <windows.h> because shobjidl.h needs the base
+// types, and it needs COBJMACROS above to get the method macros rather than
+// the vtable layout.
+#include <shobjidl.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1258,4 +1264,244 @@ int glin_win_probe_color(const unsigned char *rgba, int w, int h, unsigned char 
     ID3D11DeviceContext_Release(context);
     ID3D11Device_Release(device);
     return rc;
+}
+
+
+/// Wide string -> UTF-8, into a fresh malloc. NULL on failure.
+///
+/// The caller frees it. Returns NULL rather than a partial string because a
+/// half-converted path is a path to a different file.
+static char *GlinWideToUtf8(const WCHAR *wide) {
+    if (!wide) return NULL;
+    int need = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, NULL, 0,
+                                   NULL, NULL);
+    if (need <= 0) return NULL;
+    char *out = (char *)malloc((size_t)need);
+    if (!out) return NULL;
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, out, need, NULL,
+                            NULL) <= 0) {
+        free(out);
+        return NULL;
+    }
+    return out;
+}
+
+/// UTF-8 -> wide, into a fresh malloc. NULL on failure.
+static WCHAR *GlinUtf8ToWide(const char *utf8) {
+    if (!utf8 || !*utf8) return NULL;
+    int need = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+    if (need <= 0) return NULL;
+    WCHAR *out = (WCHAR *)malloc((size_t)need * sizeof(WCHAR));
+    if (!out) return NULL;
+    if (MultiByteToWideChar(CP_UTF8, 0, utf8, -1, out, need) <= 0) {
+        free(out);
+        return NULL;
+    }
+    return out;
+}
+
+/// Hand one selected shell item to the host as a filesystem path.
+///
+/// SIGDN_FILESYSPATH, not SIGDN_NORMALDISPLAY: the display name is what the
+/// dialog SHOWS, and for a virtual item (a OneDrive placeholder, a zip entry)
+/// it is a short name that is not a path at all.
+static void GlinDeliverItem(IShellItem *item, GlinWinOnPath on_path, void *user) {
+    if (!item || !on_path) return;
+    WCHAR *wide = NULL;
+    HRESULT hr = IShellItem_GetDisplayName(item, SIGDN_FILESYSPATH, &wide);
+    if (FAILED(hr) || !wide) return;
+    char *utf8 = GlinWideToUtf8(wide);
+    // COM allocated it, so COM frees it — CoTaskMemFree, not free(). Using
+    // free() here is a heap corruption that shows up much later, in somebody
+    // else's allocation.
+    CoTaskMemFree(wide);
+    if (!utf8) return;
+    on_path(user, utf8);
+    free(utf8);
+}
+
+/// Hand every item of an array to the host, then release the array.
+static void GlinDeliverArray(IShellItemArray *items, GlinWinOnPath on_path, void *user) {
+    if (!items) return;
+    DWORD count = 0;
+    if (SUCCEEDED(IShellItemArray_GetCount(items, &count))) {
+        for (DWORD i = 0; i < count; i++) {
+            IShellItem *item = NULL;
+            if (SUCCEEDED(IShellItemArray_GetItemAt(items, i, &item)) && item) {
+                GlinDeliverItem(item, on_path, user);
+                IShellItem_Release(item);
+            }
+        }
+    }
+    IShellItemArray_Release(items);
+}
+
+int glin_win_file_dialog(const GlinWinFileRequest *request,
+                        GlinWinOnPath on_path, void *user) {
+    if (!request || !on_path) return -2;
+
+    IFileDialog *dialog = NULL;
+
+    // The class is the KIND: a save target is the only one that is a
+    // FileSaveDialog. Everything else is an option on FileOpenDialog.
+    CLSID clsid = (request->kind == 2) ? CLSID_FileSaveDialog : CLSID_FileOpenDialog;
+    HRESULT hr = CoCreateInstance(&clsid, NULL, CLSCTX_INPROC_SERVER, &IID_IFileDialog,
+                                  (void **)&dialog);
+    if (FAILED(hr) || !dialog) return -2;
+
+    // Get EVERYTHING through IFileOpenDialog, which the same object implements.
+    //
+    // This is the part of the Windows file dialog that has to be got right,
+    // and it is worth saying why, because the obvious version does not work:
+    // `IFileDialog` has `GetResult` — SINGULAR. There is no `GetResults` on it.
+    // A dialog shown with FOS_ALLOWMULTISELECT returns an array, and the
+    // interface that can produce one is `IFileOpenDialog`, which derives from
+    // `IFileDialog` and adds `GetResults`. Calling `GetResult` on a
+    // multi-select dialog gets the first file and silently drops the rest —
+    // the worst shape a file dialog bug can take, because the user selects
+    // five files and the application acts on one.
+    IFileOpenDialog *as_open = NULL;
+    hr = IFileDialog_QueryInterface(dialog, &IID_IFileOpenDialog, (void **)&as_open);
+    if (FAILED(hr) || !as_open) {
+        // No IFileOpenDialog: a single selection is still available, because
+        // that is all IFileDialog itself can answer.
+        as_open = NULL;
+    }
+
+    // Options, computed by the model. SetOptions rather than OR-ing by hand:
+    // several of these are mutually exclusive and the model is where that is
+    // stated and tested.
+    IFileDialog_SetOptions(dialog, (FILEOPENDIALOGOPTIONS)request->options);
+
+    // SetFileTypes, or not at all. An empty array installs a filter that
+    // matches nothing and the dialog then refuses to open anything, so the
+    // COUNT is what gates the call.
+    if (request->filters && request->filter_count > 0) {
+        // One wide blob for every name and spec, because COMDLG_FILTERSPEC
+        // holds LPCWSTR and the array has to outlive the call.
+        size_t total_wchars = 0;
+        for (int i = 0; i < request->filter_count; i++) {
+            const char *n = request->filters[i].name;
+            const char *sp = request->filters[i].spec;
+            if (n) total_wchars += (size_t)MultiByteToWideChar(CP_UTF8, 0, n, -1, NULL, 0);
+            if (sp) total_wchars += (size_t)MultiByteToWideChar(CP_UTF8, 0, sp, -1, NULL, 0);
+        }
+        WCHAR *blob = total_wchars ? (WCHAR *)calloc(total_wchars, sizeof(WCHAR)) : NULL;
+        COMDLG_FILTERSPEC *spec_array =
+            (COMDLG_FILTERSPEC *)calloc((size_t)request->filter_count,
+                                         sizeof(COMDLG_FILTERSPEC));
+        if (blob && spec_array) {
+            WCHAR *cursor = blob;
+            size_t left = total_wchars;
+            for (int i = 0; i < request->filter_count; i++) {
+                const char *n = request->filters[i].name;
+                const char *sp = request->filters[i].spec;
+                if (n && *n) {
+                    int wrote = MultiByteToWideChar(CP_UTF8, 0, n, -1, cursor, (int)left);
+                    spec_array[i].pszName = cursor;
+                    cursor += (wrote > 0) ? wrote : 0;
+                    left -= (wrote > 0) ? (size_t)wrote : 0;
+                } else {
+                    spec_array[i].pszName = L"";
+                }
+                if (sp && *sp) {
+                    int wrote = MultiByteToWideChar(CP_UTF8, 0, sp, -1, cursor, (int)left);
+                    spec_array[i].pszSpec = cursor;
+                    cursor += (wrote > 0) ? wrote : 0;
+                    left -= (wrote > 0) ? (size_t)wrote : 0;
+                } else {
+                    spec_array[i].pszSpec = L"*";
+                }
+            }
+            IFileDialog_SetFileTypes(dialog, (UINT)request->filter_count, spec_array);
+            // 1-based, and 0 means "leave it to the platform". Passing 0 would
+            // select the FIRST filter instead of no filter, which is the
+            // off-by-one the model exists to prevent.
+            if (request->file_type_index > 0) {
+                IFileDialog_SetFileTypeIndex(dialog, request->file_type_index);
+            }
+        }
+        free(blob);
+        free(spec_array);
+    }
+
+    if (request->title && *request->title) {
+        WCHAR *wide = GlinUtf8ToWide(request->title);
+        if (wide) {
+            IFileDialog_SetTitle(dialog, wide);
+            free(wide);
+        }
+    }
+    if (request->accept_label && *request->accept_label) {
+        WCHAR *wide = GlinUtf8ToWide(request->accept_label);
+        if (wide) {
+            IFileDialog_SetOkButtonLabel(dialog, wide);
+            free(wide);
+        }
+    }
+    // The starting folder. SetFolder takes an IShellItem, NOT a path — the two
+    // are not interchangeable, and a folder that does not resolve (an
+    // unmounted share) is normal, so a failure here is ignored and the dialog
+    // opens where the shell would have opened it.
+    if (request->current_folder && *request->current_folder) {
+        WCHAR *wide = GlinUtf8ToWide(request->current_folder);
+        if (wide) {
+            IShellItem *folder = NULL;
+            if (SUCCEEDED(SHCreateItemFromParsingName(wide, NULL, &IID_IShellItem,
+                                                      (void **)&folder)) &&
+                folder) {
+                IFileDialog_SetFolder(dialog, folder);
+                IShellItem_Release(folder);
+            }
+            free(wide);
+        }
+    }
+    // The pre-filled name, and it IS a file name this time — that is what
+    // SetFileName is for. (The folder above deliberately did NOT use it: on a
+    // multi-selection dialog SetFileName types the text into the box, and the
+    // box is not a folder browser.)
+    if (request->current_name && *request->current_name) {
+        WCHAR *wide = GlinUtf8ToWide(request->current_name);
+        if (wide) {
+            IFileDialog_SetFileName(dialog, wide);
+            free(wide);
+        }
+    }
+
+    // Show() takes the owner HWND. A dialog with no owner is still modal to the
+    // thread, but it is not a child of our window: it can be moved
+    // independently and does not disable the window behind it, which is the
+    // difference between "modal" and "modal-looking".
+    HWND owner = (HWND)(uintptr_t)request->owner_hwnd;
+    hr = IFileDialog_Show(dialog, owner);
+
+    int result = 0;
+    if (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+        result = -1;
+    } else if (FAILED(hr)) {
+        result = -3;
+    } else if (as_open) {
+        // Every item, whether there is one or twenty.
+        IShellItemArray *items = NULL;
+        if (SUCCEEDED(IFileOpenDialog_GetResults(as_open, &items))) {
+            GlinDeliverArray(items, on_path, user);
+        } else {
+            IShellItem *item = NULL;
+            if (SUCCEEDED(IFileDialog_GetResult(dialog, &item)) && item) {
+                GlinDeliverItem(item, on_path, user);
+                IShellItem_Release(item);
+            }
+        }
+    } else {
+        // No IFileOpenDialog on this host: the single item, and nothing else.
+        IShellItem *item = NULL;
+        if (SUCCEEDED(IFileDialog_GetResult(dialog, &item)) && item) {
+            GlinDeliverItem(item, on_path, user);
+            IShellItem_Release(item);
+        }
+    }
+
+    if (as_open) IFileOpenDialog_Release(as_open);
+    IFileDialog_Release(dialog);
+    return result;
 }

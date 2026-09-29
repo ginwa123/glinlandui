@@ -45,6 +45,16 @@ const dbus = @import("dbus.zig");
 const contract = @import("../core/file_dialog_contract.zig");
 
 /// The portal's well-known bus name.
+/// The file-URI codec lives in the contract, not here.
+///
+/// The portal speaks URIs in `current_folder` and in the `results` it returns,
+/// and so does AppKit: `NSURL` hands back a `file://` URL with exactly the same
+/// percent-encoding. One implementation, in `core/`, is therefore better than
+/// two — and it is tested on EVERY platform, where a second copy inside
+/// `mac/` would only be tested on the one OS that has it.
+pub const uriToPath = contract.fileUriToPath;
+pub const pathToUri = contract.pathToFileUri;
+
 pub const desktop_service = "org.freedesktop.portal.Desktop";
 /// Every portal object lives here.
 pub const desktop_path = "/org/freedesktop/portal/desktop";
@@ -361,86 +371,6 @@ fn skipVariant(r: *dbus.Reader, sig: []const u8) !void {
     }
 }
 
-/// Turn a filesystem path into a `file://` URI.
-///
-/// The portal speaks URIs everywhere it speaks `current_folder` and returns
-/// them in `results`, so this and `uriToPath` are the two ends of the same
-/// conversion. Bytes outside the unreserved set are percent-encoded, which is
-/// what makes a file called "notes (final) #2.txt" survive the round trip
-/// instead of arriving as three broken names.
-pub fn pathToUri(path: []const u8, out: []u8) ![]const u8 {
-    const prefix = "file://";
-    if (out.len < prefix.len) return error.NoSpaceLeft;
-    @memcpy(out[0..prefix.len], prefix);
-    var i: usize = prefix.len;
-    for (path) |ch| {
-        const unreserved = (ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z') or
-            (ch >= '0' and ch <= '9') or
-            ch == '-' or ch == '.' or ch == '_' or ch == '~' or ch == '/';
-        if (unreserved) {
-            if (i >= out.len) return error.NoSpaceLeft;
-            out[i] = ch;
-            i += 1;
-        } else {
-            if (i + 3 > out.len) return error.NoSpaceLeft;
-            out[i] = '%';
-            out[i + 1] = hexUpper(ch >> 4);
-            out[i + 2] = hexUpper(ch & 0x0f);
-            i += 3;
-        }
-    }
-    return out[0..i];
-}
-
-/// Turn a `file://` URI back into a path.
-///
-/// Anything else — an `http:` URI, a `sftp:` one, a bare path — is an error
-/// rather than a best effort, because returning a URI where the caller
-/// expects a path produces a file that cannot be opened and an error message
-/// nobody can interpret.
-pub fn uriToPath(uri: []const u8, out: []u8) ![]const u8 {
-    const prefix = "file://";
-    if (!std.mem.startsWith(u8, uri, prefix)) return error.UnsupportedScheme;
-    var rest = uri[prefix.len..];
-    // `file://host/path` is legal; the host is empty for every local file,
-    // and a non-empty one is not something a local path can express.
-    if (std.mem.indexOfScalar(u8, rest, '/')) |slash| {
-        if (slash != 0) return error.RemoteHost;
-        rest = rest[slash..];
-    }
-    var n: usize = 0;
-    var i: usize = 0;
-    while (i < rest.len) {
-        if (n >= out.len) return error.NoSpaceLeft;
-        if (rest[i] == '%') {
-            if (i + 2 >= rest.len) return error.BadValue;
-            const hi = hexValue(rest[i + 1]) orelse return error.BadValue;
-            const lo = hexValue(rest[i + 2]) orelse return error.BadValue;
-            out[n] = hi * 16 + lo;
-            n += 1;
-            i += 3;
-        } else {
-            out[n] = rest[i];
-            n += 1;
-            i += 1;
-        }
-    }
-    return out[0..n];
-}
-
-fn hexUpper(v: u8) u8 {
-    return if (v < 10) '0' + v else 'A' + (v - 10);
-}
-
-fn hexValue(c: u8) ?u8 {
-    return switch (c) {
-        '0'...'9' => c - '0',
-        'a'...'f' => c - 'a' + 10,
-        'A'...'F' => c - 'A' + 10,
-        else => null,
-    };
-}
-
 /// The `AddMatch` rule that routes ONE request's Response to us.
 ///
 /// Matching on the request path rather than on the member is deliberate. A
@@ -653,32 +583,6 @@ test "filters arrive as a(sa(us)): a name, then label/pattern pairs" {
         try options.skipValue(sig);
     }
     return error.TestUnexpectedResult;
-}
-
-test "a path with spaces and punctuation survives the URI round trip" {
-    var uri_buf: [128]u8 = undefined;
-    const uri = try pathToUri("/home/u/notes (final) #2.txt", &uri_buf);
-    try std.testing.expectEqualStrings("file:///home/u/notes%20%28final%29%20%232.txt", uri);
-
-    var path_buf: [128]u8 = undefined;
-    const path = try uriToPath(uri, &path_buf);
-    try std.testing.expectEqualStrings("/home/u/notes (final) #2.txt", path);
-}
-
-test "a non-ASCII byte is percent-encoded and comes back unchanged" {
-    var uri_buf: [128]u8 = undefined;
-    const uri = try pathToUri("/home/u/caf\xC3\xA9", &uri_buf);
-    try std.testing.expectEqualStrings("file:///home/u/caf%C3%A9", uri);
-    var path_buf: [128]u8 = undefined;
-    try std.testing.expectEqualStrings("/home/u/caf\xC3\xA9", try uriToPath(uri, &path_buf));
-}
-
-test "a URI that is not a file is an error, not a mangled path" {
-    var buf: [64]u8 = undefined;
-    try std.testing.expectError(error.UnsupportedScheme, uriToPath("http://example.com/x", &buf));
-    try std.testing.expectError(error.RemoteHost, uriToPath("file://host/x", &buf));
-    // A truncated escape is a corrupt URI, not a literal "%2".
-    try std.testing.expectError(error.BadValue, uriToPath("file:///a%2", &buf));
 }
 
 test "a cancelled response is code 0, a success is 1" {
