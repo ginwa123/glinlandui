@@ -483,10 +483,13 @@ jobs:
         include:
           - os: ubuntu-24.04
             label: Linux (XDG portal)
+            backend: xdg-desktop-portal
           - os: macos-14
             label: macOS (NSOpenPanel)
+            backend: NSOpenPanel
           - os: windows-2022
             label: Windows (IFileDialog)
+            backend: IFileDialog
     continue-on-error: false
     steps:
       - uses: actions/checkout@v4
@@ -563,11 +566,19 @@ jobs:
           # silently fell back to the portable stub would print
           # "none (error.Unsupported)" and fail here, on macOS and Windows as
           # loudly as on Linux.
-          case "$matrix.label" in
-            Linux*)   echo "$out" | grep -q 'backend:     xdg-desktop-portal' ;;
-            macOS*)   echo "$out" | grep -q 'backend:     NSOpenPanel' ;;
-            Windows*) echo "$out" | grep -q 'backend:     IFileDialog' ;;
-          esac
+          # `${{ matrix.backend }}`, substituted by Actions BEFORE bash sees
+          # the script. A bare `$matrix.label` is a SHELL variable, and Actions
+          # exports no such thing — under `set -u` that is
+          # `matrix: unbound variable`, which is exactly how the first version
+          # of this step failed on all three legs with a perfectly correct
+          # probe sitting right above it on the log.
+          #
+          # Into its OWN variable: the first attempt assigned the match back to
+          # `$out`, which silently reduced the probe output to one line and
+          # broke the two assertions below it. `grep -F` and a `test -n` rather
+          # than `grep -q` so the line is visible in the log when it fails.
+          backend_line="$(printf '%s\n' "$out" | grep -F "backend:     ${{ matrix.backend }}")"
+          test -n "$backend_line"
 
           # `available()` is what a UI gates its button on, and it is true on
           # all three desktops. A false here means the example silently

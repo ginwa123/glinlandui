@@ -835,6 +835,21 @@ const FakeService = struct {
         w.writeSignature("s");
         w.writeString(request.sender orelse "");
         w.patchU32(array_at, @intCast(w.count() - (array_at + 4)));
+        // The frame ends on an 8-byte boundary, and `dbus.encode` ends with
+        // `w.alignTo(8)` for exactly this reason. A message with an empty body
+        // still occupies whole 8-byte words on the wire, and a frame that is
+        // short of one is a frame whose length the BUS and the client compute
+        // differently.
+        //
+        // This is invisible under dbus-broker, which is what made it survive:
+        // the client here is our own codec, so when both ends were short by
+        // the same few bytes they agreed with each other and the test passed.
+        // dbus-daemon pads, sees a length that does not match, and closes the
+        // connection — which surfaces as the fake portal vanishing and the
+        // client reporting `NameHasNoOwner` for a portal that was there a
+        // moment ago. One bus being lenient about a malformed frame and the
+        // other not is a coin flip, not a property.
+        w.alignTo(8);
         return w.written();
     }
 
