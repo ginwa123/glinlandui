@@ -151,6 +151,18 @@ pub fn build(b: *std.Build) void {
     const is_windows = target.result.os.tag == .windows;
     const calc_supported = is_linux or is_macos or is_windows or is_wasm;
 
+    // Hosts the file-dialog example is wired for.
+    //
+    // The SAME three desktops as the calculator, and the same reason: the
+    // example needs a window to put its buttons in. It is deliberately NOT
+    // `is_wasm`, unlike the calculator, because on a browser
+    // `glinlandui.file_dialog` is a constant `error.Unsupported` — every entry
+    // point is `core/file_dialog_portable.zig`. An example of that is an
+    // example of an error message. The browser's real answer is a
+    // `<input type="file">` and a file handle rather than a path, which is a
+    // different API and not a smaller version of this one.
+    const dlg_supported = is_linux or is_macos or is_windows;
+
     // ---- vendored zclay Zig bindings (moved from qs build.zig) ----
     //
     // ONE `zclay` instance per TARGET, and the Clay archive it links must be built
@@ -633,6 +645,76 @@ pub fn build(b: *std.Build) void {
         });
     }
 
+    // ---- Example app: the file dialog ----
+    //
+    // The "how to use" for `glinlandui.file_dialog`, and the only example in
+    // this repository whose subject is an API rather than a widget. It has
+    // three buttons — open a file, open a folder, pick a save target — and a
+    // status line that says which of the six ways a dialog can end happened.
+    //
+    // Two things about it are deliberate and worth stating here, because
+    // either one on its own would be a reason to not build it.
+    //
+    // It is NOT wired for wasm (`dlg_supported`), and neither is that
+    // arbitrary: `glinlandui.file_dialog` is a constant `error.Unsupported` in
+    // a browser, so the web build of this example would be an example of an
+    // error string. The browser's real answer is `<input type="file">`, which
+    // hands back a handle rather than a path and answers asynchronously — a
+    // different problem, not a smaller one.
+    //
+    // And it has a HEADLESS mode (`GLIN_FILE_DIALOG_CHECK=1`) that opens no
+    // window and no dialog, which is what the CI job runs. A file dialog needs
+    // a real user and a real portal; a GitHub runner has neither, so a CI step
+    // that tried to open one would hang until the job timed out. The check
+    // mode still calls the real `glinlandui.file_dialog`, so it proves the
+    // module resolved and that the backend reports itself honestly — which is
+    // a different and much more portable claim than "a dialog appeared".
+    //
+    // `dlg_test` is hoisted out of the block, like `calc_test`, because the
+    // example's tests are portable and belong in the cross-platform count that
+    // `tests.lock` pins. That works here for a reason worth knowing:
+    // `platform.zig` selects `core/file_dialog_portable.zig` under
+    // `builtin.is_test`, so the example's tests exercise the real shared
+    // CONTRACT types on every platform, not a Linux-only backend.
+    var dlg_test: ?*std.Build.Step.Compile = null;
+    if (dlg_supported) {
+        const dlg_mod = b.createModule(.{
+            .root_source_file = b.path("examples/file_dialog.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "glinlandui", .module = mod },
+            },
+        });
+        const dlg = b.addExecutable(.{
+            .name = "glinlandui-file-dialog",
+            .root_module = dlg_mod,
+        });
+        b.installArtifact(dlg);
+
+        const run_dlg_step = b.step("run-file-dialog", "Run the file-dialog example");
+        const run_dlg = b.addRunArtifact(dlg);
+        run_dlg_step.dependOn(&run_dlg.step);
+        run_dlg.step.dependOn(b.getInstallStep());
+        if (b.args) |args| {
+            run_dlg.addArgs(args);
+        }
+
+        // A separate test root over the same file, exactly as the calculator
+        // does: `b.addTest` compiles the root as a test binary, so `pub fn
+        // main` is never an entry point and no window opens.
+        dlg_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/file_dialog.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "glinlandui", .module = mod },
+                },
+            }),
+        });
+    }
+
     // The parity suite is a NATIVE concern: a wasm target has no test runner
     // here, and `-Dtarget=wasm32-freestanding` is for shipping the webapp, not
     // for running tests. Gating the roots rather than the runs is deliberate —
@@ -766,6 +848,17 @@ pub fn build(b: *std.Build) void {
     }
     if (calc_e2e_test) |e2e| {
         test_step.dependOn(&b.addRunArtifact(e2e).step);
+    }
+    // The file-dialog example's tests, for the same reason and with the same
+    // caveat: they are portable because `platform.zig` picks the PORTABLE
+    // dialog under `builtin.is_test`, so what they assert is the shared
+    // contract rather than any one backend. That is a real and useful
+    // guarantee, but it is worth being precise about what it is NOT: it says
+    // nothing about whether the XDG portal answers. That is
+    // `src/linux/file_dialog.zig`, and it is tested by `native-test` against a
+    // real bus.
+    if (dlg_test) |dlg| {
+        test_step.dependOn(&b.addRunArtifact(dlg).step);
     }
 
     // `native-test` runs the Linux-only Wayland/EGL/GLES3/Pango tests. These
