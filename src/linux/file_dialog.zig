@@ -116,11 +116,17 @@ pub const Client = struct {
     serial: u32 = 0,
     /// Monotonic, so two dialogs in one process never collide on a token.
     token_counter: u64 = 0,
+    /// The request path the CURRENT attempt will be answered on, and the
+    /// buffer it borrows. Set by `attempt`, waited on by `choose`.
+    request_path_buf: [256]u8 = undefined,
+    request_path: []const u8 = "",
     /// Receive buffer. A file-chooser response is hundreds of bytes; 8 KiB
     /// holds several messages, so a burst does not need two `recv`s.
     in_buf: [8 * 1024]u8 = undefined,
     in_len: usize = 0,
     in_pos: usize = 0,
+    /// Scratch for `errorReply`, which builds a frame by hand.
+    frame_buf: [1024]u8 = undefined,
     /// Scratch space for the URIs a response carries.
     ///
     /// It lives HERE, on the client, rather than in a local of the waiting
@@ -250,37 +256,26 @@ pub const Client = struct {
         var token_buf: [32]u8 = undefined;
         const token = try portal.writeToken(self.token_counter, &token_buf);
 
-        var path_buf: [256]u8 = undefined;
-        const request_path = try portal.writeRequestPath(self.uniqueName(), token, &path_buf);
-
-        var folded_buf: [64]u8 = undefined;
-        const folded = try portal.foldSenderName(self.uniqueName(), &folded_buf);
-
-        // The match rule goes first, and the retry below has to put it back,
-        // so it lives in a function rather than inline here.
-        try self.registerForToken(token, request_path, folded);
-
         // The filter list is a documented option, and a portal is entitled to
         // refuse it — and this one does, in a way that takes the whole dialog
         // with it: the bus closes the connection rather than answering, so
         // there is no error to read and no connection left to read it on.
         //
-        // So a first attempt that dies is followed by a second one WITHOUT
-        // filters, on a fresh connection. The user gets a working file dialog
-        // either way, and the only thing lost is the filter dropdown.
-        var handle = self.chooserCall(opts, token, opts.filters.len != 0) catch |first_err| blk: {
+        // So a first attempt that dies is retried once, without filters, on a
+        // fresh connection. The user gets a working file dialog either way,
+        // and the only thing lost is the filter dropdown.
+        var handle = self.attempt(opts, token, opts.filters.len != 0) catch |first_err| blk: {
             if (opts.filters.len == 0) return first_err;
-            // The connection may be gone entirely; a new one is cheap and the
-            // old socket, if it still exists, is closed by `reconnect`.
+            // The connection may be gone entirely; a new one is cheap, and the
+            // old socket, if it still exists, goes with it.
             self.reconnect() catch |e| return e;
-            self.registerForToken(token, request_path, folded) catch |e| return e;
-            break :blk self.chooserCall(opts, token, false) catch |e| return e;
+            break :blk self.attempt(opts, token, false) catch |e| return e;
         };
         if (handle.kind == .error_reply and opts.filters.len != 0) {
             // Refused in words rather than by disconnecting. Same remedy, and
-            // a second refusal simply falls through to the check below, which
-            // reports it as the portal's answer rather than as a crash.
-            handle = self.chooserCall(opts, token, false) catch |e| return e;
+            // a second refusal falls through to the check below, which reports
+            // it as the portal's answer rather than as a crash.
+            handle = self.attempt(opts, token, false) catch |e| return e;
         }
         if (handle.kind == .error_reply) {
             const name = handle.error_name orelse "";
@@ -290,8 +285,50 @@ pub const Client = struct {
                 std.mem.indexOf(u8, name, "NameHasNoOwner") != null) return error.NoPortal;
             return error.PortalError;
         }
-        const decoded = try self.waitForResponse(request_path, opts.timeout_ms);
+
+        // `self.request_path`, set by `attempt` and NOT recomputed here.
+        const decoded = try self.waitForResponse(self.request_path, opts.timeout_ms);
         return self.toSelection(decoded);
+    }
+
+    /// One attempt: derive the request path from the name this connection
+    /// holds NOW, listen on it, and make the call.
+    ///
+    /// The path is derived HERE and stored, rather than derived by the caller
+    /// and passed in, because the two must come from the same name — and the
+    /// only name that matters is the one held at the moment of the call. A
+    /// reconnect, which is what the filter retry does, changes the unique name,
+    /// and a path derived before it names a request the portal will never
+    /// answer on: the dialog opens, the user picks a file or presses Cancel,
+    /// the Response arrives at the new path, and the client is still listening
+    /// on the old one and waits there for ever.
+    ///
+    /// That is not hypothetical. It is exactly what Cancel did here, and no
+    /// timeout hid it, because the default is to wait as long as the user
+    /// takes.
+    fn attempt(self: *Client, opts: Options, token: []const u8, with_filters: bool) !dbus.Header {
+        var folded_buf: [64]u8 = undefined;
+        const folded = try portal.foldSenderName(self.uniqueName(), &folded_buf);
+        self.request_path = try portal.writeRequestPath(self.uniqueName(), token, &self.request_path_buf);
+
+        // The match rule goes before the call: the bus processes messages in
+        // order, so by the time the portal can answer, the bus is already
+        // routing that signal here.
+        try self.registerForToken(token, folded);
+
+        var body_buf: [4096]u8 = undefined;
+        var bw = dbus.Writer.init(&body_buf);
+        var o = opts;
+        if (!with_filters) o.filters = &.{};
+        try portal.writeMethodBody(&bw, o, token);
+        return self.callMethod(
+            self.service_name,
+            portal.desktop_path,
+            portal.chooser_interface,
+            portal.memberFor(o.kind),
+            "ssa{sv}",
+            bw.written(),
+        );
     }
 
     /// Install the match rule that routes THIS request's Response to us.
@@ -304,8 +341,7 @@ pub const Client = struct {
     ///
     /// Separate from `choose` because the filter-retry path needs it twice,
     /// on two different connections.
-    fn registerForToken(self: *Client, token: []const u8, request_path: []const u8, folded: []const u8) !void {
-        _ = request_path;
+    fn registerForToken(self: *Client, token: []const u8, folded: []const u8) !void {
         var rule_buf: [512]u8 = undefined;
         const rule = try portal.writeResponseMatchRule(folded, token, &rule_buf);
         var add: [600]u8 = undefined;
@@ -407,25 +443,6 @@ pub const Client = struct {
 
     /// Send a method call and wait for its reply, skipping any signals that
     /// arrive in the meantime (the bus sends `NameAcquired` unbidden).
-    /// One chooser call. `with_filters` decides whether the filter list goes
-    /// in the options; the caller uses that to ask twice, and `closeAll` is
-    /// what makes asking twice possible at all.
-    fn chooserCall(self: *Client, opts: Options, token: []const u8, with_filters: bool) !dbus.Header {
-        var body_buf: [4096]u8 = undefined;
-        var bw = dbus.Writer.init(&body_buf);
-        var o = opts;
-        if (!with_filters) o.filters = &.{};
-        try portal.writeMethodBody(&bw, o, token);
-        return self.callMethod(
-            self.service_name,
-            portal.desktop_path,
-            portal.chooser_interface,
-            portal.memberFor(o.kind),
-            "ssa{sv}",
-            bw.written(),
-        );
-    }
-
     fn callMethod(
         self: *Client,
         destination: []const u8,
@@ -617,6 +634,8 @@ const FakeService = struct {
     in_buf: [8 * 1024]u8 = undefined,
     in_len: usize = 0,
     in_pos: usize = 0,
+    /// Scratch for `errorReply`, which builds a frame by hand.
+    frame_buf: [1024]u8 = undefined,
 
     fn connect(alloc: std.mem.Allocator) !FakeService {
         const env = if (std.c.getenv("DBUS_SESSION_BUS_ADDRESS")) |raw| std.mem.span(raw) else null;
@@ -762,6 +781,72 @@ const FakeService = struct {
         try self.writeAll(dbus.encode(&frame, .signal, .{}, self.serial, &fields, w.written()));
     }
 
+    /// An ERROR message: how a portal refuses a call. Type 3, with the reason
+    /// in the ERROR_NAME header field and the call being answered in
+    /// REPLY_SERIAL.
+    ///
+    /// Hand-built rather than produced by `dbus.encode`, because `encode` only
+    /// writes method calls and returns; an error reply is the one message a
+    /// service sends that this codec has no path for. Note that BOTH fields
+    /// are elements of the SAME header array — there is no array per field —
+    /// and that the array's length starts after its own length word, which is
+    /// the mistake that killed the fake service the first time this was
+    /// written: the broker rejected the frame, the service vanished, and the
+    /// client saw a second attempt fail with ServiceUnknown.
+    ///
+    /// Two things below are load-bearing in a way nothing about the code
+    /// suggests, and both were found by watching a refusal that never arrived.
+    ///
+    /// The endianness marker comes first because the fixed header is
+    /// ENDIANNESS, TYPE, FLAGS, VERSION, BODY LENGTH, SERIAL, ARRAY LENGTH.
+    /// Writing the type without it does not produce a short frame the bus
+    /// complains about — it produces a frame shifted one byte left, whose
+    /// first byte is `0x03` where the broker expects `'l'`. The broker rejects
+    /// that, closes the connection, and the fake portal is GONE.
+    ///
+    /// DESTINATION is not optional. The bus routes a reply by the destination
+    /// the sending service names in it, so an error reply without one is a
+    /// frame the broker accepts, parses, and then has nowhere to put: it is
+    /// DROPPED, silently. The service sees a successful write and the client
+    /// sees nothing at all — two facts that are equally consistent with a
+    /// portal that simply went quiet. `replyHandle` has carried this field
+    /// from the start, which is why only this path lost the reply.
+    fn errorReply(self: *FakeService, request: dbus.Header, name: []const u8) []const u8 {
+        self.serial +%= 1;
+        var w = dbus.Writer.init(&self.frame_buf);
+        w.writeU8('l'); // endianness marker; every message starts with it
+        w.writeU8(3); // message type: ERROR
+        w.writeU8(0); // flags
+        w.writeU8(1); // protocol version
+        w.writeU32(0); // body length
+        w.writeU32(self.serial);
+
+        const array_at = w.reserveU32();
+        w.alignTo(8);
+        w.writeU8(4); // ERROR_NAME
+        w.writeSignature("s");
+        w.writeString(name);
+        w.alignTo(8);
+        w.writeU8(5); // REPLY_SERIAL
+        w.writeSignature("u");
+        w.writeU32(request.serial);
+        w.alignTo(8);
+        w.writeU8(6); // DESTINATION
+        w.writeSignature("s");
+        w.writeString(request.sender orelse "");
+        w.patchU32(array_at, @intCast(w.count() - (array_at + 4)));
+        return w.written();
+    }
+
+    fn write(self: *FakeService, bytes: []const u8) !void {
+        var sent: usize = 0;
+        while (sent < bytes.len) {
+            const rc = linux.sendto(self.fd, bytes.ptr + sent, bytes.len - sent, posix.MSG.NOSIGNAL, null, 0);
+            if (linux.errno(rc) != .SUCCESS or rc == 0) return error.NoBus;
+            sent += rc;
+        }
+    }
+
     fn next(self: *FakeService) !?dbus.Header {
         while (true) {
             if (self.in_pos < self.in_len) {
@@ -839,6 +924,9 @@ fn addMatch(service: *FakeService, rule: []const u8) !void {
 /// The fake portal's side of one conversation, run on its own thread.
 const Responder = struct {
     service: *FakeService,
+    /// Refuse this many calls before answering one. It is how a portal that
+    /// will not take a filter list behaves, and the client has to survive it.
+    refuse_first: usize = 0,
     code: u32 = 1,
     uris: []const []const u8 = &.{},
     /// What the client actually asked for, captured so the test can assert it.
@@ -855,31 +943,60 @@ const Responder = struct {
     }
 
     fn run(self: *Responder) !void {
-        const msg = (try self.service.next()) orelse return error.NoPortalTimeout;
-        if (msg.kind != .method_call) return error.NotACall;
-        if (msg.interface_name == null or
-            !std.mem.eql(u8, msg.interface_name.?, portal.chooser_interface)) return error.NotAChooserCall;
-        if (msg.path == null or !std.mem.eql(u8, msg.path.?, portal.desktop_path)) return error.NotAChooserCall;
+        // Until it has actually answered one. A client that is refused may
+        // come back — the filter retry is exactly that — and a responder
+        // that returns after the first reply is a portal that goes silent
+        // rather than one that refuses, which is a different bug to chase.
+        while (true) {
+            const msg = (try self.service.next()) orelse return error.NoPortalTimeout;
 
-        const member = msg.member orelse return error.NoMember;
-        self.member_len = @min(member.len, self.member_buf.len);
-        @memcpy(self.member_buf[0..self.member_len], member[0..self.member_len]);
+            // The handshake is not part of the chooser conversation, and
+            // answering it is actively harmful. `Hello`, `RequestName` and
+            // `AddMatch` are all sent to the BUS, and the bus routes their
+            // replies back to this same socket; `call` drains each as it waits
+            // for its serial, so by the time this loop starts they are normally
+            // gone. "Normally" is not "always" — and an error reply to a
+            // `Hello` makes the broker drop the connection outright, which
+            // takes the fake portal with it. Step over anything that is not
+            // the chooser call rather than risk answering the handshake.
+            if (msg.kind != .method_call) continue;
+            if (msg.interface_name == null or
+                !std.mem.eql(u8, msg.interface_name.?, portal.chooser_interface)) return error.NotAChooserCall;
+            if (msg.path == null or !std.mem.eql(u8, msg.path.?, portal.desktop_path)) return error.NotAChooserCall;
 
-        // The body is (s parent_window, s title, a{sv} options).
-        var r = dbus.Reader.init(msg.body);
-        _ = try r.readString(); // parent window
-        const title = try r.readString();
-        self.title_len = @min(title.len, self.title_buf.len);
-        @memcpy(self.title_buf[0..self.title_len], title[0..self.title_len]);
+            // The refusal applies to the CHOOSER call, after those checks
+            // rather than before them. Placed earlier it is a statement about
+            // whichever message happened to arrive first, which is a weaker
+            // and less honest claim than "the first chooser request is
+            // refused" — and only the second actually exercises the retry.
+            if (self.refuse_first > 0) {
+                self.refuse_first -= 1;
+                // A refusal in words, which is how a portal complains about an
+                // option it will not take.
+                try self.service.write(self.service.errorReply(msg, "org.freedesktop.portal.Error.InvalidArgument"));
+                continue;
+            }
 
-        // The request path the portal will answer on is derived from the
-        // token the CLIENT sent in its options, and from the sender it saw.
-        const token = findOptionToken(msg.body) orelse return error.NoToken;
-        var path_buf: [256]u8 = undefined;
-        const request_path = try portal.writeRequestPath(msg.sender orelse return error.NoSender, token, &path_buf);
+            const member = msg.member orelse return error.NoMember;
+            self.member_len = @min(member.len, self.member_buf.len);
+            @memcpy(self.member_buf[0..self.member_len], member[0..self.member_len]);
 
-        try self.service.replyHandle(msg, request_path);
-        try self.service.emitResponse(request_path, self.code, self.uris);
+            // The body is (s parent_window, s title, a{sv} options).
+            var r = dbus.Reader.init(msg.body);
+            _ = try r.readString(); // parent window
+            const title = try r.readString();
+            self.title_len = @min(title.len, self.title_buf.len);
+            @memcpy(self.title_buf[0..self.title_len], title[0..self.title_len]);
+
+            // The request path the portal will answer on is derived from the
+            // token the CLIENT sent and from the sender it saw.
+            const token = findOptionToken(msg.body) orelse return error.NoToken;
+            var path_buf: [256]u8 = undefined;
+            const request_path = try portal.writeRequestPath(msg.sender orelse return error.NoSender, token, &path_buf);
+            try self.service.replyHandle(msg, request_path);
+            try self.service.emitResponse(request_path, self.code, self.uris);
+            return;
+        }
     }
 
     /// Find `handle_token`'s value by scanning for the key rather than by
@@ -997,6 +1114,49 @@ test "a folder selection survives a real session bus, end to end" {
     try std.testing.expectEqual(@as(usize, 2), selection.paths.len);
     try std.testing.expectEqualStrings("/home/u/Projects/My Folder", selection.paths[0]);
     try std.testing.expectEqualStrings("/home/u/Notes/draft.md", selection.paths[1]);
+    selection.deinit(std.testing.allocator);
+}
+
+test "a portal that refuses the first call still gets answered" {
+    // The regression this file needed and did not have. A portal that refuses
+    // the filter list makes the client reconnect — and a reconnect means a
+    // NEW unique bus name, which is half of the request path. Derive the path
+    // before the reconnect instead of after it, and the dialog opens, the user
+    // presses Cancel, and the client waits for a Response that arrives on a
+    // path it is no longer listening to. For ever, with no timeout set.
+    //
+    // `timeout_ms` is what makes this a test rather than a hang: before the
+    // fix the client waits out the budget and fails.
+    liveLock();
+    defer liveUnlock();
+    var service = try startFakePortal();
+    defer service.deinit();
+
+    // `code = 0` is the portal's "dismissed" answer, and it is the one this
+    // test wants: the subject is that the client is ANSWERED at all after a
+    // refusal, so the status has to be the one a dismissed dialog produces.
+    // The default is `1`, which means "succeeded, here are the URIs" — and
+    // with none attached that decodes to `.other`, which is a perfectly good
+    // status and a different one.
+    var responder = Responder{ .service = &service, .refuse_first = 1, .code = 0 };
+    const thread = try std.Thread.spawn(.{}, Responder.threadMain, .{&responder});
+
+    var client = Client.connect(std.testing.allocator) catch return error.SkipZigTest;
+    defer client.deinit();
+    client.service_name = fake_portal_name;
+
+    const selection = try client.choose(.{
+        .kind = .open_file,
+        .title = "test",
+        .filters = &.{
+            .{ .name = "All files", .rules = &.{.{ .pattern = "*" }} },
+        },
+        .timeout_ms = 5_000,
+    });
+    thread.join();
+    if (responder.err) |e| return e;
+
+    try std.testing.expectEqual(contract.Status.cancelled, selection.status);
     selection.deinit(std.testing.allocator);
 }
 
