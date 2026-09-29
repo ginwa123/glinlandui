@@ -243,6 +243,19 @@ pub fn build(b: *std.Build) void {
         mod.linkFramework("AppKit", .{});
         mod.linkFramework("Foundation", .{});
         mod.linkFramework("CoreGraphics", .{});
+        // `UniformTypeIdentifiers` is where `UTType` lives, and `UTType` is
+        // what `NSOpenPanel.allowedContentTypes` takes. Without this the shim
+        // COMPILES and then fails to link with `undefined symbol:
+        // _OBJC_CLASS_$_UTType` — a confusing way to learn that a header is
+        // not a framework. It is separate because it arrived in macOS 11 and
+        // AppKit has no way to vend it.
+        //
+        // It comes with `allowedContentTypes` rather than with
+        // `allowedFileTypes`, which is the whole reason the dialog moved off
+        // the deprecated API: `allowedFileTypes` needed no second framework,
+        // which is exactly why it is still the spelling everyone reaches for,
+        // and exactly why it is deprecated.
+        mod.linkFramework("UniformTypeIdentifiers", .{});
     }
 
     // ---- Linux-only native windowing and rendering graph ----
