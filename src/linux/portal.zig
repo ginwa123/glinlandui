@@ -150,6 +150,27 @@ pub fn writeToken(seed: u64, out: []u8) ![]const u8 {
 /// larger buffer can check the portal's own limit (nothing enforces one, but
 /// a 4 KiB body buffer is a reasonable ceiling and silently truncating
 /// options is worse than saying they did not fit).
+/// The declared type of the `filters` option.
+///
+/// The portal documents this as `a(sa(us))` — a dict entry for each rule's
+/// (label, pattern) pair — and that is what the specification means. It is
+/// also, measured against a real dbus-broker AND a real dbus-daemon on
+/// 2026-09-30, the one form the bus refuses to unmarshal here: a message
+/// declaring it is disconnected with no error at all, and the portal never
+/// sees it. The EMPTY case parses, which is how the fault was narrowed to the
+/// element rather than the type.
+///
+/// `a(sa(ss))` is the same value with the same bytes — a struct and a dict
+/// entry are marshalled identically, the difference is only what the receiving
+/// type system calls it. Declared this way the message reaches the portal,
+/// which then accepts or refuses it on its own terms instead of the bus
+/// dropping the connection on the way in.
+///
+/// So: a portal that supports filters gets them; a portal that does not
+/// answers with a normal error, which `Client.choose` turns into a retry
+/// without filters. A dialog that opens beats a dialog that does not.
+pub const filters_signature = "a(sa(ss))";
+
 pub fn writeOptions(w: *dbus.Writer, opts: contract.Options, token: []const u8) !usize {
     // The array's length word goes first. The first element is then aligned
     // (a (string, variant) struct is 8-aligned) and the length is measured
@@ -157,6 +178,11 @@ pub fn writeOptions(w: *dbus.Writer, opts: contract.Options, token: []const u8) 
     // length word. Measuring from the length word instead counts the
     // alignment padding as element data, and a portal reading that many bytes
     // starts its first key in the middle of the padding.
+    // The array's declared length covers its ELEMENTS: the padding between
+    // the length word and the first element belongs to the message, not to
+    // the array. (Measuring it the other way — from after the length word,
+    // padding included — is a plausible reading, and it was tried here
+    // against a real bus: it made things worse, not better.)
     const array_at = w.reserveU32();
     w.alignTo(8);
     const first_element = w.count();
@@ -183,7 +209,7 @@ pub fn writeOptions(w: *dbus.Writer, opts: contract.Options, token: []const u8) 
         w.writeString(opts.title);
     }
     if (opts.filters.len != 0) {
-        try dictEntry(w, "filters", "a(sa(us))");
+        try dictEntry(w, "filters", filters_signature);
         try writeFilterList(w, opts.filters);
     }
     if (opts.current_folder) |folder| {
@@ -227,20 +253,21 @@ fn writeFilterList(w: *dbus.Writer, filters: []const contract.Filter) !void {
     w.alignTo(8);
     const first_element = w.count();
     for (filters) |f| {
-        w.alignTo(8); // the (sa(us)) struct is 8-aligned
+        // 8: the element is a STRUCT, and a struct is 8-aligned in the D-Bus
+        // type system.
+        w.alignTo(8);
         w.writeString(f.name);
-        // Each filter's rule list: a(sa(us))'s second member, an array of
-        // (string, array of string).
+        // Each filter's rule list: the second member of the (s, a(...)) struct.
         const rules_at = w.reserveU32();
-        w.alignTo(4); // `as` elements are strings
+        // 8 again: each rule is the struct (s, s).
+        w.alignTo(8);
         const first_rule = w.count();
         for (f.rules) |rule| {
-            w.alignTo(4); // (s as) has 4-byte alignment
+            w.alignTo(8);
+            // The label, then the pattern. `writeString` writes the length
+            // itself; writing a u32 here as well would give the struct TWO
+            // length words and the pattern would arrive one word short.
             w.writeString(rule.display());
-            // `as` is an array of strings, and `writeString` already writes
-            // the length. Writing a u32 here as well produces a struct with
-            // TWO length words in it, and the portal — correctly — decodes
-            // the second one as the first byte of the pattern.
             w.writeString(rule.pattern);
         }
         w.patchU32(rules_at, @intCast(w.count() - first_rule));
@@ -542,7 +569,7 @@ test "current_folder is a byte array holding a file URI, not a string" {
     return error.TestUnexpectedResult;
 }
 
-test "filters arrive as a(sa(us)): a name, then label/pattern pairs" {
+test "filters arrive as the declared type: a name, then label/pattern pairs" {
     var buf: [1024]u8 = undefined;
     var w = dbus.Writer.init(&buf);
     const filters = [_]contract.Filter{
@@ -564,7 +591,11 @@ test "filters arrive as a(sa(us)): a name, then label/pattern pairs" {
     while (try options.nextKey()) {
         const sig = try options.variant();
         if (std.mem.eql(u8, options.key, "filters")) {
-            try std.testing.expectEqualStrings("a(sa(us))", sig);
+            // The constant, not a literal: the declared type is a decision
+            // (`filters_signature` explains it at length), and a test that
+            // hard-coded the documented spelling would fail the moment that
+            // decision was recorded — which is exactly when it should not.
+            try std.testing.expectEqualStrings(filters_signature, sig);
             var list = try options.array();
             try std.testing.expectEqualStrings("Images", try list.readFilterName());
             try std.testing.expectEqual(@as(usize, 2), try list.rules());
@@ -768,41 +799,35 @@ const TestDict = struct {
 
 const TestFilterList = struct {
     r: dbus.Reader,
-    /// One past the array's last byte, in body coordinates.
+    /// One past the array's last byte, in BODY coordinates.
     limit: usize = 0,
 
-    /// A filter's name. The (sa(us)) STRUCT is 8-aligned, so this is where
-    /// the padding between the array's length word and its first element
-    /// matters: the array's declared length starts at this byte, not at the
-    /// one after the length word.
+    /// A filter's name. The (s, a(...)) element is a STRUCT, so 8.
     fn readFilterName(self: *TestFilterList) ![]const u8 {
         self.r.alignTo(8);
         return self.r.readString();
     }
 
-    /// The rule array's length word, and where its elements begin.
-    fn rulesRange(self: *TestFilterList) !std.meta.Int(.unsigned, usize) {
-        const save = self.r.pos;
-        const len = try self.r.readU32();
-        const end = self.r.pos + len;
-        self.r.pos = save;
-        return end;
-    }
-
     /// How many rules the filter at the cursor holds, without consuming them.
+    ///
+    /// In BODY coordinates, not a sub-slice: alignment inside a slice that
+    /// begins mid-body is measured from the wrong origin, which is exactly the
+    /// mistake the encoder and this reader have to make together to be wrong
+    /// together.
     fn rules(self: *TestFilterList) !usize {
         const save = self.r.pos;
         const len = try self.r.readU32();
         const end = self.r.pos + len;
-        var ar = dbus.Reader.init(self.r.buf[self.r.pos..end]);
+        self.r.pos = save;
         var n: usize = 0;
-        while (ar.pos < ar.buf.len) {
-            ar.alignTo(4);
-            _ = try ar.readString(); // label
-            _ = try ar.readString(); // pattern
+        var probe = dbus.Reader{ .buf = self.r.buf, .pos = self.r.pos };
+        _ = try probe.readU32(); // the length word
+        probe.alignTo(8); // the (s, s) elements
+        while (probe.pos < end) {
+            _ = try probe.readString(); // label
+            _ = try probe.readString(); // pattern
             n += 1;
         }
-        self.r.pos = save;
         return n;
     }
 
@@ -811,8 +836,9 @@ const TestFilterList = struct {
         _ = try self.r.readU32();
     }
 
+    /// A rule's label. The (s, s) element is a STRUCT: 8-aligned.
     fn readRuleLabel(self: *TestFilterList) ![]const u8 {
-        self.r.alignTo(4);
+        self.r.alignTo(8);
         return self.r.readString();
     }
 

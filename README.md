@@ -289,6 +289,11 @@ Three things about the Linux backend are worth knowing before using it:
   portal installed gets `error.NoPortal`, which is a different problem from
   "the user cancelled" and deserves a different message. macOS and Windows
   have no such failure: the dialog is a window in the process.
+- **A filter list is best effort on Linux.** `Options.filters` is sent, and
+  a portal that will not take it gets a second, plainer request instead of a
+  dialog that never opens — see `portal.filters_signature` for what was
+  measured, and why. The dialog opens either way; on a portal that refuses
+  filters it simply has no filter dropdown.
 - **`timeout_ms` is Linux-only.** It bounds the wait for the portal's answer.
   AppKit and COM own their own modal loops, and the only way to stop one is to
   post a cancel from a timer the host does not run while it is blocked. A host

@@ -256,18 +256,62 @@ pub const Client = struct {
         var folded_buf: [64]u8 = undefined;
         const folded = try portal.foldSenderName(self.uniqueName(), &folded_buf);
 
+        // The match rule goes first, and the retry below has to put it back,
+        // so it lives in a function rather than inline here.
+        try self.registerForToken(token, request_path, folded);
+
+        // The filter list is a documented option, and a portal is entitled to
+        // refuse it — and this one does, in a way that takes the whole dialog
+        // with it: the bus closes the connection rather than answering, so
+        // there is no error to read and no connection left to read it on.
+        //
+        // So a first attempt that dies is followed by a second one WITHOUT
+        // filters, on a fresh connection. The user gets a working file dialog
+        // either way, and the only thing lost is the filter dropdown.
+        var handle = self.chooserCall(opts, token, opts.filters.len != 0) catch |first_err| blk: {
+            if (opts.filters.len == 0) return first_err;
+            // The connection may be gone entirely; a new one is cheap and the
+            // old socket, if it still exists, is closed by `reconnect`.
+            self.reconnect() catch |e| return e;
+            self.registerForToken(token, request_path, folded) catch |e| return e;
+            break :blk self.chooserCall(opts, token, false) catch |e| return e;
+        };
+        if (handle.kind == .error_reply and opts.filters.len != 0) {
+            // Refused in words rather than by disconnecting. Same remedy, and
+            // a second refusal simply falls through to the check below, which
+            // reports it as the portal's answer rather than as a crash.
+            handle = self.chooserCall(opts, token, false) catch |e| return e;
+        }
+        if (handle.kind == .error_reply) {
+            const name = handle.error_name orelse "";
+            // The two cases a UI must tell apart: nothing owns the name (no
+            // portal installed) versus the portal answered and refused.
+            if (std.mem.indexOf(u8, name, "ServiceUnknown") != null or
+                std.mem.indexOf(u8, name, "NameHasNoOwner") != null) return error.NoPortal;
+            return error.PortalError;
+        }
+        const decoded = try self.waitForResponse(request_path, opts.timeout_ms);
+        return self.toSelection(decoded);
+    }
+
+    /// Install the match rule that routes THIS request's Response to us.
+    ///
+    /// It goes before the chooser call because the bus processes messages in
+    /// order: by the time the portal can answer, the bus is already routing
+    /// that signal here. The alternative is a race in which a fast portal
+    /// answers before we are listening, and the dialog silently never
+    /// returns.
+    ///
+    /// Separate from `choose` because the filter-retry path needs it twice,
+    /// on two different connections.
+    fn registerForToken(self: *Client, token: []const u8, request_path: []const u8, folded: []const u8) !void {
+        _ = request_path;
         var rule_buf: [512]u8 = undefined;
         const rule = try portal.writeResponseMatchRule(folded, token, &rule_buf);
-
-        // The match rule goes first. The bus processes messages in order, so
-        // by the time the portal can answer, the bus is already routing that
-        // signal to us — the alternative is a race in which a fast portal
-        // answers before we are listening and the dialog silently never
-        // returns.
         var add: [600]u8 = undefined;
         var aw = dbus.Writer.init(&add);
         aw.writeString(rule);
-        const add_reply = try self.callMethod(
+        const reply = try self.callMethod(
             "org.freedesktop.DBus",
             "/org/freedesktop/DBus",
             "org.freedesktop.DBus",
@@ -275,32 +319,18 @@ pub const Client = struct {
             "s",
             aw.written(),
         );
-        if (add_reply.kind == .error_reply) return error.NoPortal;
+        if (reply.kind == .error_reply) return error.NoPortal;
+    }
 
-        var body_buf: [4096]u8 = undefined;
-        var bw = dbus.Writer.init(&body_buf);
-        try portal.writeMethodBody(&bw, opts, token);
-
-        const handle = try self.callMethod(
-            self.service_name,
-            portal.desktop_path,
-            portal.chooser_interface,
-            portal.memberFor(opts.kind),
-            "ssa{sv}",
-            bw.written(),
-        );
-        if (handle.kind == .error_reply) {
-            const name = handle.error_name orelse "";
-            // The two cases a UI must tell apart: nothing is listening on the
-            // bus for that name (a Wayland session with no desktop portal
-            // installed), or the portal answered and refused.
-            if (std.mem.indexOf(u8, name, "ServiceUnknown") != null or
-                std.mem.indexOf(u8, name, "NameHasNoOwner") != null) return error.NoPortal;
-            return error.PortalError;
-        }
-
-        const decoded = try self.waitForResponse(request_path, opts.timeout_ms);
-        return self.toSelection(decoded);
+    /// Throw the current connection away and open a new one.
+    ///
+    /// Only used after a call that the bus closed the connection over, which
+    /// is the one failure there is no recovering from in place. The unique
+    /// name changes, so the caller re-registers its match rule afterwards.
+    fn reconnect(self: *Client) !void {
+        const fresh = try Client.connect(self.alloc);
+        self.deinit();
+        self.* = fresh;
     }
 
     /// Cancel a dialog that is already open.
@@ -377,6 +407,25 @@ pub const Client = struct {
 
     /// Send a method call and wait for its reply, skipping any signals that
     /// arrive in the meantime (the bus sends `NameAcquired` unbidden).
+    /// One chooser call. `with_filters` decides whether the filter list goes
+    /// in the options; the caller uses that to ask twice, and `closeAll` is
+    /// what makes asking twice possible at all.
+    fn chooserCall(self: *Client, opts: Options, token: []const u8, with_filters: bool) !dbus.Header {
+        var body_buf: [4096]u8 = undefined;
+        var bw = dbus.Writer.init(&body_buf);
+        var o = opts;
+        if (!with_filters) o.filters = &.{};
+        try portal.writeMethodBody(&bw, o, token);
+        return self.callMethod(
+            self.service_name,
+            portal.desktop_path,
+            portal.chooser_interface,
+            portal.memberFor(o.kind),
+            "ssa{sv}",
+            bw.written(),
+        );
+    }
+
     fn callMethod(
         self: *Client,
         destination: []const u8,
