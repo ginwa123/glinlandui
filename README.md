@@ -250,24 +250,74 @@ One API, three unrelated system dialogs:
 const pick = glinlandui.file_dialog.openFolder(alloc, .{
     .title = "Choose a workspace",
     .current_folder = "/home/u",
-}) catch |err| switch (err) {
-    error.Unsupported => return,     // no dialog backend on this platform
-    error.NoPortal => tellUser("install xdg-desktop-portal"),
-    else => return err,
+}) catch |err| {
+    // The error set is per BACKEND, so this matches on the NAME (see below).
+    const name = @errorName(err);
+    if (std.mem.eql(u8, name, "Unsupported")) {
+        return;                                 // no dialog backend here
+    } else if (std.mem.eql(u8, name, "NoPortal")) {
+        tellUser("install xdg-desktop-portal");
+    }
+    return err;                                 // the rest is the backend's own
 };
 defer pick.deinit(alloc);
 
 switch (pick.status) {
-    .selected => openWorkspace(pick.first().?),
+    // `pick.paths` is BORROWED from `alloc` — copy it before the defer runs.
+    .selected => openWorkspace(copyOf(pick.first().?)),
     .cancelled => {},                 // the user pressed Escape: not a failure
     .other => {},
 }
 ```
 
 `openFile`, `openFolder` and `saveFile` take one `Options` and return one
-`Selection`, and the types are shared across every platform (see
-`src/core/file_dialog_contract.zig`) — so the call above compiles on Linux,
-macOS and Windows alike.
+`Selection`, and the **types** are shared across every platform (see
+`src/core/file_dialog_contract.zig`) — which is why the call above compiles
+on Linux, macOS and Windows alike. The **error set** is the one thing that is
+not shared, and that is the next section.
+
+### The error set is per backend, so match on the name
+
+`src/core/file_dialog_contract.zig` defines one `Error` set with five named
+members and documents the obvious call shape:
+
+```zig
+catch |err| switch (err) {
+    error.Unsupported => ...,
+    else => ...,
+};
+```
+
+**That switch does not compile.** The error set belongs to the *backend*, and
+the backends do not agree on it:
+
+| backend | what it declares | what's in it |
+|---|---|---|
+| `linux/file_dialog.zig` | `!Selection` — **inferred** | 23 errors: `NoSessionBus`, `NoPortal`, `PortalError`, `Timeout`, `OutOfMemory`, the socket errors, the D-Bus errors — and **no `error.Unsupported`**, because a portal client is always wired up |
+| `mac/file_dialog.zig`, `windows/file_dialog.zig` | `!Selection` — **inferred** | the same shape: real backend, so no `Unsupported`; no D-Bus, so no `NoSessionBus` / `NoPortal` |
+| `core/file_dialog_portable.zig` | `Error!Selection`, `Error = contract.Error` | all five names — it declares the contract's set and only ever returns `Unsupported` |
+
+So `error.Unsupported` is a compile error on all three desktops, and
+`error.NoPortal` is a compile error on macOS and Windows. An `else` does not
+rescue it: Zig checks each arm against the set it is switching over before it
+ever reaches the `else`. The shape above only compiled where the portable stub
+is what `glinlandui.file_dialog` resolves to — a browser, or any test build,
+since `platform.zig` selects the stub under `builtin.is_test`.
+
+The fix is to match on `@errorName(err)`, as the sample above does. Zig cannot
+`switch` on a string, so it is a short `std.mem.eql` chain — exactly what
+`Machine.fromError` in the example does. It costs one string comparison on a
+path that is already showing a dialog, and it compiles against every backend.
+The five contract errors keep their own messages because they are the ones a
+user can act on; everything else collapses into a catch-all, which is the
+honest "the dialog could not be completed".
+
+Narrowing every backend to `contract.Error` would make the documented switch
+work again, and is the real fix — but it is a change to the error contract
+rather than to a caller, because the contract has no name for `OutOfMemory`
+and would need one. `contract.Error`'s own comment already says a backend may
+return errors outside the five on purpose, so this is deliberate future work
+rather than a bug to paper over at the call site.
 
 The browser is the one host without a backend, and it is not a smaller version
 of the same problem: a page's `<input type="file">` has no filesystem paths
@@ -298,6 +348,51 @@ Three things about the Linux backend are worth knowing before using it:
   AppKit and COM own their own modal loops, and the only way to stop one is to
   post a cancel from a timer the host does not run while it is blocked. A host
   that needs a deadline should open the dialog on a worker thread.
+
+### Run it: `zig build run-file-dialog`
+
+`examples/file_dialog.zig` is all of the above, running: three buttons — one per
+`Kind` — and a status line that says how the last dialog actually ended. It is
+wired for Linux, macOS and Windows and deliberately **not** for the browser,
+where there is no dialog to show and an example of `error.Unsupported` would
+be an example of a string.
+
+```bash
+zig build run-file-dialog
+```
+
+Four things in it are the ones an app actually gets wrong:
+
+| what | the rule |
+|---|---|
+| cancellation | it is a `Status`, not an error — `Outcome.isProblem()` deliberately excludes it |
+| `Selection` | it **borrows** the allocator you passed in, so copy the path before `deinit` |
+| errors | the set is per backend, so `fromError` matches on `@errorName` — see above |
+| `available()` | gate the button on it; a button that cannot work is worse than no button |
+
+The logic lives in a `Machine` with pure `fromSelection` / `fromError` rather
+than in the click handler, and that is not tidiness for its own sake: it is what
+puts the example's 8 tests in the cross-platform parity suite, where they run
+on every OS against the real contract types with no window, no compositor and
+no session bus in sight. The live XDG round trip is a different file
+(`src/linux/file_dialog.zig`) and it is covered by `zig build native-test`.
+
+### Running it without a desktop
+
+```bash
+GLIN_FILE_DIALOG_CHECK=1 zig build run-file-dialog
+```
+
+That opens no window and no dialog. It prints which backend this build resolved
+to, what `available()` says, and how a real `openFile` call ends on this host —
+a specific answer (`NoSessionBus` on a bare CI runner, `NoPortal` on a desktop
+with no portal installed) rather than a green exit code. The probe passes
+`timeout_ms`, so a developer running it on a machine that *can* show a dialog
+gets an answer in two seconds instead of a modal window nobody is there to
+dismiss. This is the mode CI runs, and it is a real check rather than a smoke
+test: the call it makes is the same `glinlandui.file_dialog` the GUI path calls,
+so it proves the module resolved, the types are the ones the contract promises,
+and the backend reports itself honestly.
 
 ### How it is put together
 
@@ -793,6 +888,7 @@ src/
 
 examples/
 ├── calculator.zig            the example app (+ 36 tests)
+├── file_dialog.zig           ★ the dialog how-to — 3 buttons, 8 tests
 └── calculator_e2e_test.zig   ★ 15 E2E tests driving that app
 
 ci/
@@ -841,3 +937,10 @@ Honest list; each is a reasonable next task.
   rasterizes on the GPU.
 - **`core/frame.zig` owns the cursor-shape mapping**, which is a Wayland
   `cursor-shape-v1` concern living in the platform-agnostic layer.
+- **The file dialog's error set is per backend**, so the `switch (err)` that
+  `core/file_dialog_contract.zig` documents does not compile. Only the
+  portable stub declares `contract.Error`; the three desktop backends return
+  an *inferred* set, and Linux's has no `error.Unsupported` in it at all. A
+  caller has to match on `@errorName` until every backend is narrowed to
+  `contract.Error`, which first needs a name for `OutOfMemory`. See "File and
+  folder dialogs" above.

@@ -81,13 +81,23 @@ pub const wayland_lib = platform;
 ///     const pick = glinlandui.file_dialog.openFolder(alloc, .{
 ///         .title = "Choose a workspace",
 ///         .current_folder = "/home/u",
-///     }) catch |err| switch (err) {
-///         error.Unsupported => return,          // no dialog on this platform
-///         error.NoPortal => showHint("no desktop portal installed"),
-///         else => return err,
+///     }) catch |err| {
+///         // Matched by NAME, not by value — see the note on
+///         // `core/file_dialog_contract.zig`'s `Error`. A desktop backend's
+///         // error set is inferred and does not contain `error.Unsupported`,
+///         // so the `switch (err) { error.Unsupported => ..., else => ... }`
+///         // that reads so naturally here does not compile.
+///         const name = @errorName(err);
+///         if (std.mem.eql(u8, name, "Unsupported")) {
+///             return;                          // no dialog on this platform
+///         } else if (std.mem.eql(u8, name, "NoPortal")) {
+///             showHint("no desktop portal installed");
+///         }
+///         return err;
 ///     };
 ///     defer pick.deinit(alloc);
-///     if (pick.status == .selected) use(pick.first().?);
+///     // `pick.paths` is BORROWED from `alloc`; copy it before the defer runs.
+///     if (pick.status == .selected) use(copyOf(pick.first().?));
 ///
 /// A cancelled dialog is a `Status`, not an error: the user closed it on
 /// purpose, and an app that treats that as a failure shows an error message

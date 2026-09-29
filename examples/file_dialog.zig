@@ -180,34 +180,43 @@ pub const Machine = struct {
     ///
     /// The obvious thing is `switch (err) { error.Unsupported => ..., else => ... }`,
     /// and that is exactly what `core/file_dialog_contract.zig` documents. It
-    /// does not compile.
+    /// does not compile on any desktop.
     ///
-    /// The reason is that the error set is PER BACKEND, and not merely wider on
-    /// some platforms than others — the sets are genuinely different sets:
+    /// The reason is that the returned error set is PER BACKEND, and the three
+    /// desktop backends declare a bare `!Selection`, which makes the set
+    /// INFERRED:
     ///
-    ///   - the portable stub returns exactly `error{Unsupported}`, so
-    ///     `error.NoPortal` is not a member of it;
-    ///   - the XDG backend returns an INFERRED set (OutOfMemory, the socket
-    ///     errors, its own D-Bus failures) and does not contain
-    ///     `error.Unsupported` at all, because a portal is what it talks to and
-    ///     there is no "no backend" case to report.
+    ///   - all three are missing `error.Unsupported` entirely. Each has a real
+    ///     backend, so "this host has no dialog" is not a thing that can
+    ///     happen — which is exactly why the contract's own example, the one
+    ///     every reader tries first, fails on its first named arm;
+    ///   - Linux's is much wider than the contract: OutOfMemory, the socket
+    ///     errors, its own D-Bus failures, none of which the contract names;
+    ///   - macOS and Windows cannot produce `NoPortal` at all, because they
+    ///     do not talk to a D-Bus portal.
     ///
-    /// So a `switch` arm naming `error.Unsupported` is a compile error on
-    /// Linux, and one naming `error.NoPortal` is a compile error on the stub.
-    /// No `else` rescues it: Zig checks each arm against the set it is
-    /// switching over before it ever reaches the `else`.
+    /// So a `switch` arm naming `error.Unsupported` is a compile error on all
+    /// three desktops, and one naming `error.NoPortal` is a compile error on
+    /// macOS and Windows. No `else` rescues it: Zig checks each arm against
+    /// the set it is switching over before it ever reaches the `else`.
     ///
-    /// Matching the NAME sidesteps that, and costs a string comparison that
-    /// happens once, on a path that is already showing a dialog. The five
-    /// contract errors keep their own words because they are the ones a user
-    /// can act on; everything else collapses into `portal_error`, which is the
-    /// honest "the dialog could not be completed" line.
+    /// The irony worth recording: `core/file_dialog_portable.zig` declares
+    /// `Error!Selection` explicitly, so it is the ONE backend that returns the
+    /// contract's set and the one where the documented switch compiles. It is
+    /// also the backend you only get in a test build or in a browser — never
+    /// on a desktop, which is where the code actually runs.
     ///
-    /// The alternative — narrowing every backend to `contract.Error` — would
-    /// make the documented switch work, at the cost of having to invent a
-    /// mapping for OutOfMemory that the contract has no name for. That is a
-    /// change to the error contract, not to an example, and it is worth doing
-    /// deliberately rather than as a side effect of writing one.
+    /// Matching the NAME sidesteps all of it, and costs a string comparison
+    /// that happens once, on a path that has already shown a dialog. The named
+    /// errors keep their own words because they are the ones a user can act
+    /// on; everything else collapses into `portal_error`, which is the honest
+    /// "the dialog could not be completed" line.
+    ///
+    /// The real fix is to narrow every backend to `contract.Error`, which would
+    /// make the documented switch true. That needs a name for OutOfMemory and
+    /// a decision about whether a socket failure is `PortalError` or something
+    /// more precise — a change to the error CONTRACT, not to an example, and
+    /// worth making deliberately rather than as a side effect of writing one.
     pub fn fromError(self: *Machine, err: anyerror) void {
         const name = @errorName(err);
         self.outcome = if (std.mem.eql(u8, name, "Unsupported"))
@@ -408,13 +417,16 @@ pub const App = struct {
     fn statusChildren(self: *App) void {
         const outcome = self.m.outcome;
         components.text.label(.{
-            .str = if (outcome.isProblem()) "Last answer" else "Last answer",
+            .str = "Last answer",
             .font_size = 11,
             .color = COLOR_DIM,
         });
         components.text.label(.{
             .str = outcome.line(),
             .font_size = 14,
+            // Green for an answer, red for a problem, and NOT red for a
+            // cancellation — `isProblem` is the same function the test holds
+            // the line on, so the two cannot drift apart.
             .color = if (outcome.isProblem()) COLOR_ERR else COLOR_OK,
         });
     }
@@ -514,13 +526,14 @@ fn probe() []const u8 {
         .title = "glinlandui check",
         .timeout_ms = 2_000,
     }) catch |err| {
-        // Matched by NAME for the reason `Machine.fromError` gives in full:
-        // the error set is per backend, so naming a member that this host does
-        // not have is a compile error, and an `else` does not save it. On a CI
-        // runner the expected answer is `NoSessionBus`; on a developer desktop
-        // it is `NoPortal` or, if a portal is somehow answering, a real
-        // selection — which is why `timeout_ms` is set above, so the third
-        // case costs two seconds instead of a modal window.
+        // Matched by NAME for the reason `Machine.fromError` gives in full: a
+        // desktop backend's error set is inferred, so naming a member this
+        // host does not have is a compile error, and an `else` does not save
+        // it. On a CI runner the expected answer is `NoSessionBus`; on a
+        // developer desktop it is `NoPortal` or, if a portal is somehow
+        // answering, a real selection — which is why `timeout_ms` is set
+        // above, so the third case costs two seconds instead of a modal
+        // window.
         return @errorName(err);
     };
     defer selection.deinit(std.heap.page_allocator);
@@ -584,12 +597,13 @@ test "a selection with no path is a problem, not an index panic" {
 
 test "each error says something a user can act on" {
     // The cases are held as `anyerror` rather than as `dialog.Error`, for the
-    // reason `Machine.fromError` gives in full: the error set is per BACKEND,
-    // so a value of type `dialog.Error` cannot even be written here on Linux
-    // (`error.Unsupported` is not a member of what the XDG backend returns).
-    // That is worth a test of its own — it is the difference between a caller
-    // who can write a portable switch and one who discovers it at compile
-    // time on a platform they are not building.
+    // reason `Machine.fromError` gives in full: a desktop backend's error set
+    // is inferred, so `error.Unsupported` is not a member of it and a value of
+    // type `dialog.Error` cannot be written here on Linux at all. The
+    // consequence worth noticing is that this test only ever exercises
+    // `fromError` — it cannot tell you which of the five a given backend can
+    // actually produce, because that is a property of the backend and not of
+    // the mapping.
     var m = Machine{};
     for ([_]struct { err: anyerror, want: Outcome }{
         .{ .err = error.Unsupported, .want = .unsupported },

@@ -443,6 +443,159 @@ jobs:
           echo "calculator painted $painted pixels"
 
   # ---------------------------------------------------------------------------
+  # File-dialog example (examples/file_dialog.zig)
+  #
+  # The "how to use" for `glinlandui.file_dialog`, and the one job whose
+  # subject is an API rather than a widget — so what it can honestly assert is
+  # worth being precise about before reading the steps.
+  #
+  # It CANNOT open a real dialog. A file dialog is modal and needs a user, and
+  # it needs a portal, and a build machine has neither. A step that tried
+  # anyway would not fail — it would sit on a modal window until the job hit
+  # its timeout, which is the most expensive way to learn nothing. So the
+  # example has a headless mode (`GLIN_FILE_DIALOG_CHECK=1`) that opens no
+  # window and no dialog.
+  #
+  # What that still proves is more than "it compiled":
+  #
+  #   - the example BUILDS and LINKS against the real backend on each desktop,
+  #     which is the part a docs-only change cannot regress;
+  #   - `glinlandui.file_dialog.available()` is true on all three;
+  #   - a real `openFile` call runs and ends in a NAMED, reported state — a
+  #     specific error or a specific status, never a silent success. On a
+  #     runner with no session bus that is `NoSessionBus`, and the job asserts
+  #     exactly that, so a backend that returned a bogus empty `Selection`
+  #     would fail rather than pass.
+  #
+  # What it does NOT prove is that a portal answers; that needs a desktop, and
+  # it is covered by `zig build native-test` against a real bus instead.
+  # ---------------------------------------------------------------------------
+  file-dialog:
+    name: File dialog / ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            label: Linux (XDG portal)
+          - os: macos-14
+            label: macOS (NSOpenPanel)
+          - os: windows-2022
+            label: Windows (IFileDialog)
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Check formatting (includes examples/)
+        run: zig fmt --check build.zig src examples
+
+      # Same native dependency set as every other desktop leg. The example
+      # links the real stack — it is a real window — so it needs it.
+      - name: Install native Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            fonts-dejavu-core \
+            libcairo2-dev \
+            libegl-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libfribidi-dev \
+            libglib2.0-dev \
+            libgles-dev \
+            libharfbuzz-dev \
+            libpango1.0-dev \
+            libpixman-1-dev \
+            libpng-dev \
+            libwayland-dev \
+            pkg-config
+
+          scanner="$(command -v wayland-scanner)"
+          test -n "$scanner"
+          sudo ln -sf "$scanner" /usr/sbin/wayland-scanner
+
+          echo "C_INCLUDE_PATH=/usr/lib/$(gcc -print-multiarch)/glib-2.0/include" >> "$GITHUB_ENV"
+
+      - name: Report whether the example is wired on this platform
+        run: |
+          set -uo pipefail
+          if zig build --help 2>/dev/null | grep -q 'run-file-dialog'; then
+            echo "run-file-dialog step: PRESENT"
+          else
+            echo "::error::run-file-dialog step is absent; the example is not wired" >&2
+            exit 1
+          fi
+
+      # The example's own tests are PORTABLE and are part of the parity count,
+      # so `tests.lock` already covers them; nothing extra to run here.
+      #
+      # What is new is the artifact and the headless probe. Note that the
+      # probe writes to STDERR (it uses `std.debug.print`, like every other
+      # example in this repository), so `2>&1` is load-bearing rather than
+      # decorative — without it the assertions below match nothing and the
+      # `test -n` guards turn a silent no-op into a failure.
+      - name: Build and probe the file-dialog example
+        run: |
+          set -euo pipefail
+
+          zig build -Doptimize=ReleaseSafe
+
+          exe="zig-out/bin/glinlandui-file-dialog"
+          [ -f "$exe.exe" ] && exe="$exe.exe"
+          test -f "$exe"
+
+          out="$(env GLIN_FILE_DIALOG_CHECK=1 XDG_RUNTIME_DIR=/nonexistent "$exe" 2>&1)"
+          echo "$out"
+
+          # The backend this build resolved to. Asserting the NAME, not merely
+          # that a line exists, is what makes this a check: a build that
+          # silently fell back to the portable stub would print
+          # "none (error.Unsupported)" and fail here, on macOS and Windows as
+          # loudly as on Linux.
+          case "$matrix.label" in
+            Linux*)   echo "$out" | grep -q 'backend:     xdg-desktop-portal' ;;
+            macOS*)   echo "$out" | grep -q 'backend:     NSOpenPanel' ;;
+            Windows*) echo "$out" | grep -q 'backend:     IFileDialog' ;;
+          esac
+
+          # `available()` is what a UI gates its button on, and it is true on
+          # all three desktops. A false here means the example silently
+          # rendered the "no dialog on this platform" panel instead.
+          echo "$out" | grep -q "available:   true"
+
+          # A real `openFile` call must end in a NAMED state. On a runner with
+          # no session bus the Linux leg's answer is `NoSessionBus`; macOS and
+          # Windows would raise an actual dialog if one could be shown, so
+          # they are bounded by the probe's own `timeout_ms` and answer
+          # `Timeout`. Either is a specific, reported outcome — and an empty
+          # `Selection` claiming success would match neither.
+          for probe in open_file open_folder save_file; do
+            line="$(printf '%s\n' "$out" | sed -nE "s/^${probe}:[[:space:]]*(.*)\$/\1/p" | head -n1)"
+            test -n "$line"
+            case "$line" in
+              *NoSessionBus|*NoPortal|*PortalError|*Timeout|*cancelled|*other|*selected)
+                ;;
+              *)
+                echo "::error::${probe} ended in an unnamed state: ${line}" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          echo "file-dialog: example built, backend resolved, all three probes reported a named state"
+
+  # ---------------------------------------------------------------------------
   # Browser backend (WebAssembly).
   #
   # `zig build web` and `zig build web-calculator` produce `zig-out/web/`, and
