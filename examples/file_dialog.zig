@@ -314,6 +314,33 @@ pub const Machine = struct {
     }
 };
 
+/// The `Options` this example sends for one `Kind`.
+///
+/// A free function rather than a block inside `request`, because the headless
+/// check mode builds the SAME options to print them, and two copies of this
+/// table is exactly the drift where the CI output starts describing a request
+/// the app never makes.
+fn optionsFor(kind: dialog.Kind, folder: ?[]const u8) dialog.Options {
+    var options = dialog.Options{ .kind = kind, .current_folder = folder };
+    switch (kind) {
+        .open_file => {
+            options.title = "Pick an image";
+            options.filters = &IMAGE_FILTERS;
+            options.multiple = true;
+        },
+        .open_folder => {
+            options.title = "Choose a folder";
+            options.accept_label = "Use folder";
+        },
+        .save_file => {
+            options.title = "Save as";
+            options.filters = &IMAGE_FILTERS;
+            options.current_name = "untitled.png";
+        },
+    }
+    return options;
+}
+
 /// The filter list this example sends, and the thing worth knowing about it.
 ///
 /// `filters` is best effort on Linux. The XDG portal protocol declares the
@@ -373,26 +400,7 @@ pub const App = struct {
     ///    case and falls through, so there is no `Selection` to free there,
     ///    and the one that IS returned is freed on the very next line.
     fn request(self: *App, kind: dialog.Kind) void {
-        var options = dialog.Options{
-            .kind = kind,
-            .current_folder = self.m.folderHint(),
-        };
-        switch (kind) {
-            .open_file => {
-                options.title = "Pick an image";
-                options.filters = &IMAGE_FILTERS;
-                options.multiple = true;
-            },
-            .open_folder => {
-                options.title = "Choose a folder";
-                options.accept_label = "Use folder";
-            },
-            .save_file => {
-                options.title = "Save as";
-                options.filters = &IMAGE_FILTERS;
-                options.current_name = "untitled.png";
-            },
-        }
+        const options = optionsFor(kind, self.m.folderHint());
 
         const selection = switch (kind) {
             .open_file => dialog.openFile(self.alloc, options),
@@ -556,22 +564,87 @@ pub fn main() !void {
     };
 }
 
-/// Report this host's file-dialog backend without opening anything.
+/// Report this host's file-dialog backend, and what each button would ask for.
 ///
-/// This is what CI runs, and it is a real check rather than a smoke test: the
-/// call it makes is the same `glinlandui.file_dialog` the GUI path calls, so
-/// it proves the module resolved, the types are the ones the contract
-/// promises, and the backend reports itself honestly — all without a window, a
-/// compositor, a user, or a portal.
+/// This is what CI runs, and it is a real check rather than a smoke test: it
+/// calls the same `glinlandui.file_dialog` and builds the same `Options` the
+/// GUI path does, so it proves the module resolved and the types are the ones
+/// the contract promises — with no window, no compositor and no user.
+///
+/// ## It deliberately does NOT open a dialog
+///
+/// The first version of this DID call `openFile`, on the reasoning that a
+/// missing session bus or portal returns an error quickly. On Linux that is
+/// true. On macOS it is not: `NSOpenPanel runModal` blocks in AppKit's own
+/// loop, `timeout_ms` is Linux-only, and a CI runner has nobody to press
+/// Cancel. The job sat there until `timeout-minutes` killed it and GitHub
+/// reported a bare `cancelled` with one line of evidence in the cleanup log:
+///
+///     Terminate orphan process: pid (10519) (glinlandui-file)
+///
+/// A modal dialog is the one thing on this machine that genuinely cannot be
+/// automated, so the honest thing is to say so rather than to try.
+///
+/// So: the three requests are BUILT and printed (which is the portable half,
+/// and the half a UI would get wrong), and the call is attempted only where it
+/// can be bounded. `canBoundADialog` is the whole of that knowledge, and it is
+/// one line precisely because it is a platform quirk rather than a design.
 fn check() void {
     // `std.debug.print` rather than a stdout writer: this is the convention the
     // rest of this repository's examples use for the few lines they print, and
     // `std.io` does not exist in Zig 0.16.
     std.debug.print("backend:     {s}\n", .{backendName()});
     std.debug.print("available:   {}\n", .{dialog.available()});
-    std.debug.print("open_file:   {s}\n", .{probe()});
-    std.debug.print("open_folder: {s}\n", .{probe()});
-    std.debug.print("save_file:   {s}\n", .{probe()});
+
+    for (ACTIONS) |a| {
+        const options = optionsFor(a.kind, null);
+        std.debug.print(
+            "{s: <12} {s} \"{s}\" filters={d} multiple={} timeout={s}\n",
+            .{ a.id, portalMemberFor(a.kind), options.title, options.filters.len, options.multiple, timeoutNote() },
+        );
+    }
+
+    if (canBoundADialog()) {
+        std.debug.print("attempt:     {s}\n", .{probe()});
+    } else {
+        std.debug.print(
+            "attempt:     not attempted — a dialog on this host cannot be bounded (timeout_ms is Linux-only)\n",
+            .{},
+        );
+    }
+}
+
+/// Whether a call to the backend is guaranteed to come back on its own.
+///
+/// True on Linux and nowhere else, and the reason is a property of the
+/// backends rather than of this example: the XDG portal answers over D-Bus, so
+/// a client can stop waiting; AppKit and COM own a modal loop that only a
+/// posted cancel ends, and a host that is blocked in that loop does not run
+/// the timer that would post it.
+fn canBoundADialog() bool {
+    return switch (@import("builtin").os.tag) {
+        .linux => true,
+        else => false,
+    };
+}
+
+/// The portal method a `Kind` maps to, for the check's output.
+///
+/// The same mapping the backend makes internally (`portal.memberFor` /
+/// `mac`'s and `windows`' equivalents); spelled out here because the point of
+/// the line is to SHOW that three buttons ask three different questions, and a
+/// printout that read from the backend would prove nothing.
+fn portalMemberFor(kind: dialog.Kind) []const u8 {
+    return switch (kind) {
+        .open_file => "OpenFile",
+        .open_folder => "OpenDirectory",
+        .save_file => "SaveFile",
+    };
+}
+
+/// Whether this host honours `timeout_ms`, for the check's output.
+fn timeoutNote() []const u8 {
+    return if (canBoundADialog()) "honoured" else "ignored";
 }
 
 /// Which backend this build resolved to, by name.

@@ -585,24 +585,58 @@ jobs:
           # rendered the "no dialog on this platform" panel instead.
           echo "$out" | grep -q "available:   true"
 
-          # A real `openFile` call must end in a NAMED state. On a runner with
-          # no session bus the Linux leg's answer is `NoSessionBus`; macOS and
-          # Windows would raise an actual dialog if one could be shown, so
-          # they are bounded by the probe's own `timeout_ms` and answer
-          # `Timeout`. Either is a specific, reported outcome — and an empty
-          # `Selection` claiming success would match neither.
-          for probe in open_file open_folder save_file; do
-            line="$(printf '%s\n' "$out" | sed -nE "s/^${probe}:[[:space:]]*(.*)\$/\1/p" | head -n1)"
-            test -n "$line"
-            case "$line" in
-              *NoSessionBus|*NoPortal|*PortalError|*Timeout|*cancelled|*other|*selected)
-                ;;
-              *)
-                echo "::error::${probe} ended in an unnamed state: ${line}" >&2
+          # Each of the three buttons must ask the portal method it is named
+          # for. This is the portable half of the example, and it is worth a
+          # real assertion: an app that sends OpenFile for a save target looks
+          # perfectly fine in a build and hands the user the wrong dialog.
+          check_button() {
+            local id="$1" member="$2"
+            local line
+            line="$(printf '%s\n' "$out" | sed -nE "s/^${id}[[:space:]]+([^[:space:]]+).*/\\1/p" | head -n1)"
+            if [ "$line" != "$member" ]; then
+              echo "::error::${id} asks for '${line}', expected '${member}'" >&2
+              exit 1
+            fi
+          }
+          check_button dlg-open-file   OpenFile
+          check_button dlg-open-folder OpenDirectory
+          check_button dlg-save-file   SaveFile
+
+          # The ATTEMPT line, which is where the platforms differ and where the
+          # first version of this step hung.
+          #
+          # Only Linux attempts a real call. `timeout_ms` is Linux-only —
+          # AppKit and COM own a modal loop that only a posted cancel ends, and
+          # a host blocked in that loop does not run the timer that would post
+          # it — so the first version of this example opened a real
+          # `NSOpenPanel` on the macOS runner and sat there until the job's
+          # `timeout-minutes` killed it, which GitHub reports as a bare
+          # `cancelled`.
+          #
+          # So: a named error, or the explicit "not attempted" note. Anything
+          # else is a state nobody designed.
+          attempt="$(printf '%s\n' "$out" | sed -nE 's/^attempt:[[:space:]]*(.*)$/\1/p' | head -n1)"
+          test -n "$attempt"
+          case "$attempt" in
+            "not attempted"*)
+              if [ "${{ runner.os }}" != "macOS" ] && [ "${{ runner.os }}" != "Windows" ]; then
+                echo "::error::the attempt was skipped on ${{ runner.os }}, which can bound a dialog" >&2
                 exit 1
-                ;;
-            esac
-          done
+              fi
+              ;;
+            *NoSessionBus|*NoPortal|*PortalError|*Timeout|*cancelled|*other|*selected)
+              if [ "${{ runner.os }}" = "Linux" ]; then
+                : # Linux attempts the call; any named state is a pass.
+              else
+                echo "::error::${{ runner.os }} attempted a dialog it cannot bound: ${attempt}" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::dialog ended in an unnamed state: ${attempt}" >&2
+              exit 1
+              ;;
+          esac
 
           echo "file-dialog: example built, backend resolved, all three probes reported a named state"
 
