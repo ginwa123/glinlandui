@@ -18,6 +18,12 @@
 
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CoreGraphics.h>
+// `allowedContentTypes` and `UTType` live here, and only here. `allowedFileTypes`
+// — which this file used, and which AppKit deprecated in macOS 12 — is the only
+// spelling of "restrict this panel" that needs no second framework, which is
+// probably why it is still the one people reach for. Under `-Werror` (see
+// build.zig) reaching for it is a build failure, so the modern API it is.
+#import <UniformTypeIdentifiers/UTType.h>
 
 #include "shim.h"
 
@@ -490,6 +496,29 @@ static NSString *GlinNSString(const char *s) {
     return [NSString stringWithUTF8String:s];
 }
 
+/// A bare extension from a filter pattern, or nil if there is not one.
+///
+/// The portal and every other backend's filter vocabulary is `*.png` — a glob,
+/// because that is what a file chooser shows a user. AppKit wants `png`. The
+/// star and the leading dot both have to go, and a `*` on its own (the
+/// catch-all filter) has to become nil rather than the empty string, because
+/// `[UTType typeWithFilenameExtension:@""]` matches NOTHING: the "All files"
+/// filter would silently become a filter that shows no files at all, which is
+/// the one outcome worse than not offering the filter.
+///
+/// Anything that is not `*` + something is passed through as-is, so a bare
+/// `png` (which is also valid) works without the caller normalising first.
+static NSString *GlinExtension(NSString *pattern) {
+    if (!pattern) return nil;
+    NSString *p = [pattern stringByTrimmingCharactersInSet:
+                     [NSCharacterSet whitespaceCharacterSet]];
+    if ([p isEqualToString:@"*"]) return nil;
+    if ([p hasPrefix:@"*"]) p = [p substringFromIndex:1];
+    if ([p hasPrefix:@"."]) p = [p substringFromIndex:1];
+    if ([p length] == 0) return nil;
+    return p;
+}
+
 /// Build the panel for a request. Separate from running it so the whole
 /// configuration is visible in one place — and so a request that cannot be
 /// honoured fails HERE, before the user is looking at a window.
@@ -528,22 +557,47 @@ static NSOpenPanel *GlinBuildPanel(const GlinCocoaFileRequest *req) {
     }
 
     if (req->filters && req->filter_count > 0) {
-        NSMutableArray<NSString *> *types = [NSMutableArray array];
+        NSMutableArray<UTType *> *types = [NSMutableArray array];
         for (int i = 0; i < req->filter_count; i++) {
             const char *patterns = req->filters[i].patterns;
             if (!patterns || !*patterns) continue;
-            // One filter's patterns arrive as "a,b,c" and AppKit wants them as
-            // one string per extension. Splitting here — rather than sending
-            // the joined string — is the difference between "the dialog shows
-            // three file types" and "the dialog shows none".
-            [types addObjectsFromArray:
-                [[GlinNSString(patterns) componentsSeparatedByString:@","]
-                    filteredArrayUsingPredicate:
-                        [NSPredicate predicateWithBlock:^BOOL(id obj, NSDictionary *_) {
-                            return [(NSString *)obj length] > 0;
-                        }]];
+
+            // One filter's patterns arrive as "*.png,*.jpg" and AppKit wants one
+            // UTType per extension. Two things had to change to get here, and
+            // both were bugs rather than taste.
+            //
+            // 1. THE BRACKETS. This used to be a nested message send:
+            //
+            //        [types addObjectsFromArray:
+            //            [[GlinNSString(patterns) componentsSeparatedByString:@","]
+            //                filteredArrayUsingPredicate: ...]];
+            //
+            //    The receiver's `[` closes right after `componentsSeparatedByString:`,
+            //    which leaves `filteredArrayUsingPredicate:` dangling outside any
+            //    message send at all — clang reports that as `expected ']'`, and
+            //    it is why this file did not compile on macOS CI. A loop and two
+            //    statements do the same thing and cannot be mis-nested.
+            //
+            // 2. THE EXTENSION FORMAT. AppKit was being handed the raw pattern,
+            //    "*.png" — star and all. Both `allowedFileTypes` and
+            //    `allowedContentTypes` want a bare extension, so every filter
+            //    matched nothing: a dialog with no file types, which is worse
+            //    than a wrong one because it looks like "all files".
+            NSString *joined = GlinNSString(patterns);
+            if (!joined) continue;
+            for (NSString *part in [joined componentsSeparatedByString:@","]) {
+                NSString *ext = GlinExtension(part);
+                if (!ext) continue;
+                UTType *type = [UTType typeWithFilenameExtension:ext];
+                if (type && ![types containsObject:type]) [types addObject:type];
+            }
         }
-        if ([types count] > 0) panel.allowedFileTypes = types;
+        // `allowedContentTypes`, not `allowedFileTypes`: the latter has been
+        // deprecated since macOS 12, and this TU compiles under `-Werror`
+        // (see build.zig) precisely so a deprecated AppKit call is a BUILD
+        // failure rather than a warning nobody reads. It also wants UTType,
+        // which is why the array above is built that way.
+        if ([types count] > 0) panel.allowedContentTypes = types;
     }
 
     return panel;

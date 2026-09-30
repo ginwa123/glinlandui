@@ -242,6 +242,35 @@ fn hexDigitValue(c: u8) ?u8 {
 /// return its own I/O errors (OutOfMemory, the OS's own socket errors); those
 /// are outside this set on purpose, because a caller cannot do anything
 /// platform-specific with them.
+///
+/// ## That promise is not yet met, and this is the note that says so
+///
+/// The three desktop backends declare a bare `!Selection`, so their error sets
+/// are INFERRED — and an inferred set is the set of errors the code can
+/// actually produce, which is not this one:
+///
+///   - none of them can produce `error.Unsupported`, because each has a real
+///     backend. So `switch (err) { error.Unsupported => ... }` — the arm
+///     written in the paragraph above, and the one every reader tries first —
+///     is a compile error on all three desktops. An `else` does not rescue it:
+///     Zig checks each arm against the set being switched over before it
+///     reaches the `else`.
+///   - Linux's set is far WIDER than this one: OutOfMemory, the socket errors,
+///     the D-Bus failures, none of which have a name here.
+///   - macOS and Windows cannot produce `NoPortal` or `NoSessionBus`, because
+///     they do not talk to a D-Bus portal.
+///
+/// `core/file_dialog_portable.zig` is the one backend that declares
+/// `Error!Selection` explicitly, so it is the one where the switch above
+/// compiles — and it is the backend selected only under `builtin.is_test` or in
+/// a browser, never on a desktop.
+///
+/// Until every backend is narrowed to this set, a portable caller matches on
+/// `@errorName(err)` instead. See `examples/file_dialog.zig`'s
+/// `Machine.fromError`, which does and says why. Narrowing the backends is the
+/// real fix, and it needs a name here for `OutOfMemory` first — which is a
+/// change to this contract, deliberately, rather than something to work around
+/// at every call site.
 pub const Error = error{
     /// This host has no file dialog wired up. The non-Linux backends return
     /// exactly this, and it is the one error a UI is expected to handle by

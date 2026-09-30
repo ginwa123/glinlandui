@@ -63,6 +63,6 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 zig cc -O1 -o "$tmp/check.exe" "$src" "$shim" \
-    -ld3d11 -ldxgi -ld3dcompiler_47 -luser32 -lgdi32
+    -ld3d11 -ldxgi -ld3dcompiler_47 -luser32 -lgdi32 -lshell32 -lole32
 
 "$tmp/check.exe"
