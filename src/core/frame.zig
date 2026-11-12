@@ -40,6 +40,24 @@ pub fn hoverCursorShape(x: f32, y: f32) u32 {
     return shape_default;
 }
 
+/// The pointer position and the frame clock, so a component can place a caret from a click and blink it without the app plumbing either through.
+pub var ptr_x: f32 = 0;
+pub var ptr_y: f32 = 0;
+pub var time_s: f32 = 0;
+pub var delta_s: f32 = 0;
+
+/// Record the pointer position for this frame.
+pub fn setPointer(x: f32, y: f32) void {
+    ptr_x = x;
+    ptr_y = y;
+}
+
+/// Record the frame clock. `delta` is the time since the previous frame, in seconds.
+pub fn setTime(now: f32, delta: f32) void {
+    time_s = now;
+    delta_s = delta;
+}
+
 /// Last shape resolved by clayFrame (updated every frame, including headless tests).
 pub var current_shape: u32 = shape_default;
 

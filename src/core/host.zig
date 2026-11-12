@@ -23,6 +23,8 @@ pub const Host = struct {
     win_w: u32 = 720,
     win_h: u32 = 480,
     ptr: dispatch.PtrState = .{},
+    /// A monotonic frame clock in seconds. The host advances it; a component only reads it.
+    clock_s: f32 = 0,
     /// Pending wheel scroll delta (px, accumulated by onScrollEvent, consumed once per frame by frame() into Clay's scroll containers).
     scroll_dx: f32 = 0,
     scroll_dy: f32 = 0,
@@ -71,6 +73,10 @@ pub const Host = struct {
         if (!self.clay_ready) return frame_mod.shape_default;
         self.win_w = w;
         self.win_h = h;
+        // The pointer and the clock are frame state, so a component can place a caret from a click and blink it.
+        frame_mod.setPointer(self.ptr.x, self.ptr.y);
+        self.clock_s += 0.016;
+        frame_mod.setTime(self.clock_s, 0.016);
         // Consume the pending wheel delta exactly once per frame (Clay routes it to the hovered scroll container; zero = no-op).
         const dx = self.scroll_dx;
         const dy = self.scroll_dy;

@@ -3,6 +3,8 @@ const std = @import("std");
 const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
+const frame_mod = @import("../frame.zig");
+const text_input = @import("../text_input.zig");
 const semantics = @import("../semantics.zig");
 
 /// Raw evdev keycode → printable ASCII under the US layout.
@@ -322,6 +324,8 @@ pub const FieldProps = struct {
     bg: Color = Color.rgb(0x26, 0x26, 0x26),
     /// Selected-run text color for fieldEdit (text runs carry color only, no per-run bg at this renderer's fidelity).
     sel_fg: Color = Color.rgb(0x7a, 0xb8, 0xff),
+    /// The selection's background, used by `liveField`.
+    sel_bg: Color = Color.rgb(0x2d, 0x3a, 0x52),
     radius: u32 = 4,
     pad_tb: u16 = 8,
     pad_lr: u16 = 12,
@@ -409,6 +413,79 @@ pub fn field(props: FieldProps, query: []const u8) void {
 }
 
 /// Declare a text field with HTML-like caret + selection: prompt, then the query split around the caret (before / "|" / after), with the selected span.
+pub const FieldCtx = struct {
+    input: *text_input.TextInput,
+    id: []const u8,
+    char_w: f32,
+    /// Called after a click places the caret, so the app can take focus.
+    on_focus: ?*const fn (?*anyopaque) void = null,
+    focus_ctx: ?*anyopaque = null,
+};
+
+/// A live text field: selection highlight, a blinking caret, and a click that places the caret.
+pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
+    const input = ctx.input;
+    const text = input.text();
+    const fg = (if (props.disabled) props.disabled_fg else props.fg).toClay();
+    // Solid for half a second after the caret moves, then blinking: a caret that blinks while you type is a caret you cannot find.
+    const blink_on = input.idle < 0.5 or @mod(input.idle, 1.0) < 0.5;
+
+    cl.UI()(.{
+        .id = .ID(props.id),
+        .layout = .{
+            .direction = .left_to_right,
+            .sizing = .{ .w = fieldSizingW(props), .h = fieldSizingH(props) },
+            .padding = .axes(props.pad_tb, props.pad_lr),
+            .child_alignment = .{ .x = .left, .y = .center },
+            .child_gap = 0,
+        },
+        .background_color = (if (props.disabled) props.disabled_bg else props.bg).toClay(),
+        .corner_radius = .all(@floatFromInt(props.radius)),
+        .border = fieldBorder(props),
+    })({
+        if (input.hasSelection()) {
+            const s = input.selStart();
+            const e = input.selEnd();
+            if (s > 0) cl.text(text[0..s], .{ .font_size = props.font_size, .color = fg });
+            cl.UI()(.{
+                .id = .IDI(props.id, 1),
+                .layout = .{
+                    .sizing = .{ .w = .fit, .h = .grow },
+                    .padding = .{ .top = 1, .bottom = 1 },
+                },
+                .background_color = props.sel_bg.toClay(),
+            })({
+                cl.text(text[s..e], .{ .font_size = props.font_size, .color = props.sel_fg.toClay() });
+            });
+            if (e < text.len) cl.text(text[e..], .{ .font_size = props.font_size, .color = fg });
+        } else {
+            const at = @min(input.caret, text.len);
+            if (at > 0) cl.text(text[0..at], .{ .font_size = props.font_size, .color = fg });
+            if (blink_on) {
+                cl.UI()(.{
+                    .id = .IDI(props.id, 2),
+                    .layout = .{ .sizing = .{ .w = .fixed(1), .h = .grow } },
+                    .background_color = fg,
+                })({});
+            }
+            if (at < text.len) cl.text(text[at..], .{ .font_size = props.font_size, .color = fg });
+        }
+    });
+
+    registry.registerClickCursor(cl.getElementId(props.id), onFieldClick, ctx, .text);
+}
+
+/// Place the caret from a click, using the field's own box and the frame's pointer.
+fn onFieldClick(ctx: ?*anyopaque) void {
+    const c: *FieldCtx = @ptrCast(@alignCast(ctx.?));
+    const data = cl.getElementData(cl.getElementId(c.id));
+    if (!data.found) return;
+    const x = frame_mod.ptr_x - data.bounding_box.x - 8;
+    c.input.clickAt(x, c.char_w, false);
+    c.input.idle = 0;
+    if (c.on_focus) |f| f(c.focus_ctx);
+}
+
 pub fn fieldEdit(props: FieldProps, query: []const u8, st: EditState) void {
     var s = st;
     clampEdit(&s, query.len);

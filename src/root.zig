@@ -24,6 +24,9 @@ pub const testing = @import("core/testing/root.zig");
 /// Per-frame semantics model: the queryable node tree behind `testing.Driver.onNode*`, and the intended home for accessibility and the debug inspector.
 pub const semantics = @import("core/semantics.zig");
 
+/// A single-line text input: the buffer, the caret, the selection and every edit. The model behind `components.input.liveField`.
+pub const text_input = @import("core/text_input.zig");
+
 // Pure utils (geometry / input / EGL / test-frames + legacy helpers).
 pub const Placement = platform.Placement;
 pub const computePlacement = platform.computePlacement;
@@ -104,6 +107,7 @@ test {
     _ = @import("core/testing/root.zig");
     // The semantics model and the E2E test surface built on it.
     _ = @import("core/semantics.zig");
+    _ = @import("core/text_input.zig");
     _ = @import("core/testing/finders.zig");
     _ = @import("core/testing/assertions.zig");
     _ = @import("core/testing/actions.zig");
