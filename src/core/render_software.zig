@@ -185,6 +185,8 @@ pub const Surface = struct {
         if (w <= 0 or h <= 0) return;
         const n = normalizeColor(color);
         const alpha = n[3];
+        // A transparent box is a layout element, not a fill: skipping it here is what keeps a grid of transparent cell boxes from costing a pixel loop each.
+        if (alpha <= 0) return;
         const rgb = [3]f32{ n[0], n[1], n[2] };
 
         // Pixel-centre coverage box: px in [ceil(x-0.5), floor(x+w-0.5)].
@@ -193,6 +195,42 @@ pub const Surface = struct {
         const y0 = @max(@as(i64, @intFromFloat(@ceil(y - 0.5))), 0);
         const y1 = @min(@as(i64, @intFromFloat(@floor(y + h - 0.5))), @as(i64, self.height) - 1);
         if (x0 > x1 or y0 > y1) return;
+
+        // FAST PATH: a square-cornered box is a plain fill, and evaluating the rounded-box SDF per pixel for one is what made a full-width row cost a millisecond.
+        if (radius[0] <= 0 and radius[1] <= 0 and radius[2] <= 0 and radius[3] <= 0 and mode == 0 and border_w <= 0) {
+            const r8 = to8(rgb[0]);
+            const g8 = to8(rgb[1]);
+            const b8 = to8(rgb[2]);
+            const a8 = to8(alpha);
+            const is_opaque = a8 >= 255;
+            const inv: u32 = 255 - a8;
+            var py: i64 = y0;
+            while (py <= y1) : (py += 1) {
+                if (self.scissor) |s| {
+                    if (py < s.y0 or py >= s.y1) continue;
+                }
+                var ix: i64 = x0;
+                while (ix <= x1) : (ix += 1) {
+                    if (self.scissor) |s| {
+                        if (ix < s.x0 or ix >= s.x1) continue;
+                    }
+                    const i = @as(usize, @intCast(py)) * self.width * 4 + @as(usize, @intCast(ix)) * 4;
+                    if (is_opaque) {
+                        self.pixels[i] = r8;
+                        self.pixels[i + 1] = g8;
+                        self.pixels[i + 2] = b8;
+                        self.pixels[i + 3] = 255;
+                    } else {
+                        const a: u32 = a8;
+                        self.pixels[i] = @intCast((@as(u32, r8) * a + @as(u32, self.pixels[i]) * inv) / 255);
+                        self.pixels[i + 1] = @intCast((@as(u32, g8) * a + @as(u32, self.pixels[i + 1]) * inv) / 255);
+                        self.pixels[i + 2] = @intCast((@as(u32, b8) * a + @as(u32, self.pixels[i + 2]) * inv) / 255);
+                        self.pixels[i + 3] = @intCast(@min(@as(u32, 255), a + @as(u32, self.pixels[i + 3]) * inv / 255));
+                    }
+                }
+            }
+            return;
+        }
 
         var py: i64 = y0;
         while (py <= y1) : (py += 1) {
@@ -301,6 +339,7 @@ pub const Surface = struct {
             switch (cmd.command_type) {
                 .rectangle => {
                     const r = cmd.render_data.rectangle;
+                    if (r.background_color[3] <= 0) continue;
                     const cr = cornerRadiusVec4(r.corner_radius);
                     self.drawBox(
                         bb.x,
