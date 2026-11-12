@@ -1,26 +1,6 @@
-// Agnostic GLES3 renderer — lives in src/linux/, re-exported
-// as wayland.render. Pure drawing primitives over Clay/zclay commands;
-// ZERO ui/* imports by design. App-specific mapping (LayoutSummary ->
-// draws, theme palette) lives in ui/views.zig + ui/theme.zig; font
-// resolve/measure lives in sibling text.zig (wayland.text).
-//
-// initGL() performs the real eglGetDisplay + eglInitialize path in the
-// exe build; in `zig build test` (or when WAYLAND_DISPLAY is unset) it
-// returns error.NoDisplay instead of touching a compositor.
-//
-// Text engine: pangocairo primary, stb fallback.
-// - Primary (exe): PangoLayout -> cairo ARGB32 image surface -> CPU
-//   un-premultiply + swizzle to RGBA -> GL_RGBA texture -> textured quad.
-//   Measurement comes from text.measureText() (Pango), so layout matches
-//   by construction. Handles shaping, CJK/Arabic, fontconfig fallback.
-// - Fallback: stb-baked 512x512 ASCII atlas (initAtlas) when Pango fails,
-//   then small filled rects — never crashes. Tests always take the rect
-//   path (builtin.is_test, no GL).
-//
-// stb_truetype impl lives in exactly one TU:
-// src/core/stb_truetype_impl.c (#define STB_TRUETYPE_IMPLEMENTATION). Kept for
-// fallback only; primary path needs no stb calls.
+// Agnostic GLES3 renderer — lives in src/linux/, re-exported as wayland.render.
 const std = @import("std");
+const log = @import("../core/log.zig");
 const builtin = @import("builtin");
 const text = @import("text.zig");
 const render_common = @import("../core/render_common.zig");
@@ -48,18 +28,14 @@ const shim = @cImport({
     @cInclude("shim.h");
 });
 
-/// Headless-testable draw command: rect fill or text run. Declared in
-/// render_common (backend-agnostic) and re-exported here for the legacy
-/// `renderer.Draw` path.
+/// Headless-testable draw command: rect fill or text run.
 pub const Draw = render_common.Draw;
 
 fn normChannel(v: u32) f32 {
     return @as(f32, @floatFromInt(v & 0xff)) / 255.0;
 }
 
-/// Real EGL init: eglGetDisplay + eglInitialize. Returns error.NoDisplay
-/// gracefully when no WAYLAND_DISPLAY/EGL is present — never crashes
-/// headless, and never requires a compositor in tests.
+/// Real EGL init: eglGetDisplay + eglInitialize.
 pub fn initGL() !void {
     if (std.c.getenv("WAYLAND_DISPLAY") == null) return error.NoDisplay;
     if (comptime builtin.is_test) {
@@ -76,12 +52,6 @@ pub fn initGL() !void {
 // ---- Pure helpers (headless-testable) ----
 
 /// Convert 0xRRGGBB to a Clay color ([4]f32 in 0-255 range, alpha 255).
-///
-/// LEGACY SHIM — `Color` is the color type across the library and this
-/// exists so a pre-`Color` caller (and the tests below) keep compiling.
-/// It delegates to the shared `Color` rule rather than re-deriving the shift
-/// and masks, so the GLES3 backend and the CPU backend cannot disagree
-/// about what a color means.
 pub fn u32ToClayColor(hex: u32) [4]f32 {
     return Color.argb(0xFF00_0000 | (hex & 0x00ff_ffff)).toClay();
 }
@@ -97,9 +67,6 @@ pub fn u32ToGLColor(hex: u32) [4]f32 {
 }
 
 /// Legacy fixed advance per glyph (stb fallback path only).
-/// Primary Pango path measures via text.measureText(), so this is NOT
-/// used for layout anymore — kept so the stb fallback renders with the
-/// same spacing the old estimator laid out.
 pub fn estimatorAdvance(font_size: u16) f32 {
     return @as(f32, @floatFromInt(font_size)) * 0.6;
 }
@@ -134,17 +101,12 @@ const atlas_w: c_int = 512;
 const atlas_h: c_int = 512;
 const atlas_font_px: f32 = 18.0;
 
-// Max single text-run surface (w*h*4 bytes). Settings labels are tiny;
-// larger runs fall back to stb/rects instead of OOMing per frame.
+// Max single text-run surface (w*h*4 bytes).
 const pango_max_w: i32 = 2048;
 const pango_max_h: i32 = 256;
 const pango_max_bytes: usize = 4095;
 
-/// Pango texture cache: static settings labels (~20) re-rendered every
-/// hover frame cost ~35 Pango/cairo calls + alloc + upload + delete each.
-/// 64-entry LRU keyed by FNV-1a(text, font_size, color bits) turns motion
-/// redraws into GPU blits. Color is baked into the cairo image, so it is
-/// part of the key. Pure hash + LRU logic is headless-testable below.
+/// Pango texture cache: static settings labels (~20) re-rendered every hover frame cost ~35 Pango/cairo calls + alloc + upload + delete each.
 pub const text_cache_size: usize = 64;
 
 pub const TextCacheEntry = struct {
@@ -175,8 +137,6 @@ pub fn hashTextKey(text_bytes: []const u8, font_size: u16, clay_color: [4]f32) u
 }
 
 /// Pure LRU victim pick: first invalid slot, else smallest last_used.
-/// Returns null when the cache slice is empty (never in practice).
-/// Generic over text + image cache entries (both carry valid/last_used).
 pub fn lruVictim(entries: anytype) ?usize {
     if (entries.len == 0) return null;
     for (entries, 0..) |e, i| {
@@ -199,30 +159,22 @@ pub fn lruVictim(entries: anytype) ?usize {
 pub const ImageFit = enum { cover, contain, stretch };
 
 /// Opaque payload a widget passes through Clay's image_data pointer.
-/// The widget owns the slot (static per-declare scratch, synchronous
-/// lifetime like all props); the renderer only reads it during the same
-/// frame's drawCommands. `path` points at the owner's stable bytes
-/// (e.g. AppState file paths) — never retained past the frame.
 pub const ImageRef = struct {
     path_ptr: [*]const u8,
     path_len: usize,
     fit: ImageFit = .cover,
-    /// Decode ceiling: the longest side is downscaled to this (no
-    /// upscale). Thumbnails pass small values, the preview a larger one.
+    /// Decode ceiling: the longest side is downscaled to this (no upscale).
     max_dim: u16 = 256,
 };
 
-/// Decoded + uploaded image (named so decodeUploadImage and
-/// imageTexture share one return type).
+/// Decoded + uploaded image (named so decodeUploadImage and imageTexture share one return type).
 pub const DecodedImage = struct {
     tex: c_uint,
     w: i32,
     h: i32,
 };
 
-/// Image texture cache: decoded+downscaled RGBA GL textures keyed by
-/// FNV-1a(path, max_dim). Same LRU discipline as the text cache.
-/// Exe-only (tests prune GL).
+/// Image texture cache: decoded+downscaled RGBA GL textures keyed by FNV-1a(path, max_dim).
 pub const img_cache_size: usize = 32;
 
 pub const ImgCacheEntry = struct {
@@ -248,8 +200,7 @@ pub fn hashImageKey(path: []const u8, max_dim: u16) u64 {
     return h;
 }
 
-/// Pure: downscaled dims preserving aspect so the longest side is at
-/// most max_dim. Never upscales. Returns [w, h] (min 1).
+/// Pure: downscaled dims preserving aspect so the longest side is at most max_dim.
 pub fn scaledDims(iw: u32, ih: u32, max_dim: u16) [2]u32 {
     if (iw == 0 or ih == 0) return .{ 1, 1 };
     const m: u32 = @max(iw, ih);
@@ -264,9 +215,7 @@ pub fn scaledDims(iw: u32, ih: u32, max_dim: u16) [2]u32 {
     return .{ w, h };
 }
 
-/// Pure: cover-fit UV crop (u0, v0, u1, v1 fractions of the source) so
-/// the image fills a bw×bh box with no distortion. v=0 is the top row
-/// (matches the unflipped upload + unit-quad VBO convention).
+/// Pure: cover-fit UV crop (u0, v0, u1, v1 fractions of the source) so the image fills a bw×bh box with no distortion.
 pub fn coverUv(iw: f32, ih: f32, bw: f32, bh: f32) [4]f32 {
     if (iw <= 0 or ih <= 0 or bw <= 0 or bh <= 0) return .{ 0, 0, 1, 1 };
     const img_aspect = iw / ih;
@@ -286,8 +235,7 @@ pub fn coverUv(iw: f32, ih: f32, bw: f32, bh: f32) [4]f32 {
     return .{ 0, 0, 1, 1 };
 }
 
-/// Pure: contain-fit inner box (x, y, w, h relative to the bw×bh box)
-/// so the whole image shows letterboxed. Never upscales beyond the box.
+/// Pure: contain-fit inner box (x, y, w, h relative to the bw×bh box) so the whole image shows letterboxed.
 pub fn containBox(iw: f32, ih: f32, bw: f32, bh: f32) [4]f32 {
     if (iw <= 0 or ih <= 0 or bw <= 0 or bh <= 0) return .{ 0, 0, bw, bh };
     const s = @min(bw / iw, bh / ih);
@@ -383,9 +331,7 @@ const text_frag_src: [:0]const u8 =
     \\}
 ;
 
-// Pango path: color is baked into the cairo image, so the shader outputs
-// the texture directly (keeps subpixel AA + correct premultiplied alpha
-// after our CPU un-premultiply to straight RGBA).
+// Pango path: color is baked into the cairo image, so the shader outputs the texture directly (keeps subpixel AA + correct premultiplied alpha after.
 const pango_frag_src: [:0]const u8 =
     \\#version 300 es
     \\precision mediump float;
@@ -405,11 +351,11 @@ fn compileShader(kind: c_uint, src: [:0]const u8) !c_uint {
     var status: c_int = 0;
     gl.glGetShaderiv(sh, gl.GL_COMPILE_STATUS, &status);
     if (status == 0) {
-        var log: [512]u8 = undefined;
+        var info_log: [512]u8 = undefined;
         var len: c_int = 0;
-        gl.glGetShaderInfoLog(sh, 512, &len, @ptrCast(&log));
+        gl.glGetShaderInfoLog(sh, 512, &len, @ptrCast(&info_log));
         const n: usize = @intCast(@max(len, 0));
-        std.log.err("shader compile failed: {s}", .{log[0..@min(n, log.len)]});
+        log.err("shader compile failed: {s}", .{info_log[0..@min(n, info_log.len)]});
         return error.ShaderCompileFailed;
     }
     return sh;
@@ -425,11 +371,11 @@ fn linkProgram(vs: c_uint, fs: c_uint) !c_uint {
     var status: c_int = 0;
     gl.glGetProgramiv(prog, gl.GL_LINK_STATUS, &status);
     if (status == 0) {
-        var log: [512]u8 = undefined;
+        var info_log: [512]u8 = undefined;
         var len: c_int = 0;
-        gl.glGetProgramInfoLog(prog, 512, &len, @ptrCast(&log));
+        gl.glGetProgramInfoLog(prog, 512, &len, @ptrCast(&info_log));
         const n: usize = @intCast(@max(len, 0));
-        std.log.err("program link failed: {s}", .{log[0..@min(n, log.len)]});
+        log.err("program link failed: {s}", .{info_log[0..@min(n, info_log.len)]});
         return error.ProgramLinkFailed;
     }
     return prog;
@@ -471,9 +417,6 @@ pub const Renderer = struct {
     font_info: stb.stbtt_fontinfo = std.mem.zeroes(stb.stbtt_fontinfo),
     has_font: bool = false,
     /// Cached uniform locations (queried once at init, reused per quad).
-    /// glGetUniformLocation does a string lookup per call — at ~200 quads
-    /// per frame that is ~800 strcmp-style lookups/frame of pure overhead.
-    /// -1 means unqueried/unavailable (skip the uniform upload).
     loc_rect_res: c_int = -1,
     loc_rect_pos: c_int = -1,
     loc_rect_size: c_int = -1,
@@ -490,21 +433,17 @@ pub const Renderer = struct {
     loc_text_size: c_int = -1,
     loc_text_col: c_int = -1,
     loc_text_tex: c_int = -1,
-    /// Pango texture LRU (see text_cache_size docs). Owned GL textures —
-    /// deleted on eviction + deinit. Exe-only (tests prune GL).
+    /// Pango texture LRU (see text_cache_size docs).
     text_cache: [text_cache_size]TextCacheEntry = [_]TextCacheEntry{.{}} ** text_cache_size,
     text_cache_clock: u64 = 0,
     text_cache_hits: u64 = 0,
     text_cache_misses: u64 = 0,
-    /// Image texture LRU (wallpaper thumbnails/preview). Owned GL
-    /// textures — deleted on eviction + deinit. Exe-only.
+    /// Image texture LRU (wallpaper thumbnails/preview).
     img_cache: [img_cache_size]ImgCacheEntry = [_]ImgCacheEntry{.{}} ** img_cache_size,
     img_cache_clock: u64 = 0,
     img_cache_hits: u64 = 0,
     img_cache_misses: u64 = 0,
-    /// Decodes performed this frame (budget: at most img_decode_budget
-    /// misses decode per frame so opening a full gallery never stalls;
-    /// the rest keep their placeholder until the next frame).
+    /// Decodes performed this frame (budget: at most img_decode_budget misses decode per frame so opening a full gallery never stalls; the rest keep their.
     img_decodes_this_frame: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator) !Renderer {
@@ -531,8 +470,7 @@ pub const Renderer = struct {
         defer gl.glDeleteShader(fs_pango);
         self.prog_pango = try linkProgram(vs_pango, fs_pango);
 
-        // Cache uniform locations once (per-quad string lookups are pure
-        // overhead — see struct docs). Missing (<0) means skip the upload.
+        // Cache uniform locations once (per-quad string lookups are pure overhead — see struct docs).
         self.loc_rect_res = gl.glGetUniformLocation(self.prog_rect, "u_res");
         self.loc_rect_pos = gl.glGetUniformLocation(self.prog_rect, "u_pos");
         self.loc_rect_size = gl.glGetUniformLocation(self.prog_rect, "u_size");
@@ -568,10 +506,9 @@ pub const Renderer = struct {
         gl.glVertexAttribPointer(1, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(2 * @sizeOf(f32)));
         gl.glBindVertexArray(0);
 
-        // stb fallback atlas (ASCII 32..126 at 18px). Failure is fine:
-        // drawTextCmd falls back to rects. Primary Pango path needs no atlas.
+        // stb fallback atlas (ASCII 32..126 at 18px).
         self.initAtlas() catch |err| {
-            std.log.warn("glyph atlas unavailable ({s}); stb fallback uses rects, pango primary unaffected", .{@errorName(err)});
+            log.warn("glyph atlas unavailable ({s}); stb fallback uses rects, pango primary unaffected", .{@errorName(err)});
             self.has_atlas = false;
             self.atlas_tex = 0;
         };
@@ -662,8 +599,7 @@ pub const Renderer = struct {
         gl.glBindVertexArray(self.vao);
         const rw: f32 = @floatFromInt(win_w);
         const rh: f32 = @floatFromInt(win_h);
-        // Cached locations (queried once at init). prog_rect is the only
-        // drawQuad caller today; fall back to a lookup for unknown progs.
+        // Cached locations (queried once at init).
         var loc_res = self.loc_rect_res;
         var loc_pos = self.loc_rect_pos;
         var loc_size = self.loc_rect_size;
@@ -682,9 +618,7 @@ pub const Renderer = struct {
             const g = color[1] / 255.0;
             const b = color[2] / 255.0;
             const a = color[3] / 255.0;
-            // u32ToGLColor callers pass 0-255 Clay colors; normalized
-            // u32ToGLColor output (0-1) also works: values < 1 stay dim
-            // but visible. Detect range: if max <= 1.0 use directly.
+            // u32ToGLColor callers pass 0-255 Clay colors; normalized u32ToGLColor output (0-1) also works: values < 1 stay dim but visible.
             const mx = @max(@max(color[0], color[1]), @max(color[2], color[3]));
             if (mx <= 1.0) {
                 gl.glUniform4f(loc_col, color[0], color[1], color[2], color[3]);
@@ -692,9 +626,7 @@ pub const Renderer = struct {
                 gl.glUniform4f(loc_col, r, g, b, a);
             }
         }
-        // Reset the rounded path: drawQuad is the square fast path sharing
-        // prog_rect, so a stale u_radius/u_mode from drawRoundBox would
-        // otherwise leak into these quads (mixed-width border fallback).
+        // Reset the rounded path: drawQuad is the square fast path sharing prog_rect, so a stale u_radius/u_mode from drawRoundBox would otherwise leak into.
         if (prog == self.prog_rect) {
             if (self.loc_rect_rad >= 0) gl.glUniform4f(self.loc_rect_rad, 0, 0, 0, 0);
             if (self.loc_rect_mode >= 0) gl.glUniform1i(self.loc_rect_mode, 0);
@@ -704,18 +636,12 @@ pub const Renderer = struct {
         gl.glBindVertexArray(0);
     }
 
-    /// Pure helper: Clay CornerRadius -> rect-shader u_radius vec4
-    /// (TL, TR, BL, BR in px), clamped at zero (the shader additionally
-    /// clamps to half the box size). Headless-testable.
+    /// Pure helper: Clay CornerRadius -> rect-shader u_radius vec4 (TL, TR, BL, BR in px), clamped at zero (the shader additionally clamps to half the box.
     pub fn cornerRadiusVec4(r: cl.CornerRadius) [4]f32 {
         return .{ @max(r.top_left, 0), @max(r.top_right, 0), @max(r.bottom_left, 0), @max(r.bottom_right, 0) };
     }
 
-    /// Rounded-rect draw over the unit-quad VBO: like drawQuad plus the
-    /// u_radius/u_mode/u_border uniforms (mode 0 = fill, 1 = border
-    /// outline of width `border_w`). Radius 0 renders exactly the old
-    /// square quad (SDF degenerates to the box), so square callers are
-    /// pixel-identical.
+    /// Rounded-rect draw over the unit-quad VBO: like drawQuad plus the u_radius/u_mode/u_border uniforms (mode 0 = fill, 1 = border outline of width.
     fn drawRoundBox(self: *Renderer, win_w: i32, win_h: i32, x: f32, y: f32, w: f32, h: f32, radius: [4]f32, mode: c_int, border_w: f32, color: [4]f32) void {
         if (w <= 0 or h <= 0) return;
         gl.glUseProgram(self.prog_rect);
@@ -744,11 +670,7 @@ pub const Renderer = struct {
         self.drawRoundBox(win_w, win_h, x, y, w, h, cornerRadiusVec4(radius), 0, 0, clay_color);
     }
 
-    /// Draw a Clay BORDER command as a rounded inset outline (single
-    /// quad, shader mode 1) when all four widths match (the `.outside()`
-    /// shape every component emits); mixed widths fall back to 4 square
-    /// quads. Follows the border's own corner_radius so outlines track
-    /// rounded fills.
+    /// Draw a Clay BORDER command as a rounded inset outline (single quad, shader mode 1) when all four widths match (the `.outside()` shape every component.
     fn drawBorderCmd(self: *Renderer, win_w: i32, win_h: i32, bb_x: f32, bb_y: f32, bb_w: f32, bb_h: f32, bd: cl.BorderRenderData) void {
         const color = bd.color;
         const top: f32 = @floatFromInt(bd.width.top);
@@ -813,10 +735,6 @@ pub const Renderer = struct {
         const loc_tex = self.loc_text_tex;
         if (loc_tex >= 0) gl.glUniform1i(loc_tex, 0);
         // Custom UV path: bind a temp VBO with this glyph's UVs.
-        // Simpler: reuse unit-quad VBO but override UV via uniforms?
-        // Our text vertex shader takes UV from the VBO, so for per-glyph
-        // UVs we upload a 4-vertex temp buffer each glyph (few hundred
-        // glyphs/frame max — fine for v1).
         var verts: [4][4]f32 = .{
             .{ 0, 0, uu0, vv0 },
             .{ 1, 0, uu1, vv0 },
@@ -874,10 +792,6 @@ pub const Renderer = struct {
     }
 
     /// Primary text path: PangoLayout -> cairo ARGB32 -> RGBA GL texture.
-    /// Never crashes: any C null / oversized run / test mode falls back to
-    /// stb atlas (drawTextStb) or rects. LRU-cached (text_cache): static
-    /// labels hit the cache and become GPU blits — no Pango, no alloc, no
-    /// upload. Misses render once, store, then draw (cache owns the tex).
     fn drawTextPango(self: *Renderer, win_w: i32, win_h: i32, bbox_x: f32, bbox_y: f32, text_bytes: []const u8, font_size: u16, clay_color: [4]f32) bool {
         if (comptime builtin.is_test) return false;
         if (text_bytes.len == 0 or text_bytes.len > pango_max_bytes) return false;
@@ -961,7 +875,6 @@ pub const Renderer = struct {
         gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE);
         gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE);
         // Store in LRU (evict oldest, deleting its GL texture), then draw.
-        // Cache owns tex from here — no delete-after-draw.
         if (lruVictim(&self.text_cache)) |idx| {
             const ev = &self.text_cache[idx];
             if (ev.valid and ev.tex != 0) {
@@ -979,18 +892,14 @@ pub const Renderer = struct {
         return true;
     }
 
-    /// Max source side accepted for decode (refuse absurd headers before
-    /// allocating).
+    /// Max source side accepted for decode (refuse absurd headers before allocating).
     const img_max_side: c_int = 8192;
     /// Per-frame decode budget (see img_decodes_this_frame).
     const img_decode_budget: u32 = 2;
     /// Placeholder fill while an image loads/fails (neutral dark).
     const img_placeholder = Color.rgb(0x1a, 0x1a, 0x1a);
 
-    /// Decode path (NUL-terminated) via stb, downscale to max_dim, upload
-    /// as an RGBA GL texture. Returns tex + decoded dims. Exe-only (the
-    /// stb TU links into the module, not standalone test roots — callers
-    /// never reach here in tests).
+    /// Decode path (NUL-terminated) via stb, downscale to max_dim, upload as an RGBA GL texture.
     fn decodeUploadImage(self: *Renderer, cpath: [*:0]const u8, max_dim: u16) ?DecodedImage {
         var iw: c_int = 0;
         var ih: c_int = 0;
@@ -1025,9 +934,7 @@ pub const Renderer = struct {
         return .{ .tex = tex, .w = @intCast(dw), .h = @intCast(dh) };
     }
 
-    /// Lookup-or-decode an image texture (LRU). Misses beyond the
-    /// per-frame budget return null so the caller keeps the placeholder
-    /// until the next frame.
+    /// Lookup-or-decode an image texture (LRU).
     fn imageTexture(self: *Renderer, path: []const u8, max_dim: u16) ?DecodedImage {
         if (path.len == 0) return null;
         const key = hashImageKey(path, max_dim);
@@ -1062,8 +969,7 @@ pub const Renderer = struct {
         return up;
     }
 
-    /// Draw an RGBA texture with custom UVs (temp VBO, prog_pango —
-    /// same pattern as drawGlyph's per-glyph UV path).
+    /// Draw an RGBA texture with custom UVs (temp VBO, prog_pango — same pattern as drawGlyph's per-glyph UV path).
     fn drawImageQuad(self: *Renderer, tex: c_uint, win_w: i32, win_h: i32, x: f32, y: f32, w: f32, h: f32, uv: [4]f32) void {
         if (w <= 0 or h <= 0 or tex == 0) return;
         const prog = self.prog_pango;
@@ -1105,8 +1011,7 @@ pub const Renderer = struct {
         gl.glBindTexture(gl.GL_TEXTURE_2D, 0);
     }
 
-    /// Draw one Clay IMAGE command: cache lookup, fit-mapped blit, or a
-    /// placeholder rect while loading/failed. Tests return early (no GL).
+    /// Draw one Clay IMAGE command: cache lookup, fit-mapped blit, or a placeholder rect while loading/failed.
     fn drawImageCmd(self: *Renderer, win_w: i32, win_h: i32, bb_x: f32, bb_y: f32, bb_w: f32, bb_h: f32, ref: *const ImageRef) void {
         if (comptime builtin.is_test) return;
         if (bb_w <= 0 or bb_h <= 0) return;
@@ -1173,31 +1078,23 @@ pub const Renderer = struct {
         if (text_bytes.len == 0) return;
         // Primary: pangocairo. Falls back to stb atlas, then rects.
         if (self.drawTextPango(win_w, win_h, bbox_x, bbox_y, text_bytes, font_size, clay_color)) return;
-        // drawTextPango returns false in tests / on C failure — but it
-        // returns true for empty-after-measure (nothing to draw). Only
-        // reach stb when Pango genuinely declined.
+        // drawTextPango returns false in tests / on C failure — but it returns true for empty-after-measure (nothing to draw).
         if (comptime builtin.is_test) {
             self.drawTextFallback(win_w, win_h, bbox_x, bbox_y, text_bytes, font_size, clay_color);
             return;
         }
-        // If Pango declined because the run was empty-but-measured, don't
-        // double-draw via stb: re-check measured width.
+        // If Pango declined because the run was empty-but-measured, don't double-draw via stb: re-check measured width.
         const ext = text.measureText(text_bytes, if (font_size == 0) 16 else font_size);
         if (ext.w <= 0) return;
         self.drawTextStb(win_w, win_h, bbox_x, bbox_y, text_bytes, font_size, clay_color);
     }
 
-    /// Draw a full Clay render-command list. Handles .rectangle, .border,
-    /// .text, .image, .scissor_start/.scissor_end; ignores .custom/.none.
+    /// Draw a full Clay render-command list.
     pub fn drawCommands(self: *Renderer, commands: []cl.RenderCommand, win_w: i32, win_h: i32) void {
         gl.glViewport(0, 0, win_w, win_h);
         gl.glDisable(gl.GL_SCISSOR_TEST);
         gl.glEnable(gl.GL_BLEND);
-        // Separate alpha factors: the window is opaque (glClear alpha 1.0),
-        // so keep the destination alpha saturated. With the plain
-        // glBlendFunc the alpha of partially covered (AA) pixels fell
-        // below 1.0 and the compositor blended the wallpaper through
-        // them -> 1px borders/dividers picked up the backdrop's color.
+        // Separate alpha factors: the window is opaque (glClear alpha 1.0), so keep the destination alpha saturated.
         gl.glBlendFuncSeparate(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA, gl.GL_ONE, gl.GL_ONE_MINUS_SRC_ALPHA);
         self.img_decodes_this_frame = 0;
         for (commands) |*cmd| {
@@ -1367,11 +1264,7 @@ test "containBox letterboxes inside the box" {
 }
 
 test "rect shader keeps a 1px coverage band (crisp borders, true radius)" {
-    // Regression: the 2px smoothstep(-1,1,d) band spread a 1px border over
-    // two pixels (~0.7 + ~0.16 alpha) and eroded rounded corners, so row
-    // outlines looked washed out and the radius felt off. Coverage is now
-    // the 1px box-filter clamp: a 1px border lands on exactly one fully
-    // opaque pixel and corners keep their nominal radius.
+    // Regression: the 2px smoothstep(-1,1,d) band spread a 1px border over two pixels (~0.7 + ~0.16 alpha) and eroded rounded corners, so row outlines.
     try std.testing.expect(std.mem.indexOf(u8, rect_frag_src, "clamp(0.5 - d, 0.0, 1.0)") != null);
     try std.testing.expect(std.mem.indexOf(u8, rect_frag_src, "smoothstep(-1.0, 1.0,") == null);
     // Both the outer shape and the border's inner cut use it.

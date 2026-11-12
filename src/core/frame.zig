@@ -1,14 +1,6 @@
-// Agnostic Clay frame helper: owns the per-frame + init boilerplate
-// every Clay app repeats (measure/error wiring, arena init, pointer +
-// layout sync, begin/declare/end, lazy GLES3 renderer + draw).
-//
-// ZERO ui/* imports by design — app code supplies only a declare callback:
-//   fn declare(ctx: *anyopaque, w: u32, h: u32) void
-// Shell keeps its AppState/hit-testing/callbacks; frame() shrinks to one
-// engine call. Headless-safe: layout always runs (CPU-only, populates
-// element data for tests); GL draws are pruned in `builtin.is_test` and
-// fall back to clear-only when Renderer.init fails.
+// Agnostic Clay frame helper: owns the per-frame + init boilerplate every Clay app repeats (measure/error wiring, arena init, pointer + layout sync.
 const std = @import("std");
+const log = @import("log.zig");
 const builtin = @import("builtin");
 const cl = @import("zclay");
 const render = @import("render.zig");
@@ -16,28 +8,14 @@ const text = @import("text_backend.zig");
 const click_registry = @import("components/click_registry.zig");
 const semantics = @import("semantics.zig");
 
-// ---- Wayland cursor-shape (wp_cursor_shape_manager_v1) ----
-// Contract (registry crew owns components/click_registry.zig):
-//   components.click_registry.hoverCursorAt(x, y) -> Cursor
-//   Cursor = enum { default, pointer, text, ew_resize }
-// Map: .default -> SHAPE_DEFAULT (1), .pointer -> _POINTER (4),
-// .text -> _TEXT (9), .ew_resize -> _EW_RESIZE (26).
-// Values mirror cursor-shape-v1.xml <enum name="shape"> entries; the
-// wayland.zig shape-mapping test asserts them against the generated
-// WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_* constants.
-//
-// Compatibility: the registry crew lands Cursor/hoverCursorAt in
-// parallel — @hasDecl guards keep this compiling both before (fallback
-// .default) and after (live lookup) their change. Never touch
-// src/core/components/ here (other crew owns it).
+// ---- Wayland cursor-shape (wp_cursor_shape_manager_v1) ---- Contract (registry crew owns components/click_registry.zig).
 pub const Cursor = enum { default, pointer, text, ew_resize };
 
 pub const shape_default: u32 = 1;
 pub const shape_pointer: u32 = 4;
 pub const shape_text: u32 = 9;
 pub const shape_ew_resize: u32 = 26;
-/// Sentinel for Window.last_shape: 0 is not a valid shape (valid range
-/// starts at 1), so the first real shape always counts as a change.
+/// Sentinel for Window.last_shape: 0 is not a valid shape (valid range starts at 1), so the first real shape always counts as a change.
 pub const shape_sentinel: u32 = 0;
 
 pub fn cursorShapeFromCursor(cursor: Cursor) u32 {
@@ -49,10 +27,7 @@ pub fn cursorShapeFromCursor(cursor: Cursor) u32 {
     };
 }
 
-/// Resolve the cursor for a pointer point. Uses the registry's
-/// hoverCursorAt when present (registry crew), else .default.
-/// Tag-name comparison (not type coercion) so this compiles against any
-/// registry Cursor with matching tags.
+/// Resolve the cursor for a pointer point.
 pub fn hoverCursorShape(x: f32, y: f32) u32 {
     if (@hasDecl(click_registry, "hoverCursorAt")) {
         const cur = click_registry.hoverCursorAt(x, y);
@@ -65,34 +40,19 @@ pub fn hoverCursorShape(x: f32, y: f32) u32 {
     return shape_default;
 }
 
-/// Last shape resolved by clayFrame (updated every frame, including
-/// headless tests). Window.run reads this after on_frame returns
-/// (Delegate.on_frame stays void so ui/* delegates keep compiling) and
-/// calls set_shape change-only. Host.frame threads the same value as
-/// its return for future direct callers.
+/// Last shape resolved by clayFrame (updated every frame, including headless tests).
 pub var current_shape: u32 = shape_default;
 
 pub fn currentShape() u32 {
     return current_shape;
 }
 
-/// Change-only gate (pure, unit-tested): true when the shape differs
-/// from the last applied one.
+/// Change-only gate (pure, unit-tested): true when the shape differs from the last applied one.
 pub fn shouldApplyShape(last: u32, next: u32) bool {
     return last != next;
 }
 
 /// Engine-side memoized immediate: output-hash draw skipping.
-///
-/// The app's declare callback stays a pure per-frame immediate-mode
-/// function (no app-side caches required). Instead the engine hashes
-/// the Clay render commands after layout and skips the GLES draw when
-/// the output is bit-identical to the previous frame (e.g. hover motion
-/// within one row, or a 60fps frame event with a 1-second clock
-/// preview). Layout still runs every dirty frame so hit-test element
-/// data stays fresh; only the GPU upload + draw calls are skipped.
-/// File-scope `memo` owns the last hash — `clayFrame` keeps its exact
-/// signature, so no business-app (ui/*) change is needed.
 fn hashF32(h: u64, v: f32) u64 {
     var x: u64 = h ^ @as(u64, @as(u32, @bitCast(v)));
     x *%= 0x100000001b3;
@@ -117,9 +77,7 @@ fn hashColor(h: u64, c: [4]f32) u64 {
     return x;
 }
 
-/// FNV-1a over command count + per-command type, id, bbox bits and
-/// type-specific payload (rect color, text bytes/size/color, border
-/// color/widths). Pure + headless-testable.
+/// FNV-1a over command count + per-command type, id, bbox bits and type-specific payload (rect color, text bytes/size/color, border color/widths).
 pub fn hashCommands(commands: []cl.RenderCommand) u64 {
     var h: u64 = 0xcbf29ce484222325;
     h ^= @as(u64, @intCast(commands.len));
@@ -163,8 +121,7 @@ pub fn hashCommands(commands: []cl.RenderCommand) u64 {
     return h;
 }
 
-/// Per-engine memo state. `draws` counts GLES draws issued, `skips`
-/// counts identical-output frames where the draw was skipped.
+/// Per-engine memo state.
 pub const FrameMemo = struct {
     last_hash: ?u64 = null,
     draws: u64 = 0,
@@ -191,24 +148,11 @@ pub const FrameMemo = struct {
     }
 };
 
-/// Engine-owned memo (single-window app). Reset on initClay so a
-/// re-init (resize path) never reuses a stale hash across arenas.
-///
-/// NOTE (2026-09-06 regression): `memo_enabled` is OFF. Skipping
-/// `drawCommands` here is NOT atomic with the present: Window.run does
-/// `glClear → on_frame → eglSwapBuffers`, so a skip after the clear
-/// presents a blank buffer (black window whenever the cursor is idle,
-/// content flashing back on cursor move). A correct skip must suppress
-/// clear+draw+swap together, but the app sits between layout (inside
-/// on_frame) and present (run loop) — restructuring needs app-wiring
-/// changes, which we ruled out. `hashCommands`/`FrameMemo` stay as
-/// tested utilities for a future atomic design; the live savings come
-/// from the wayland.zig motion dedup (fewer dirty frames, zero risk).
+/// Engine-owned memo (single-window app).
 pub var memo_enabled: bool = false;
 var memo: FrameMemo = .{};
 
 /// Declare callback: app builds its Clay tree here (views.zig declareRoot).
-/// ctx is the app owner (e.g. *AppState); w/h are the current window dims.
 pub const DeclareFn = *const fn (ctx: *anyopaque, w: u32, h: u32) void;
 
 fn clayMeasure(text_bytes: []const u8, config: *cl.TextElementConfig, _: void) cl.Dimensions {
@@ -221,8 +165,7 @@ fn clayErrorHandler(err: cl.ErrorData) callconv(.c) void {
     std.log.err("clay {s}: {s}", .{ @tagName(err.error_type), msg });
 }
 
-/// Init the Clay arena for a w x h window. Pure CPU (no GL/display).
-/// Returns the owned backing slice; caller frees it on deinit.
+/// Init the Clay arena for a w x h window.
 pub fn initClay(alloc: std.mem.Allocator, w: u32, h: u32) ![]u8 {
     const clay_mem_size = cl.minMemorySize();
     const clay_mem = try alloc.alloc(u8, clay_mem_size);
@@ -234,10 +177,7 @@ pub fn initClay(alloc: std.mem.Allocator, w: u32, h: u32) ![]u8 {
     return clay_mem;
 }
 
-/// Per-frame text measurement override used by headless tests. The
-/// callback is stored in the caller's FrameOptions, so the options value
-/// must remain alive until the next Clay frame (testing.Driver keeps it
-/// alive for its whole lifetime).
+/// Per-frame text measurement override used by headless tests.
 pub const MeasureFn = *const fn (
     text: []const u8,
     config: *cl.TextElementConfig,
@@ -245,7 +185,6 @@ pub const MeasureFn = *const fn (
 ) cl.Dimensions;
 
 /// Called synchronously after Clay finishes layout and before rendering.
-/// `commands` is valid only for the duration of the callback/current frame.
 pub const FrameProbeFn = *const fn (
     user_data: ?*anyopaque,
     commands: []const cl.RenderCommand,
@@ -253,23 +192,13 @@ pub const FrameProbeFn = *const fn (
     height: u32,
 ) void;
 
-/// Optional seams used by the reusable headless testing module. Production
-/// callers can leave both null; the defaults preserve the existing
-/// Pango + GLES behavior.
+/// Optional seams used by the reusable headless testing module.
 pub const FrameOptions = struct {
     measure: ?MeasureFn = null,
     measure_user_data: ?*anyopaque = null,
     probe: ?FrameProbeFn = null,
     probe_user_data: ?*anyopaque = null,
-    /// Resolve the semantics tree (core/semantics.zig) immediately after
-    /// layout, once Clay has computed every bounding box.
-    ///
-    /// OFF by default, and deliberately so: resolving walks a
-    /// `getElementData` per node plus one per clipping ancestor, so production
-    /// pays nothing until a consumer actually needs the tree — the E2E driver
-    /// sets this, and an accessibility bridge would too. The registry is still
-    /// CLEARED every frame by Host.declareThunk, so leaving this off cannot
-    /// leak a stale tree into a later frame.
+    /// Resolve the semantics tree (core/semantics.zig) immediately after layout, once Clay has computed every bounding box.
     resolve_semantics: bool = false,
 };
 
@@ -294,24 +223,7 @@ fn invokeProbe(
     }
 }
 
-/// One Clay frame: sync pointer + layout dims, begin, run the app's
-/// declare callback, end, then draw (lazy renderer init, clear-only
-/// fallback on failure). renderer/renderer_attempted are the app's stored
-/// slots so the GL context is created once, inside the frame loop where a
-/// current EGL context exists.
-///
-/// Cursor-shape threading: AFTER cl.endLayout() the registries are
-/// populated for this frame, so hoverCursorShape(pointer_x, pointer_y)
-/// resolves the contract Cursor -> shape u32 here. The shape is stored
-/// in current_shape AND returned (pick: return; documented here) so
-/// Window.run's frame loop can set_shape change-only. In headless tests
-/// layout still runs and the shape resolves; only GL is pruned.
-///
-/// Wheel scrolling: scroll_dx/dy arrive in Wayland axis coords
-/// (positive = down/right). Clay's convention is inverted (its
-/// scrollPosition runs 0 at start to negative at end, so a scroll-down
-/// needs a NEGATIVE delta) — negate at this boundary so callers stay in
-/// natural coords. Zero = no-op. dt is fixed at 1/60 (60fps budget).
+/// One Clay frame: sync pointer + layout dims, begin, run the app's declare callback, end, then draw (lazy renderer init, clear-only fallback on.
 pub fn clayFrame(
     alloc: std.mem.Allocator,
     renderer: *?render.Renderer,
@@ -343,10 +255,7 @@ pub fn clayFrame(
     );
 }
 
-/// Frame variant with injectable measurement and a synchronous command
-/// probe. The probe runs in both production and test builds immediately
-/// after endLayout, which makes it useful for tests without changing the
-/// normal Host path.
+/// Frame variant with injectable measurement and a synchronous command probe.
 pub fn clayFrameWithOptions(
     alloc: std.mem.Allocator,
     renderer: *?render.Renderer,
@@ -363,11 +272,7 @@ pub fn clayFrameWithOptions(
     options: *const FrameOptions,
 ) u32 {
     cl.setPointerState(.{ .x = pointer_x, .y = pointer_y }, pointer_down);
-    // Clay's built-in drag stays OFF: it is touch-style (content follows
-    // the finger), inverted for a scrollbar slider. Drag goes through
-    // scroll.dragScroll (slider-style, 1:1 clamped) driven by Host motion
-    // events instead. Wheel deltas are negated here (Wayland + = down,
-    // Clay - = down); zero delta still runs bookkeeping (pruning).
+    // Clay's built-in drag stays OFF: it is touch-style (content follows the finger), inverted for a scrollbar slider.
     cl.updateScrollContainers(false, .{ .x = -scroll_dx, .y = -scroll_dy }, 1.0 / 60.0);
     cl.setLayoutDimensions(.{ .w = @floatFromInt(w), .h = @floatFromInt(h) });
     if (options.measure) |_| {
@@ -378,9 +283,7 @@ pub fn clayFrameWithOptions(
     cl.beginLayout();
     declare(ctx, w, h);
     const commands = cl.endLayout();
-    // Semantics resolve AFTER layout (that is when Clay has bounding boxes)
-    // and BEFORE the probe, so a probe that inspects the tree sees resolved
-    // geometry rather than zeros.
+    // Semantics resolve AFTER layout (that is when Clay has bounding boxes) and BEFORE the probe, so a probe that inspects the tree sees resolved geometry.
     if (options.resolve_semantics) {
         semantics.resolve(@floatFromInt(w), @floatFromInt(h));
     }
@@ -388,13 +291,12 @@ pub fn clayFrameWithOptions(
     // Registries are populated by declare above — resolve the cursor now.
     const shape = hoverCursorShape(pointer_x, pointer_y);
     current_shape = shape;
-    // Headless tests: layout ran (element data populated), renderer
-    // pruned (no GL context) — callback wiring stays testable headless.
+    // Headless tests: layout ran (element data populated), renderer pruned (no GL context) — callback wiring stays testable headless.
     if (builtin.is_test) return shape;
     if (!renderer_attempted.*) {
         renderer_attempted.* = true;
         renderer.* = render.Renderer.init(alloc) catch |err| blk: {
-            std.log.warn("renderer init failed ({s}); running clear-only", .{@errorName(err)});
+            log.warn("renderer init failed ({s}); running clear-only", .{@errorName(err)});
             break :blk null;
         };
     }
@@ -450,9 +352,7 @@ test "FrameMemo draws first frame, skips identical repeat" {
 }
 
 test "cursorShapeFromCursor maps Cursor enum to protocol shapes" {
-    // Contract: .default -> 1, .pointer -> 4, .text -> 9, .ew_resize -> 26
-    // (cursor-shape-v1.xml shape enum; wayland.zig asserts these against
-    // the generated WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_* constants).
+    // Contract: .default -> 1, .pointer -> 4, .text -> 9, .ew_resize -> 26 (cursor-shape-v1.xml shape enum; wayland.zig asserts these against the generated.
     try std.testing.expectEqual(shape_default, cursorShapeFromCursor(.default));
     try std.testing.expectEqual(shape_pointer, cursorShapeFromCursor(.pointer));
     try std.testing.expectEqual(shape_text, cursorShapeFromCursor(.text));
@@ -471,8 +371,7 @@ test "shouldApplyShape gates change-only set_shape" {
 }
 
 test "hoverCursorShape falls back to default without registry Cursor" {
-    // Registry crew hasn't landed hoverCursorAt yet -> @hasDecl false ->
-    // default shape. Headless-safe: no Wayland connection needed.
+    // Registry crew hasn't landed hoverCursorAt yet -> @hasDecl false -> default shape.
     if (!@hasDecl(click_registry, "hoverCursorAt")) {
         try std.testing.expectEqual(shape_default, hoverCursorShape(10, 20));
         try std.testing.expectEqual(shape_default, hoverCursorShape(0, 0));
