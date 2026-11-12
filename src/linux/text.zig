@@ -1,19 +1,6 @@
 const std = @import("std");
 
 // Text measurement shaped for Clay.
-//
-// Backend: pangocairo via src/linux/shim.h shim (PangoLayout) with
-// pure-Zig estimator fallback.
-//   primary: glinlandui_text_measure() — correct advances, shaping,
-//     CJK/Arabic, fontconfig fallback.
-//   fallback: width = text.len * font_size * 0.6, height = size * 1.2
-//     (empty text measures w = 0 but keeps full line height, which is
-//     what Clay expects from a measure callback.)
-//
-// Why a shim: Zig @cImport cannot parse glib headers directly
-// (G_GNUC_BEGIN_IGNORE_DEPRECATIONS translation failure). The shim header
-// exposes only plain C types; real pango/cairo includes stay in
-// src/linux/shim.c (system compiler). Links from build.zig linkTextEngine().
 
 const shim = @cImport({
     @cInclude("shim.h");
@@ -29,10 +16,7 @@ pub const ResolveFontError = error{
     FontNotFound,
 };
 
-// Preferred fonts first (Fira Code Regular, confirmed via fc-list on this
-// machine), then any monospace TTF/OTF fallback. All entries must stay
-// NUL-terminated: fontExists() passes them straight to access(2).
-// Still used for the stb fallback atlas + to derive the Pango family name.
+// Preferred fonts first (Fira Code Regular, confirmed via fc-list on this machine), then any monospace TTF/OTF fallback.
 const font_candidates: []const [:0]const u8 = &.{
     "/usr/share/fonts/TTF/FiraCodeNerdFontMono-Regular.ttf",
     "/usr/share/fonts/TTF/FiraCodeNerdFont-Regular.ttf",
@@ -55,19 +39,12 @@ pub fn resolveFont() ResolveFontError![]const u8 {
     return error.FontNotFound;
 }
 
-/// Every candidate path. The CPU renderer walks the whole list and keeps the
-/// first file that actually PARSES, not merely the first that exists: a `.ttc`
-/// is a TrueType collection and stb_truetype cannot load it directly.
+/// Every candidate path.
 pub fn fontCandidates() []const [:0]const u8 {
     return font_candidates;
 }
 
-/// Read a font file whole. See `core/text_portable.zig`'s counterpart: this
-/// exists so `core/glyphs.zig` — which every build compiles, wasm included —
-/// holds no filesystem code of its own. Linux production measures text through
-/// Pango and draws it through the GLES3 atlas, so this is reached only by the
-/// test/CPU path; it is implemented identically to the portable one so the two
-/// cannot drift.
+/// Read a font file whole.
 pub fn readFontBytes(path: [:0]const u8, alloc: std.mem.Allocator) ![]u8 {
     const io = std.Io.Threaded.global_single_threaded.io();
     const dir = std.Io.Dir.cwd();
@@ -83,8 +60,7 @@ pub fn readFontBytes(path: [:0]const u8, alloc: std.mem.Allocator) ![]u8 {
     return buf;
 }
 
-/// Pure-Zig fallback: deterministic, no C deps. Used when Pango fails
-/// (headless without fontconfig, oversized text, or C null returns).
+/// Pure-Zig fallback: deterministic, no C deps.
 pub fn estimatorExtent(text: []const u8, font_size: u16) TextExtent {
     const size: f32 = @floatFromInt(font_size);
     const h = size * 1.2;
@@ -93,13 +69,7 @@ pub fn estimatorExtent(text: []const u8, font_size: u16) TextExtent {
     return .{ .w = len * size * 0.6, .h = h };
 }
 
-/// Pango family for measurement + rendering. Maps the resolved TTF path
-/// to a fontconfig family so Pango reuses the same face the old stb atlas
-/// used. Unknown paths fall back to generic "monospace" (always resolvable).
-/// Pub because renderer.zig must use the identical family for draw.
-/// Resolved once and cached — the font files don't change at runtime, and
-/// per-call access(2) probing (up to 6 stats per measure/render) showed up
-/// in hover profiles at ~3.6k desc parses/sec for 20 labels @ 60fps.
+/// Pango family for measurement + rendering.
 var cached_family: ?[:0]const u8 = null;
 
 pub fn pangoFamily() [:0]const u8 {
@@ -124,11 +94,7 @@ pub fn pangoFamily() [:0]const u8 {
     return fam;
 }
 
-/// Small extent cache: hover motion re-measures the same ~20 static labels
-/// every frame (once in Clay layout via clayMeasure, once in drawTextPango).
-/// Each miss costs a full Pango stack (fontmap→context→layout→desc→measure).
-/// 128-entry round-robin cache keyed by FNV-1a(text, font_size) — hits skip
-/// Pango entirely. Single-threaded UI only; no locking.
+/// Small extent cache: hover motion re-measures the same ~20 static labels every frame (once in Clay layout via clayMeasure, once in drawTextPango).
 const extent_cache_size: usize = 128;
 
 const ExtentEntry = struct {
@@ -178,20 +144,6 @@ pub fn extentCacheReset() void {
 }
 
 /// Build "Family 18px" Pango font-desc string into buf (NUL-terminated).
-/// Returns the C pointer, or null if formatting fails.
-///
-/// The `px` suffix is load-bearing, not decoration. Pango reads a bare number
-/// as POINTS and scales it by the fontmap resolution (96 dpi -> x4/3) before
-/// picking the face, so "Mono 18" rasterizes as a 24px em. Every other backend
-/// in this project treats `font_size` as PIXELS — that is Clay's unit, what the
-/// CPU/stb glyph path feeds to stbtt_ScaleForPixelHeight, and what the shared
-/// estimator in core/text_portable.zig assumes — so without the suffix the same
-/// app drew its labels a third larger here than on macOS. `px` is Pango's
-/// "absolute size" marker (pango/fonts.c: parse_size, consumed by
-/// pango/pangofc-fontmap.c: get_scaled_size, which skips the dpi multiply).
-///
-/// BOTH the measure and the render path go through this one function, so the
-/// layout box and the blitted texture can never disagree about the size.
 pub fn pangoDescInto(buf: *[128]u8, font_size: u16) ?[*:0]const u8 {
     if (font_size == 0) return null;
     const family = pangoFamily();
@@ -200,21 +152,18 @@ pub fn pangoDescInto(buf: *[128]u8, font_size: u16) ?[*:0]const u8 {
 }
 
 test "pangoDescInto marks the size absolute (px), never points" {
-    // Points would be x4/3 larger at Pango's default 96 dpi, which is exactly
-    // the Linux-vs-macOS size mismatch this pins shut.
+    // Points would be x4/3 larger at Pango's default 96 dpi, which is exactly the Linux-vs-macOS size mismatch this pins shut.
     var buf: [128]u8 = undefined;
     const desc = pangoDescInto(&buf, 18) orelse return error.TestUnexpectedResult;
     try std.testing.expect(std.mem.endsWith(u8, std.mem.span(desc), " 18px"));
     try std.testing.expect(pangoDescInto(&buf, 0) == null);
 }
 
-/// Try Pango measurement via the C shim. Returns null on any failure so
-/// the caller can fall back to estimatorExtent(). Never crashes.
+/// Try Pango measurement via the C shim.
 fn measurePango(text: []const u8, font_size: u16) ?TextExtent {
     if (font_size == 0) return null;
     if (text.len == 0) {
-        // Keep Clay contract (w=0, full height) but use Pango line height
-        // when available: measure "M" once.
+        // Keep Clay contract (w=0, full height) but use Pango line height when available: measure "M" once.
         if (measurePango("M", font_size)) |m| return .{ .w = 0, .h = m.h };
         return null;
     }
@@ -237,8 +186,6 @@ fn measurePango(text: []const u8, font_size: u16) ?TextExtent {
 }
 
 /// Pixel extent of `text` at `font_size` for Clay layout.
-/// Primary: Pango. Fallback: estimator (never fails).
-/// Cached: repeat measures of the same label skip Pango entirely.
 pub fn measureText(text_bytes: []const u8, font_size: u16) TextExtent {
     const key = hashMeasureKey(text_bytes, font_size);
     if (extentLookup(key)) |hit| {

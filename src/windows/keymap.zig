@@ -1,40 +1,11 @@
 //! Win32 virtual-key code -> Linux evdev code translation.
-//!
-//! The Delegate contract carries *evdev* keycodes: `components.input.keyChar`
-//! is a pure evdev -> ASCII table and `keyToClose` accepts evdev 1. Win32
-//! hands us a `WM_KEYDOWN` `wParam`, which is a completely different numbering
-//! (Win32 `Q` is 0x51, evdev `Q` is 16), so the backend MUST translate before
-//! handing a key to the delegate. Doing it here — rather than making
-//! `components.input` platform-aware — is what keeps the whole widget layer and
-//! the Delegate contract identical on every operating system.
-//!
-//! Everything in this module is a pure table lookup: no Win32, no runtime
-//! state, so it is unit-tested in the cross-platform parity suite and runs on
-//! Linux and macOS too. Only the shim is untestable.
-//!
-//! ## Two Win32 facts that shape the table
-//!
-//!  1. **The main row IS ASCII.** `WM_KEYDOWN` reports `'A'`..`'Z'` as 0x41..0x5A
-//!     and `'0'`..`'9'` as 0x30..0x39, but that is a coincidence of the
-//!     US layout, not a rule. Punctuation lives in the `VK_OEM_*` range
-//!     (0xBA..0xE2) and the whole set shifts with the active keyboard layout,
-//!     which is why the table is a real table and not `vk - 'a' + 30`.
-//!  2. **The keypad duplicates codes with an "extended" bit set.** The numpad
-//!     `Enter` is a `WM_KEYDOWN` of `VK_RETURN` with bit 24 set, and the
-//!     calculator routes evdev 96 (`KEY_KPENTER`) to `=` *separately* from 28
-//!     (`KEY_ENTER`). Collapsing them loses the distinction, and collapsing the
-//!     WRONG way makes the main Enter stop working — which is why the extended
-//!     bit is stripped for the lookup and then consulted for `VK_RETURN` only.
 
 const std = @import("std");
 
-/// Returned for a key with no evdev equivalent. Zero is evdev KEY_RESERVED,
-/// so 0 is a safe "not ours" sentinel — no real key maps to it.
+/// Returned for a key with no evdev equivalent.
 pub const KEY_NONE: u32 = 0;
 
-/// Bit 24 of `wParam`, set by the keyboard driver for keys that are NOT on the
-/// main block: the numpad, the navigation cluster, and the right-hand Ctrl /
-/// Alt / Enter. Must be stripped before the table lookup.
+/// Bit 24 of `wParam`, set by the keyboard driver for keys that are NOT on the main block: the numpad, the navigation cluster, and the right-hand Ctrl /.
 pub const vk_extended: u32 = 0x0100_0000;
 
 /// One row of a translation table.
@@ -84,9 +55,6 @@ const DIGITS = [_]Row{
 };
 
 // The `VK_OEM_*` codes, which are the unshifted US-layout punctuation.
-// Punctuation maps to the UNSHIFTED key's evdev code. The shifted character
-// is `keyChar`'s job, not ours: evdev 13 is the only code `keyChar` knows that
-// yields '+', so '=' must land on 13 and let shift do the rest.
 const PUNCT = [_]Row{
     .{ .vk = 0xBD, .ev = 12 }, // VK_OEM_MINUS  -   (shift -> _)
     .{ .vk = 0xBB, .ev = 13 }, // VK_OEM_PLUS   =   (shift -> +)
@@ -107,8 +75,7 @@ const NAMED = [_]Row{
     // Windows window gets quit-on-Escape with no per-platform code.
     .{ .vk = 0x09, .ev = 15 }, // VK_TAB         tab
     .{ .vk = 0x0D, .ev = 28 }, // VK_RETURN     return (main) — the numpad's
-    // return arrives as the SAME code with the extended bit set and is handled
-    // separately, because the calculator routes evdev 96 to `=` on its own.
+    // return arrives as the SAME code with the extended bit set and is handled separately, because the calculator routes evdev 96 to `=` on its own.
     .{ .vk = 0x08, .ev = 14 }, // VK_BACK       backspace
     .{ .vk = 0x2E, .ev = 111 }, // VK_DELETE    forward delete
     .{ .vk = 0x25, .ev = 105 }, // VK_LEFT      left
@@ -122,9 +89,7 @@ const NAMED = [_]Row{
     .{ .vk = 0x2D, .ev = 110 }, // VK_INSERT    insert
 };
 
-// The numeric keypad, whose evdev codes are NOT contiguous — the +,-,* and /
-// keys sit in the gaps between the digits, which is exactly the kind of detail
-// a generated table gets wrong.
+// The numeric keypad, whose evdev codes are NOT contiguous — the +,-,* and / keys sit in the gaps between the digits, which is exactly the kind of.
 const KEYPAD = [_]Row{
     .{ .vk = 0x60, .ev = 82 }, // VK_NUMPAD0   KEY_KP0
     .{ .vk = 0x61, .ev = 79 }, // VK_NUMPAD1   KEY_KP1
@@ -143,18 +108,7 @@ const KEYPAD = [_]Row{
     .{ .vk = 0x6F, .ev = 98 }, // VK_DIVIDE    KEY_KPSLASH
 };
 
-/// Modifier keys. These are delivered as ordinary key events so the Host's
-/// `Mods.track` updates itself exactly as it does on Wayland — that is what
-/// makes `keyChar(code, shift)` produce '+' for Shift+'=' with no change to the
-/// widget layer. Left and right of the same modifier share one evdev code on
-/// purpose: `Mods.track` treats 42/54 and 29/97 as the same logical state, so
-/// splitting them would be indistinguishable anyway.
-///
-/// The side-neutral `VK_SHIFT` / `VK_CONTROL` / `VK_MENU` codes are listed
-/// because some layouts and injected input do report them, and a backend that
-/// answered KEY_NONE for a real modifier cannot tell "the user pressed Alt"
-/// from "unknown key". Windows and Menu are reported as real keys, exactly as
-/// Option and Command are on macOS.
+/// Modifier keys.
 const MODIFIERS = [_]Row{
     .{ .vk = 0x10, .ev = 42 }, // VK_SHIFT     side-neutral shift
     .{ .vk = 0x11, .ev = 29 }, // VK_CONTROL   side-neutral control
@@ -169,8 +123,7 @@ const MODIFIERS = [_]Row{
     .{ .vk = 0x5C, .ev = 125 }, // VK_RWIN     right meta
 };
 
-/// The function keys. F11 and F12 are out of sequence in evdev (F10 is 68 and
-/// F11 is 87), which is the whole reason this is a table.
+/// The function keys.
 const FUNCTION = [_]Row{
     .{ .vk = 0x70, .ev = 59 }, // F1
     .{ .vk = 0x71, .ev = 60 }, // F2
@@ -198,8 +151,7 @@ const FUNCTION = [_]Row{
     .{ .vk = 0x87, .ev = 100 }, // F24
 };
 
-/// evdev `KEY_KPENTER` — the calculator maps this to `=` separately from
-/// `KEY_ENTER`, so the numpad's Enter must not be folded into the main one.
+/// evdev `KEY_KPENTER` — the calculator maps this to `=` separately from `KEY_ENTER`, so the numpad's Enter must not be folded into the main one.
 pub const KEY_KPENTER: u32 = 96;
 
 /// Win32 `VK_RETURN`, with and without the "extended key" flag.
@@ -230,21 +182,16 @@ fn lookup(base: u32) u32 {
     return KEY_NONE;
 }
 
-/// Translate one `WM_KEYDOWN` / `WM_KEYUP` `wParam` to its evdev code, or
-/// KEY_NONE. `wparam` is the raw value, extended-key bit and all, so callers
-/// must pass it unmodified.
+/// Translate one `WM_KEYDOWN` / `WM_KEYUP` `wParam` to its evdev code, or KEY_NONE.
 pub fn evdevFor(wparam: u32) u32 {
     const extended = (wparam & vk_extended) != 0;
     const base = wparam & ~vk_extended;
-    // The ONLY place the extended bit changes the answer. The numpad's Enter
-    // is a VK_RETURN that the driver marks as not-on-the-main-block, and the
-    // calculator needs to tell it apart from the main Enter.
+    // The ONLY place the extended bit changes the answer.
     if (extended and base == VK_RETURN) return KEY_KPENTER;
     return lookup(base);
 }
 
-/// The alias `mac/keymap.zig` and `linux/keymap.zig` also expose, so the three
-/// backends read identically at the call site.
+/// The alias `mac/keymap.zig` and `linux/keymap.zig` also expose, so the three backends read identically at the call site.
 pub fn toEvdev(wparam: u32) u32 {
     return evdevFor(wparam);
 }
@@ -255,8 +202,7 @@ const input = @import("../core/components/input.zig");
 const contract = @import("../core/window_contract.zig");
 
 test "letters translate to their evdev codes" {
-    // Win32 reports the ASCII code point for the main row, so the table has to
-    // be keyed on 'A' (0x41) rather than on 30.
+    // Win32 reports the ASCII code point for the main row, so the table has to be keyed on 'A' (0x41) rather than on 30.
     try std.testing.expectEqual(@as(u32, 30), toEvdev('A'));
     try std.testing.expectEqual(@as(u32, 16), toEvdev('Q'));
     try std.testing.expectEqual(@as(u32, 17), toEvdev('W'));
@@ -266,9 +212,7 @@ test "letters translate to their evdev codes" {
 }
 
 test "the whole letter row round-trips through keyChar to the right ASCII" {
-    // The contract that actually matters: the Delegate hands evdev to
-    // `components.input.keyChar`, so a wrong translation surfaces as the wrong
-    // character, not as an error.
+    // The contract that actually matters: the Delegate hands evdev to `components.input.keyChar`, so a wrong translation surfaces as the wrong character.
     for ([_]u8{
         'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
         'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
@@ -282,8 +226,7 @@ test "the whole letter row round-trips through keyChar to the right ASCII" {
 }
 
 test "the digit row translates, and '0' is not confused with 'O'" {
-    // '0' is 0x30 and 'O' is 0x4F, so a table keyed by mistake on the other
-    // one produces a digit where a letter belongs.
+    // '0' is 0x30 and 'O' is 0x4F, so a table keyed by mistake on the other one produces a digit where a letter belongs.
     try std.testing.expectEqual(@as(u32, 2), toEvdev('1'));
     try std.testing.expectEqual(@as(u32, 6), toEvdev('5'));
     try std.testing.expectEqual(@as(u32, 7), toEvdev('6'));
@@ -313,9 +256,7 @@ test "every digit and letter reaches keyChar as the right character" {
 }
 
 test "shifted punctuation keeps the unshifted evdev code" {
-    // '=' (VK_OEM_PLUS, 0xBB) must map to evdev 13, and `keyChar` turns THAT
-    // into '+' when shift is held. Mapping '=' to some dedicated "plus" code
-    // would be wrong: evdev 13 is the only code `keyChar` knows that yields '+'.
+    // '=' (VK_OEM_PLUS, 0xBB) must map to evdev 13, and `keyChar` turns THAT into '+' when shift is held.
     try std.testing.expectEqual(@as(u32, 13), toEvdev(0xBB));
     try std.testing.expectEqual(@as(?u8, '='), input.keyChar(toEvdev(0xBB), false));
     try std.testing.expectEqual(@as(?u8, '+'), input.keyChar(toEvdev(0xBB), true));
@@ -330,19 +271,14 @@ test "escape maps to evdev 1 so keyToClose quits a Windows window" {
 }
 
 test "the main Enter is 28 and the numpad's is 96" {
-    // THE Win32-specific subtlety. Both are WM_KEYDOWN of VK_RETURN; only the
-    // extended-key bit tells them apart, and the calculator routes them
-    // separately — folding the keypad one into 28 loses that arm, and folding
-    // the main one into 96 breaks the ordinary Enter.
+    // THE Win32-specific subtlety.
     try std.testing.expectEqual(input.KEY_ENTER, toEvdev(VK_RETURN));
     try std.testing.expectEqual(KEY_KPENTER, toEvdev(VK_RETURN | vk_extended));
     try std.testing.expect(input.KEY_ENTER != KEY_KPENTER);
 }
 
 test "the extended bit changes nothing else" {
-    // The numpad arrows, Insert/Delete and the right-hand modifiers all arrive
-    // with the extended bit set, and must translate exactly like their
-    // main-cluster twins.
+    // The numpad arrows, Insert/Delete and the right-hand modifiers all arrive with the extended bit set, and must translate exactly like their.
     try std.testing.expectEqual(toEvdev(0x25), toEvdev(0x25 | vk_extended)); // left
     try std.testing.expectEqual(toEvdev(0x2E), toEvdev(0x2E | vk_extended)); // delete
     try std.testing.expectEqual(toEvdev(0xA3), toEvdev(0xA3 | vk_extended)); // right ctrl
@@ -350,8 +286,7 @@ test "the extended bit changes nothing else" {
 }
 
 test "the numeric keypad maps to the non-contiguous evdev codes" {
-    // The evdev keypad layout puts +,-,* and / in the gaps between the digits,
-    // which is why this is a table and not an arithmetic sequence.
+    // The evdev keypad layout puts +,-,* and / in the gaps between the digits, which is why this is a table and not an arithmetic sequence.
     const cases = [_]struct { vk: u32, ev: u32 }{
         .{ .vk = 0x60, .ev = 82 }, // KP0
         .{ .vk = 0x61, .ev = 79 }, // KP1
@@ -370,9 +305,7 @@ test "the numeric keypad maps to the non-contiguous evdev codes" {
 }
 
 test "the calculator's keypad operators land on the codes it listens for" {
-    // The calculator declares its own KEY_KP_* constants and routes them
-    // explicitly. If this drifts, the numpad operators type nothing at all —
-    // and unlike a letter, there is no keyChar fallback to hide it.
+    // The calculator declares its own KEY_KP_* constants and routes them explicitly.
     try std.testing.expectEqual(@as(u32, 96), toEvdev(VK_RETURN | vk_extended));
     try std.testing.expectEqual(@as(u32, 78), toEvdev(0x6B)); // +
     try std.testing.expectEqual(@as(u32, 74), toEvdev(0x6D)); // -
@@ -401,9 +334,7 @@ test "arrow keys map to the navigation codes input.zig documents" {
 }
 
 test "shift and control reach the evdev codes Mods.track watches" {
-    // The Host's KeyChain calls `Mods.track(evdev, pressed)`, which watches
-    // 42/54 for shift and 29/97 for control. Both Win32 shift keys and both
-    // control keys must land on one of those, or Shift+'=' would type '='.
+    // The Host's KeyChain calls `Mods.track(evdev, pressed)`, which watches 42/54 for shift and 29/97 for control.
     var mods = input.Mods{};
     for ([_]u32{ 0xA0, 0xA1 }) |vk| {
         const ev = toEvdev(vk);
@@ -431,8 +362,7 @@ test "a modifier press followed by '=' produces '+' through the chain" {
 }
 
 test "alt and the Windows keys are recognised keys, not KEY_NONE" {
-    // They are not tracked by `Mods`, but reporting them as unmapped would be
-    // wrong: an app cannot tell "the user pressed Alt" from "unknown key".
+    // They are not tracked by `Mods`, but reporting them as unmapped would be wrong: an app cannot tell "the user pressed Alt" from "unknown key".
     try std.testing.expect(toEvdev(0xA4) != KEY_NONE); // left alt
     try std.testing.expect(toEvdev(0xA5) != KEY_NONE); // right alt
     try std.testing.expect(toEvdev(0x5B) != KEY_NONE); // left meta
@@ -448,14 +378,12 @@ test "F1..F12 map to the evdev codes, including the F10/F11 jump" {
     try std.testing.expectEqual(@as(u32, 68), toEvdev(0x79)); // F10
     try std.testing.expectEqual(@as(u32, 87), toEvdev(0x7A)); // F11 — NOT 69
     try std.testing.expectEqual(@as(u32, 88), toEvdev(0x7B)); // F12
-    // The jump is the only interesting part; assert it explicitly so a
-    // "VK_F1 + n" rewrite fails here rather than in a running app.
+    // The jump is the only interesting part; assert it explicitly so a "VK_F1 + n" rewrite fails here rather than in a running app.
     try std.testing.expect(toEvdev(0x7A) != toEvdev(0x79) + 1);
 }
 
 test "no keycode in the mapped set is itself the source of another row" {
-    // A duplicate `vk` would make translation order-dependent: the first row
-    // wins, so the table would silently depend on its own order.
+    // A duplicate `vk` would make translation order-dependent: the first row wins, so the table would silently depend on its own order.
     var seen = [_]u32{0xFFFF_FFFF} ** (LETTERS.len + DIGITS.len + PUNCT.len + NAMED.len +
         KEYPAD.len + MODIFIERS.len + FUNCTION.len);
     var n: usize = 0;
@@ -475,8 +403,7 @@ test "no keycode in the mapped set is itself the source of another row" {
 }
 
 test "an unmapped keycode reports KEY_NONE rather than a plausible wrong key" {
-    // Guessing is worse than silence: a wrong mapping types the wrong
-    // character, which is far more confusing than typing nothing.
+    // Guessing is worse than silence: a wrong mapping types the wrong character, which is far more confusing than typing nothing.
     try std.testing.expectEqual(KEY_NONE, toEvdev(0x01)); // left mouse button
     try std.testing.expectEqual(KEY_NONE, toEvdev(0x07)); // F12 via mouse vkey
     try std.testing.expectEqual(KEY_NONE, toEvdev(0xE2));
@@ -484,8 +411,7 @@ test "an unmapped keycode reports KEY_NONE rather than a plausible wrong key" {
 }
 
 test "no mapped keycode collides with the KEY_NONE sentinel" {
-    // If a real key mapped to 0 it would be indistinguishable from "unmapped"
-    // and the keystroke would vanish.
+    // If a real key mapped to 0 it would be indistinguishable from "unmapped" and the keystroke would vanish.
     for (0..0x200) |k| {
         const ev = toEvdev(@intCast(k));
         if (ev != KEY_NONE) try std.testing.expect(ev != 0);

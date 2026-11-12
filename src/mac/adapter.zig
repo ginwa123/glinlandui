@@ -1,45 +1,16 @@
-//! macOS event adapter: the pure translation layer between AppKit's event
-//! coordinates and the toolkit's Delegate contract.
-//!
-//! AppKit and the toolkit disagree in ways that all fail *silently* — the
-//! window still renders, clicks simply do not land where they are drawn. So
-//! every translation lives here, in a module with no Cocoa, and is unit-tested
-//! on every platform.
-//!
-//! The three disagreements:
-//!
-//!  1. ORIGIN. AppKit reports pointer y from the BOTTOM of the view; Clay and
-//!     the Delegate use the TOP. Forgetting this mirrors the UI vertically:
-//!     clicking the top row presses the bottom row's key.
-//!  2. RESIZE COALESCING. A live window drag delivers dozens of resize
-//!     events per second. Applying each one reallocates and relayouts, so the
-//!     window stutters and ends up rendering at a size the user never saw.
-//!     `applyPendingResize` applies at most one, at draw time.
-//!  3. SCROLL MAGNITUDE. AppKit's scroll deltas are in points and are
-//!     unconstrained; Wayland's are small fixed steps. Passing them through
-//!     unchanged makes scrolling on macOS jump an entire list per notch.
+//! macOS event adapter: the pure translation layer between AppKit's event coordinates and the toolkit's Delegate contract.
 
 const std = @import("std");
 const contract = @import("../core/window_contract.zig");
 
 // ============================== coordinates ==============================
 
-/// Convert an AppKit (bottom-left origin) pointer y to the toolkit's top-left
-/// origin: `y' = height - y`.
-///
-/// This is the single highest-consequence line in the macOS backend. A window
-/// that omits it renders correctly and responds to clicks on the mirrored
-/// row, which reads to a user as "the buttons are broken" rather than "the y
-/// axis is inverted".
+/// Convert an AppKit (bottom-left origin) pointer y to the toolkit's top-left origin: `y' = height - y`.
 pub fn flipY(height: u32, y: f32) f32 {
     return @as(f32, @floatFromInt(height)) - y;
 }
 
-/// A pointer position in toolkit (top-left) space, with out-of-bounds values
-/// clamped. Clamping matters because AppKit can report a y one point outside
-/// the view while the pointer sits on the window's resize border; an
-/// unclamped y would be fed to hit-testing and could match a neighbouring
-/// element.
+/// A pointer position in toolkit (top-left) space, with out-of-bounds values clamped.
 pub const Point = struct {
     x: f32,
     y: f32,
@@ -55,8 +26,7 @@ pub fn toToolkitPoint(width: u32, height: u32, x: f32, y: f32) Point {
     };
 }
 
-/// True when a toolkit-space point is inside the view. Used to ignore motion
-/// delivered while the pointer is outside the window.
+/// True when a toolkit-space point is inside the view.
 pub fn pointInView(width: u32, height: u32, x: f32, y: f32) bool {
     if (width == 0 or height == 0) return false;
     return x >= 0 and y >= 0 and
@@ -66,22 +36,14 @@ pub fn pointInView(width: u32, height: u32, x: f32, y: f32) bool {
 
 // ============================== scrolling ==============================
 
-/// Clamp a raw AppKit scroll delta to a sane range. AppKit reports points, and
-/// a trackpad flick can produce deltas in the hundreds in a single event.
-/// Wayland's are small steps, so the toolkit's scroll views were tuned for
-/// those; feeding macOS's raw values through makes one flick jump the whole
-/// list. This is a pure clamp, not a scaling factor, so it degrades to
-/// "scrolls further" rather than "scrolls at the wrong speed" when the OS
-/// already reports sane values.
+/// Clamp a raw AppKit scroll delta to a sane range.
 pub const max_scroll_step: f32 = 60.0;
 
 pub fn clampScroll(d: f32) f32 {
     return std.math.clamp(d, -max_scroll_step, max_scroll_step);
 }
 
-/// AppKit's `NSScrollingDeltaY` is positive for content moving UP (scrolling
-/// down the list), the opposite of the toolkit's convention, where positive
-/// dy means "scroll down". Negating therefore aligns the two backends.
+/// AppKit's `NSScrollingDeltaY` is positive for content moving UP (scrolling down the list), the opposite of the toolkit's convention, where positive dy.
 pub fn scrollDelta(raw_dx: f32, raw_dy: f32) struct { dx: f32, dy: f32 } {
     return .{ .dx = clampScroll(raw_dx), .dy = -clampScroll(raw_dy) };
 }
@@ -89,19 +51,10 @@ pub fn scrollDelta(raw_dx: f32, raw_dy: f32) struct { dx: f32, dy: f32 } {
 // ============================== resizing ==============================
 
 /// Apply a coalesced resize, at most once.
-///
-/// AppKit reports the proposed size; the toolkit should adopt it when it next
-/// draws, not on every event. A drag therefore produces one resize per drawn
-/// frame instead of one per event, and `delegate.on_resize` fires exactly
-/// once per applied size.
-///
-/// Returns true when a resize was applied (and the delegate notified), false
-/// when there was nothing pending or the pending size matches the current one.
 pub fn applyPendingResize(state: *contract.WindowState) bool {
     if (state.pending_w == 0 or state.pending_h == 0) return false;
     if (state.pending_w == state.win_w and state.pending_h == state.win_h) {
-        // Nothing actually changed. Clear the pending pair anyway so a stale
-        // value cannot fire much later against an unrelated resize.
+        // Nothing actually changed.
         state.pending_w = 0;
         state.pending_h = 0;
         return false;
@@ -114,9 +67,7 @@ pub fn applyPendingResize(state: *contract.WindowState) bool {
     return true;
 }
 
-/// Record a proposed size from AppKit. Sizes that clamp to nothing usable
-/// (0 in either dimension, which AppKit sends while a window is being
-/// minimised) are ignored so they cannot blank the window.
+/// Record a proposed size from AppKit.
 pub fn noteResize(state: *contract.WindowState, w: u32, h: u32) bool {
     if (w == 0 or h == 0) return false;
     const clamped = state.clamp(w, h);
@@ -125,8 +76,7 @@ pub fn noteResize(state: *contract.WindowState, w: u32, h: u32) bool {
     return true;
 }
 
-/// True when a size differs from the current one, so the caller can request a
-/// redraw only on a real change.
+/// True when a size differs from the current one, so the caller can request a redraw only on a real change.
 pub fn sizeChanged(state: *const contract.WindowState) bool {
     return state.pending_w != 0 and state.pending_h != 0 and
         (state.pending_w != state.win_w or state.pending_h != state.win_h);
@@ -134,10 +84,7 @@ pub fn sizeChanged(state: *const contract.WindowState) bool {
 
 // ============================== quit ==============================
 
-/// Whether the window should stop. The backend's own flag is authoritative
-/// (the close button sets it); the delegate's `is_quit` is checked too so an
-/// app that quits itself (Escape through `keyToClose`, a "Quit" button) stops
-/// without the backend having to guess.
+/// Whether the window should stop.
 pub fn resolveQuit(state: *contract.WindowState) bool {
     if (state.quit) return true;
     if (state.delegate) |d| {
@@ -150,19 +97,6 @@ pub fn resolveQuit(state: *contract.WindowState) bool {
 }
 
 /// Mark the window as quitting (the close button, or a delegate request).
-/// Clamp a requested `QS_SETTINGS_TEST_FRAMES` cap to what Cocoa can actually
-/// reach.
-///
-/// AppKit only draws when something marks the view dirty, and a static window
-/// stops producing redraws once it has been composited. So a cap above one is
-/// unreachable: `[NSApp run]` sits idle with the window already drawn and the
-/// process never returns. That is a HANG, not a failure — it burns a CI job
-/// until its timeout and reports nothing about why.
-///
-/// Clamping beats hanging: the capped run draws one real frame and exits 0, so
-/// the job is deterministic and the exit is readable. A request of 0 still
-/// means "interactive" and is passed through untouched, so a developer running
-/// the app by hand gets the ordinary AppKit loop.
 pub fn effectiveMaxFrames(requested: i32) i32 {
     if (requested <= 0) return 0;
     return 1;
@@ -175,8 +109,7 @@ pub fn requestQuit(state: *contract.WindowState) void {
 // ===================== tests (parity suite — every platform) =====================
 
 test "flipY maps the bottom of the view to the bottom of toolkit space" {
-    // A click at the very bottom of the view (AppKit y == 0) is the LAST row
-    // in toolkit space, so the flipped y must equal the height.
+    // A click at the very bottom of the view (AppKit y == 0) is the LAST row in toolkit space, so the flipped y must equal the height.
     try std.testing.expectEqual(@as(f32, 400), flipY(400, 0));
     try std.testing.expectEqual(@as(f32, 0), flipY(400, 400));
 }
@@ -187,8 +120,7 @@ test "flipY mirrors about the vertical centre" {
 }
 
 test "flipY is an involution" {
-    // Applying it twice must return the original y, for any height. This is
-    // the property that proves it is a pure mirror and not a scaling.
+    // Applying it twice must return the original y, for any height.
     for ([_]u32{ 1, 430, 720, 1000 }) |h| {
         for ([_]f32{ 0, 1.5, 99, 200 }) |y| {
             const there = flipY(h, y);
@@ -199,9 +131,7 @@ test "flipY is an involution" {
 }
 
 test "the keypad's top row and bottom row do not collide after a flip" {
-    // A 4x5 keypad in a 430-tall window. The FIRST key row is near the top
-    // and the LAST near the bottom. If flipY were missing or a no-op, both
-    // would land in the same half of the window.
+    // A 4x5 keypad in a 430-tall window.
     const h: u32 = 430;
     const top_row_center_appkit: f32 = 120; // near the top in AppKit space
     const bottom_row_center_appkit: f32 = 310; // near the bottom
@@ -222,11 +152,8 @@ test "toToolkitPoint translates and clamps into the view" {
 
 test "toToolkitPoint clamps a y just outside the view" {
     // AppKit reports y == height while the pointer sits on the resize border.
-    // Unclamped, that y would be handed to hit-testing and could match a
-    // neighbouring element.
     const p = toToolkitPoint(200, 100, 10, 105);
-    // AppKit y == 105 is 5pt ABOVE the top edge (origin is at the bottom), so
-    // the toolkit-space y is 100 - 105 = -5, which clamps to the top edge.
+    // AppKit y == 105 is 5pt ABOVE the top edge (origin is at the bottom), so the toolkit-space y is 100 - 105 = -5, which clamps to the top edge.
     try std.testing.expectEqual(@as(f32, 0), p.y);
     try std.testing.expectEqual(@as(f32, 10), p.x);
 }
@@ -249,8 +176,7 @@ test "pointInView is exclusive on the far edge and rejects a zero size" {
     try std.testing.expect(!pointInView(100, 100, 100, 50));
     try std.testing.expect(!pointInView(100, 100, 50, 100));
     try std.testing.expect(!pointInView(100, 100, -1, 50));
-    // A zero-sized view contains no points; without this the arithmetic would
-    // accept (0,0) and dispatch a click into a window that does not exist.
+    // A zero-sized view contains no points; without this the arithmetic would accept (0,0) and dispatch a click into a window that does not exist.
     try std.testing.expect(!pointInView(0, 100, 0, 0));
     try std.testing.expect(!pointInView(100, 0, 0, 0));
 }
@@ -265,8 +191,7 @@ test "clampScroll bounds a huge trackpad flick" {
 }
 
 test "scrollDelta negates dy to match the toolkit's convention" {
-    // The toolkit uses positive dy = scroll DOWN. AppKit's scrollingDeltaY is
-    // positive for the opposite, so a missing negation scrolls the wrong way.
+    // The toolkit uses positive dy = scroll DOWN.
     const d = scrollDelta(0, 10);
     try std.testing.expectEqual(@as(f32, 0), d.dx);
     try std.testing.expectEqual(@as(f32, -10), d.dy);
@@ -308,8 +233,7 @@ test "applyPendingResize adopts the pending size and notifies once" {
         }
     };
     var rec = Rec{};
-    // min_* are explicit because the WindowConfig default is 520x360, which
-    // would silently raise the 500-wide proposal below.
+    // min_* are explicit because the WindowConfig default is 520x360, which would silently raise the 500-wide proposal below.
     var st = contract.WindowState.init(.{
         .width = 360,
         .height = 430,
@@ -340,9 +264,7 @@ test "applyPendingResize adopts the pending size and notifies once" {
 }
 
 test "a resize storm coalesces into a single applied size" {
-    // This is the point of applyPendingResize: AppKit sends many events per
-    // drag frame. Only the LAST one should be adopted, and the delegate
-    // notified once.
+    // This is the point of applyPendingResize: AppKit sends many events per drag frame.
     const Rec = struct {
         resizes: usize = 0,
         fn onFrame(_: *anyopaque, _: u32, _: u32) void {}
@@ -422,9 +344,7 @@ test "a pending size equal to the current one is dropped, not applied" {
         }
     };
     var rec = Rec{};
-    // Explicit minimums: the WindowConfig default of 520x360 would raise the
-    // 360-wide proposal to 520, making it a real change and defeating the
-    // "same size is dropped" intent of this test.
+    // Explicit minimums: the WindowConfig default of 520x360 would raise the 360-wide proposal to 520, making it a real change and defeating the "same size.
     var st = contract.WindowState.init(.{
         .width = 360,
         .height = 430,
@@ -471,8 +391,7 @@ test "resolveQuit reports the backend's own quit flag" {
 }
 
 test "resolveQuit latches a delegate-driven quit" {
-    // Escape goes through `keyToClose` and sets the delegate's quit flag; the
-    // window must notice and stop without the close button being used.
+    // Escape goes through `keyToClose` and sets the delegate's quit flag; the window must notice and stop without the close button being used.
     const Quit = struct {
         fn onFrame(_: *anyopaque, _: u32, _: u32) void {}
         fn onPointer(_: *anyopaque, _: f32, _: f32, _: bool, _: u32) void {}
@@ -502,15 +421,13 @@ test "resolveQuit latches a delegate-driven quit" {
 }
 
 test "effectiveMaxFrames leaves an interactive run interactive" {
-    // 0 is the "no cap" the demo's own run() uses; a negative value is not
-    // reachable from parseTestFrames but must not become a cap either.
+    // 0 is the "no cap" the demo's own run() uses; a negative value is not reachable from parseTestFrames but must not become a cap either.
     try std.testing.expectEqual(@as(i32, 0), effectiveMaxFrames(0));
     try std.testing.expectEqual(@as(i32, 0), effectiveMaxFrames(-1));
 }
 
 test "effectiveMaxFrames clamps a cap above one, which Cocoa cannot reach" {
-    // 1 is the only cap that terminates. Anything higher used to hang, so the
-    // value is reduced rather than passed through to the shim.
+    // 1 is the only cap that terminates.
     try std.testing.expectEqual(@as(i32, 1), effectiveMaxFrames(1));
     try std.testing.expectEqual(@as(i32, 1), effectiveMaxFrames(3));
     try std.testing.expectEqual(@as(i32, 1), effectiveMaxFrames(1000));

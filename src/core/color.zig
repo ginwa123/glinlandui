@@ -1,51 +1,14 @@
 //! `Color` — one color value, four ways to write it.
-//!
-//! A color is whatever you were handed: a design tool gives you `#BBADA0`, a
-//! legacy file gives you `rgb(98, 0, 238)`, a spec gives you `0.38f, 0f,
-//! 0.93f`, and a copied constant is `0xFF6200EE`. `Color` accepts all four,
-//! and it is the type every color-bearing value in this library now uses —
-//! widget props included.
-//!
-//!     const COLOR_BG = Color.hexC("#101014");   // hex string   (palette)
-//!     const accent  = Color.rgb(98, 0, 238);    // 0-255 ints
-//!     const ghost   = Color.rgbF(.38, 0, .93);  // 0-1 floats   (specs, theming)
-//!     const ink     = Color.argb(0xFF6200EE);   // ARGB hex     (copied constant)
-//!
-//!     text.label(.{ .str = "hi", .color = accent });
-//!
-//! Use `hexC` for a constant and `hex` when the string is only known at
-//! runtime: `hex` returns `error.InvalidColor`, `hexC` turns a typo into a
-//! compile error.
-//!
-//! Three deliberate decisions:
-//!
-//! 1. **A one-`u32` struct, not a newtype.** Props stay copyable and
-//!    `==`-comparable, so a `Color` drops into every place the old `u32`
-//!    did and a test can `expectEqual` it directly.
-//! 2. **Alpha is stored, and both outputs are honest about it.** `toClay()`
-//!    carries it to Clay's 4-channel color; `toU32()` drops it because
-//!    0xRRGGBB has nowhere to put it. Prefer handing the `Color` straight to
-//!    a prop and reaching for `toU32()` only at an interop boundary.
-//! 3. **No allocation, no globals, no platform.** This file imports only
-//!    `std` (for `testing` and `fmt`) and is platform-agnostic like the rest
-//!    of `core/`. `hexString` writes into a caller-owned buffer, so a color
-//!    costs exactly what the `u32` it replaced cost.
 const std = @import("std");
 
 /// A color, stored as 0xAARRGGBB.
-///
-/// A plain struct wrapping one `u32` so it stays trivially copyable and
-/// comparable with `==` — props can hold it and tests can `expectEqual` it.
 pub const Color = struct {
-    /// Packed 0xAARRGGBB. Named `value` rather than `argb` so the field and
-    /// the `argb()` constructor can both be called `argb` at the call site
-    /// (`Color.argb(0xFF6200EE)`), which is how callers spell it.
+    /// Packed 0xAARRGGBB.
     value: u32,
 
     // ---- construction -----------------------------------------------------
 
-    /// From a packed 0xAARRGGBB literal. Alpha 0x00 is fully transparent,
-    /// 0xFF fully opaque.
+    /// From a packed 0xAARRGGBB literal.
     pub fn argb(v: u32) Color {
         return .{ .value = v };
     }
@@ -55,18 +18,12 @@ pub const Color = struct {
         return rgba(red, green, blue, 255);
     }
 
-    /// From four 0-255 channel ints. `alpha` is 0 (transparent) .. 255
-    /// (opaque). The parameters are spelled out rather than `r`/`g`/`b`/`a`
-    /// because those are the accessor methods below, and a struct's
-    /// parameters and declarations share one namespace.
+    /// From four 0-255 channel ints.
     pub fn rgba(red: u8, green: u8, blue: u8, alpha: u8) Color {
         return .{ .value = pack(alpha, red, green, blue) };
     }
 
-    /// From three 0.0-1.0 channel floats. Opaque.
-    ///
-    /// Values outside 0-1 are clamped rather than rejected: a theme file with
-    /// a sloppy 1.02 should render as white, not take down the frame.
+    /// From three 0.0-1.0 channel floats.
     pub fn rgbF(red: f32, green: f32, blue: f32) Color {
         return rgbaF(red, green, blue, 1.0);
     }
@@ -81,45 +38,19 @@ pub const Color = struct {
         );
     }
 
-    /// From a CSS-style hex string. Accepts `#RGB`, `#RGBA`, `#RRGGBB` and
-    /// `#RRGGBBAA`, with or without the leading `#`, upper or lower case.
-    ///
-    ///     const myColor = try Color.hex("#BBADA0");
-    ///     // "bbada0" is the same color; "#6200EE80" carries a half alpha
-    ///
-    /// Returns `error.InvalidColor` for anything else (bad digit, bad length,
-    /// empty) rather than defaulting to a color the caller did not ask for.
+    /// From a CSS-style hex string.
     pub fn hex(s: []const u8) ParseError!Color {
         return parseHex(s);
     }
 
     /// `hex` for compile-time-known strings — the shape a palette wants.
-    ///
-    ///     const COLOR_BG = Color.hexC("#101014");
-    ///     const COLOR_FG = Color.hexC("#f0f0f5");
-    ///
-    /// This is a thin wrapper, NOT a second parser: it evaluates the same
-    /// `parseHex` at comptime, so there is one set of accepted forms and one
-    /// set of error cases. The difference is that a malformed literal becomes
-    /// a COMPILE error instead of a runtime one, which is what you want for
-    /// a constant — a top-level `const COLOR_BG = Color.hex("#nope");` would
-    /// otherwise be an error union sitting in a declaration that claims to
-    /// hold a color.
-    ///
-    /// The `comptime` goes on the INITIALIZER, not on the `return`. The
-    /// latter looks equivalent and is not: `comptime return …` makes the
-    /// whole return statement a comptime context, and a plain function call
-    /// inside one fails with "function called at runtime cannot return value
-    /// at comptime". Evaluating the call into a local under `comptime`, then
-    /// returning the local, is the form that actually compiles.
     pub fn hexC(comptime s: []const u8) Color {
         const parsed = comptime parseHex(s) catch
             @compileError("invalid Color hex literal \"" ++ s ++ "\"");
         return parsed;
     }
 
-    /// Errors `Color.hex` can produce. A named set so callers can
-    /// `catch |err| switch (err) { error.InvalidColor => ... }`.
+    /// Errors `Color.hex` can produce.
     pub const ParseError = error{InvalidColor};
 
     // ---- accessors --------------------------------------------------------
@@ -144,16 +75,14 @@ pub const Color = struct {
         return @truncate(c.value >> 24);
     }
 
-    /// True when the color is fully opaque — i.e. when `toU32()` loses
-    /// nothing.
+    /// True when the color is fully opaque — i.e.
     pub fn isOpaque(c: Color) bool {
         return c.a() == 255;
     }
 
     // ---- derivation -------------------------------------------------------
 
-    /// Same RGB, new alpha (0-255). This is how you fade a theme color:
-    /// `Color.hex("#6200EE").withAlpha(128)`.
+    /// Same RGB, new alpha (0-255).
     pub fn withAlpha(c: Color, alpha: u8) Color {
         return rgba(c.r(), c.g(), c.b(), alpha);
     }
@@ -163,9 +92,7 @@ pub const Color = struct {
         return c.withAlpha(floatToByte(alpha));
     }
 
-    /// Component-wise linear blend. `t = 0` is `from`, `t = 1` is `to`, and
-    /// `t` is clamped, so a hover tween cannot overshoot into out-of-gamut
-    /// channels. Alpha is blended too, so a fade is one expression.
+    /// Component-wise linear blend.
     pub fn lerp(from: Color, to: Color, t: f32) Color {
         const k = std.math.clamp(t, 0.0, 1.0);
         return rgba(
@@ -178,9 +105,7 @@ pub const Color = struct {
 
     // ---- output -----------------------------------------------------------
 
-    /// The 0xRRGGBB form every widget prop takes. Alpha is dropped — that is
-    /// the prop contract, not an oversight; use `toClay()` when the alpha
-    /// matters.
+    /// The 0xRRGGBB form every widget prop takes.
     pub fn toU32(c: Color) u32 {
         return c.value & 0x00ff_ffff;
     }
@@ -191,8 +116,6 @@ pub const Color = struct {
     }
 
     /// A Clay color: `[4]f32` in the 0-255 range, alpha carried through.
-    /// This is what `cl.*` config fields want, and it is the same shape
-    /// `render.u32ToClayColor` produces for a 0xRRGGBB value.
     pub fn toClay(c: Color) [4]f32 {
         return .{
             @floatFromInt(c.r()),
@@ -203,11 +126,6 @@ pub const Color = struct {
     }
 
     /// Write `c` as a hex string into `buf` and return the written slice.
-    /// Opaque colors get `#RRGGBB`; translucent ones get `#RRGGBBAA` — both
-    /// of which `Color.hex` reads back, so a round trip is lossless.
-    ///
-    /// Returns `error.NoSpaceLeft` if `buf` is too small; 9 bytes always
-    /// suffice.
     pub fn hexString(c: Color, buf: []u8) std.fmt.BufPrintError![]u8 {
         const digits = "0123456789abcdef";
         if (buf.len < 9) return error.NoSpaceLeft;
@@ -226,8 +144,7 @@ pub const Color = struct {
         return buf[0 .. i + 2];
     }
 
-    /// Formatted with `{}` as `#RRGGBB` (or `#RRGGBBAA` when translucent),
-    /// so `Color.hex("#BBADA0")` prints the way it was written.
+    /// Formatted with `{}` as `#RRGGBB` (or `#RRGGBBAA` when translucent), so `Color.hex("#BBADA0")` prints the way it was written.
     pub fn format(c: Color, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         var buf: [9]u8 = undefined;
         const s = c.hexString(&buf) catch return;
@@ -237,11 +154,7 @@ pub const Color = struct {
 
 // ---- internals -----------------------------------------------------------
 
-/// The one hex parser, shared by `Color.hex` (runtime) and `Color.hexC`
-/// (comptime). It is a plain function so BOTH can reach it: a method can only
-/// be evaluated at comptime if its own body is comptime-evaluable, and an
-/// error union returning across that boundary is exactly what `hexC` needs to
-/// intercept with `@compileError`.
+/// The one hex parser, shared by `Color.hex` (runtime) and `Color.hexC` (comptime).
 fn parseHex(s: []const u8) Color.ParseError!Color {
     const digits = if (s.len > 0 and s[0] == '#') s[1..] else s;
     return switch (digits.len) {
@@ -281,9 +194,7 @@ fn floatToByte(v: f32) u8 {
     return @intFromFloat(std.math.clamp(v, 0.0, 1.0) * 255.0 + 0.5);
 }
 
-/// Blend two 0-255 channels. NOT `floatToByte` — that helper clamps to the
-/// 0-1 range first, so feeding it a 0-255 mid value would saturate the whole
-/// channel to white and make every `lerp` a step function.
+/// Blend two 0-255 channels.
 fn blendChannel(from: u8, to: u8, t: f32) u8 {
     const f: f32 = @floatFromInt(from);
     const x: f32 = @floatFromInt(to);
@@ -291,8 +202,7 @@ fn blendChannel(from: u8, to: u8, t: f32) u8 {
     return @intFromFloat(std.math.clamp(blended, 0.0, 255.0) + 0.5);
 }
 
-/// One hex digit -> the byte that digit abbreviates (`f` -> 0xFF). This is
-/// what makes `#f0a` mean `#ff00aa`.
+/// One hex digit -> the byte that digit abbreviates (`f` -> 0xFF).
 fn expandNibble(c: u8) Color.ParseError!u8 {
     const v = try nibble(c);
     return v *% 17; // 0x0 -> 0x00, 0xF -> 0xFF
@@ -342,13 +252,11 @@ test "rgba carries alpha that toU32 drops and toClay keeps" {
 }
 
 test "rgbF converts 0-1 floats to the same bytes as the 0-255 form" {
-    // The exact 0-1 spellings of 98/0/238 — this is the round trip that has
-    // to hold, and it does because floatToByte rounds.
+    // The exact 0-1 spellings of 98/0/238 — this is the round trip that has to hold, and it does because floatToByte rounds.
     const exact = Color.rgbF(98.0 / 255.0, 0.0, 238.0 / 255.0);
     try std.testing.expectEqual(Color.rgb(98, 0, 238), exact);
     try std.testing.expectEqual(@as(u8, 255), exact.a());
-    // Rounded spec values land within a byte — that is the documented promise
-    // of a 0-1 float channel, not exact equality with 0.38 * 255.
+    // Rounded spec values land within a byte — that is the documented promise of a 0-1 float channel, not exact equality with 0.38 * 255.
     const approx = Color.rgbF(0.38, 0.0, 0.93);
     try std.testing.expectEqual(@as(u8, 97), approx.r());
     try std.testing.expectEqual(@as(u8, 0), approx.g());
@@ -383,8 +291,7 @@ test "hex reads the CSS string forms" {
 }
 
 test "hexC agrees with hex and is usable in a constant" {
-    // A palette is the reason hexC exists: a top-level const cannot hold an
-    // error union, so these must be plain values.
+    // A palette is the reason hexC exists: a top-level const cannot hold an error union, so these must be plain values.
     const COLOR_BG: Color = Color.hexC("#101014");
     const COLOR_FG: Color = Color.hexC("#f0f0f5");
     try std.testing.expectEqual(Color.rgb(0x10, 0x10, 0x14), COLOR_BG);
@@ -434,8 +341,7 @@ test "lerp carries alpha so a fade can animate in one expression" {
 }
 
 test "toClay matches the renderer helper for an opaque color" {
-    // Same value the widget layer gets from render.u32ToClayColor, which is
-    // what makes a Color usable anywhere a 0xRRGGBB prop was.
+    // Same value the widget layer gets from render.u32ToClayColor, which is what makes a Color usable anywhere a 0xRRGGBB prop was.
     const c = Color.rgb(18, 52, 86);
     try std.testing.expectEqual([4]f32{ 18, 52, 86, 255 }, c.toClay());
     try std.testing.expectEqual(Color.argb(0xFF6200EE).toU32(), Color.rgb(98, 0, 238).toU32());
@@ -444,8 +350,6 @@ test "toClay matches the renderer helper for an opaque color" {
 test "hexString round-trips through hex" {
     var buf: [9]u8 = undefined;
     // Opaque stays 6 digits, so the printed form matches how it was written.
-    // Output is canonical LOWERCASE regardless of the input casing: one
-    // spelling out, so a test or a log line is stable.
     const opaque_s = try (try Color.hex("#BBADA0")).hexString(&buf);
     try std.testing.expectEqualStrings("#bbada0", opaque_s);
     // Translucent grows the alpha pair rather than silently dropping it.

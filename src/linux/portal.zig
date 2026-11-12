@@ -1,57 +1,9 @@
 //! The XDG Desktop Portal `FileChooser` protocol, as PURE data.
-//!
-//! This is "what a file dialog asks the portal for" and "what the portal
-//! answers", with no socket anywhere in the file. It lives beside
-//! `dbus.zig` in `src/linux/` rather than in `core/` because it is a Linux
-//! protocol, but it is imported by the cross-platform parity suite in
-//! `src/root.zig` for exactly the same reason `linux/keymap.zig` is: a typo in
-//! an options dict or a mis-decoded `Response` is a file dialog that silently
-//! does the wrong thing, and it is far cheaper to catch that in a test that
-//! runs on every platform than in a window a user has to open.
-//! `src/linux/file_dialog.zig` owns the socket and the waiting.
-//!
-//! ## The protocol, in the shape this file encodes
-//!
-//!   destination  org.freedesktop.portal.Desktop
-//!   path         /org/freedesktop/portal/desktop
-//!   interface    org.freedesktop.portal.FileChooser
-//!   member       OpenFile | SaveFile | OpenDirectory
-//!   signature    s s a{sv}  ->  o
-//!                (parent_window, title, options) -> handle
-//!
-//! The call RETURNS an object path — but that is not the answer. The answer
-//! arrives later, as a `Response` signal on the path the portal derived from
-//! the `handle_token` we sent in the options:
-//!
-//!   /org/freedesktop/portal/desktop/request/<sender>/<token>
-//!
-//! which is why `requestPath` exists and why `handle_token` is mandatory: it
-//! is the only way to know which signal is ours.
-//!
-//! ## The two details that are easy to get wrong and impossible to debug
-//!
-//!  1. `sender` in that path is the unique bus name with its leading colon
-//!     removed and its dots turned into underscores (`:1.42` -> `1_42`). A
-//!     colon or a dot there and the portal answers to a path nobody is
-//!     listening on: the dialog opens, the user picks a file, and the
-//!     application never hears about it.
-//!  2. `current_folder` is a `ay` — a byte ARRAY containing a URI — not a
-//!     string. It is the one option whose type in the introspection XML
-//!     disagrees with how it is obviously meant to be written, and sending a
-//!     string there is rejected by a portal with a type error and ignored by
-//!     one that is more forgiving.
 const std = @import("std");
 const dbus = @import("dbus.zig");
 const contract = @import("../core/file_dialog_contract.zig");
 
 /// The portal's well-known bus name.
-/// The file-URI codec lives in the contract, not here.
-///
-/// The portal speaks URIs in `current_folder` and in the `results` it returns,
-/// and so does AppKit: `NSURL` hands back a `file://` URL with exactly the same
-/// percent-encoding. One implementation, in `core/`, is therefore better than
-/// two — and it is tested on EVERY platform, where a second copy inside
-/// `mac/` would only be tested on the one OS that has it.
 pub const uriToPath = contract.fileUriToPath;
 pub const pathToUri = contract.pathToFileUri;
 
@@ -68,11 +20,6 @@ pub const request_interface = "org.freedesktop.portal.Request";
 pub const request_path_prefix = "/org/freedesktop/portal/desktop/request/";
 
 /// The D-Bus method that asks for each kind.
-///
-/// `open_folder` is `OpenDirectory`, NOT `OpenFile` with a flag. Both exist
-/// and they are not interchangeable: `OpenFile` with `directory=true` lets the
-/// user pick a folder in a dialog that is otherwise about files, which is not
-/// what "select a folder" means.
 pub fn memberFor(kind: contract.Kind) []const u8 {
     return switch (kind) {
         .open_file => "OpenFile",
@@ -82,10 +29,6 @@ pub fn memberFor(kind: contract.Kind) []const u8 {
 }
 
 /// The object path the portal will answer on.
-///
-/// `sender` is the unique name the BUS assigned us (`:1.42`), not the
-/// well-known name: the portal builds the path from the sender field of the
-/// message it received, which is always the unique name.
 pub fn writeRequestPath(sender: []const u8, token: []const u8, out: []u8) ![]const u8 {
     var i: usize = 0;
     const prefix = request_path_prefix;
@@ -101,19 +44,7 @@ pub fn writeRequestPath(sender: []const u8, token: []const u8, out: []u8) ![]con
     return out[0..i];
 }
 
-/// Fold a unique bus name into the form the portal uses in a request path:
-/// the leading colon is dropped and every character a path element may not
-/// contain becomes an underscore (`:1.42` -> `1_42`).
-///
-/// This is not cosmetic. The portal builds the path the `Response` will
-/// arrive on from the SENDER field of the message it received, which is always
-/// the unique name, so this folding is the only way a client can know where
-/// to listen. A colon or a dot left in makes the dialog open, the user pick a
-/// file, and the application never hear about it.
-///
-/// Folding rather than a lookup table keeps it correct for whatever the bus
-/// produces next, and it is exposed separately because an `AddMatch` rule
-/// needs the same folded string.
+/// Fold a unique bus name into the form the portal uses in a request path: the leading colon is dropped and every character a path element may not.
 pub fn foldSenderName(sender: []const u8, out: []u8) ![]const u8 {
     var n: usize = 0;
     var first = true;
@@ -133,62 +64,21 @@ pub fn foldSenderName(sender: []const u8, out: []u8) ![]const u8 {
 }
 
 /// A request token, unique among this connection's requests.
-///
-/// The portal's own rule is `[A-Za-z0-9_]+`, so a '-' is illegal and a
-/// timestamp with dashes would be rejected. The seed makes the token
-/// predictable from the caller, which is what lets a test assert the exact
-/// request path; uniqueness is the caller's job, and on the client side that
-/// is a monotonic counter.
 pub fn writeToken(seed: u64, out: []u8) ![]const u8 {
     if (out.len < 16) return error.NoSpaceLeft;
     return std.fmt.bufPrint(out, "glin{x}", .{seed});
 }
 
 /// The `a{sv}` options for a request.
-///
-/// Returns the byte length the array declared, so a caller writing into a
-/// larger buffer can check the portal's own limit (nothing enforces one, but
-/// a 4 KiB body buffer is a reasonable ceiling and silently truncating
-/// options is worse than saying they did not fit).
-/// The declared type of the `filters` option.
-///
-/// The portal documents this as `a(sa(us))` — a dict entry for each rule's
-/// (label, pattern) pair — and that is what the specification means. It is
-/// also, measured against a real dbus-broker AND a real dbus-daemon on
-/// 2026-09-30, the one form the bus refuses to unmarshal here: a message
-/// declaring it is disconnected with no error at all, and the portal never
-/// sees it. The EMPTY case parses, which is how the fault was narrowed to the
-/// element rather than the type.
-///
-/// `a(sa(ss))` is the same value with the same bytes — a struct and a dict
-/// entry are marshalled identically, the difference is only what the receiving
-/// type system calls it. Declared this way the message reaches the portal,
-/// which then accepts or refuses it on its own terms instead of the bus
-/// dropping the connection on the way in.
-///
-/// So: a portal that supports filters gets them; a portal that does not
-/// answers with a normal error, which `Client.choose` turns into a retry
-/// without filters. A dialog that opens beats a dialog that does not.
 pub const filters_signature = "a(sa(ss))";
 
 pub fn writeOptions(w: *dbus.Writer, opts: contract.Options, token: []const u8) !usize {
-    // The array's length word goes first. The first element is then aligned
-    // (a (string, variant) struct is 8-aligned) and the length is measured
-    // from WHERE THE ELEMENT ACTUALLY STARTED, not from the byte after the
-    // length word. Measuring from the length word instead counts the
-    // alignment padding as element data, and a portal reading that many bytes
-    // starts its first key in the middle of the padding.
-    // The array's declared length covers its ELEMENTS: the padding between
-    // the length word and the first element belongs to the message, not to
-    // the array. (Measuring it the other way — from after the length word,
-    // padding included — is a plausible reading, and it was tried here
-    // against a real bus: it made things worse, not better.)
+    // The array's length word goes first.
     const array_at = w.reserveU32();
     w.alignTo(8);
     const first_element = w.count();
 
-    // handle_token: not optional. Without it the portal invents a token, and
-    // with it we cannot compute the path the Response will arrive on.
+    // handle_token: not optional.
     try dictEntry(w, "handle_token", "s");
     w.writeString(token);
 
@@ -221,8 +111,7 @@ pub fn writeOptions(w: *dbus.Writer, opts: contract.Options, token: []const u8) 
     }
     if (opts.current_name) |name| {
         if (opts.kind == .save_file) {
-            // Only SaveFile reads it; sending it on an open request is noise
-            // the portal ignores.
+            // Only SaveFile reads it; sending it on an open request is noise the portal ignores.
             try dictEntry(w, "current_name", "s");
             w.writeString(name);
         }
@@ -233,14 +122,6 @@ pub fn writeOptions(w: *dbus.Writer, opts: contract.Options, token: []const u8) 
 }
 
 /// The method body: `ssa{sv}` — parent window, title, options.
-///
-/// `parent_window` is the empty string, which means "no parent". Passing the
-/// Wayland surface would be better (the dialog would be positioned and
-/// modality would be exact), and it is deliberately not done here: the format
-/// is `wayland:<surface-id>`, and getting a surface id wrong makes the portal
-/// place the dialog against a window that is not there. An unparented dialog
-/// is a real window the user can move; a wrongly parented one is a dialog
-/// that appears nowhere.
 pub fn writeMethodBody(w: *dbus.Writer, opts: contract.Options, token: []const u8) !void {
     w.writeString(""); // parent_window
     w.writeString(if (opts.title.len != 0) opts.title else opts.kind.defaultTitle());
@@ -253,8 +134,7 @@ fn writeFilterList(w: *dbus.Writer, filters: []const contract.Filter) !void {
     w.alignTo(8);
     const first_element = w.count();
     for (filters) |f| {
-        // 8: the element is a STRUCT, and a struct is 8-aligned in the D-Bus
-        // type system.
+        // 8: the element is a STRUCT, and a struct is 8-aligned in the D-Bus type system.
         w.alignTo(8);
         w.writeString(f.name);
         // Each filter's rule list: the second member of the (s, a(...)) struct.
@@ -264,9 +144,7 @@ fn writeFilterList(w: *dbus.Writer, filters: []const contract.Filter) !void {
         const first_rule = w.count();
         for (f.rules) |rule| {
             w.alignTo(8);
-            // The label, then the pattern. `writeString` writes the length
-            // itself; writing a u32 here as well would give the struct TWO
-            // length words and the pattern would arrive one word short.
+            // The label, then the pattern.
             w.writeString(rule.display());
             w.writeString(rule.pattern);
         }
@@ -275,10 +153,7 @@ fn writeFilterList(w: *dbus.Writer, filters: []const contract.Filter) !void {
     w.patchU32(array_at, @intCast(w.count() - first_element));
 }
 
-/// Begin one dict entry: 8-align, write the key, write the variant's type
-/// signature. The VALUE is the caller's job, because writing a value means
-/// knowing its type and this way there is exactly one place the key and its
-/// signature can drift apart.
+/// Begin one dict entry: 8-align, write the key, write the variant's type signature.
 fn dictEntry(w: *dbus.Writer, key: []const u8, variant_sig: []const u8) !void {
     w.alignTo(8);
     w.writeString(key);
@@ -302,36 +177,18 @@ pub const Decoded = struct {
 };
 
 /// Decode a `Response` body (`ua{sv}`) and pick out the `uris`.
-///
-/// `out` is caller-owned backing space for the URI list, because the URIs
-/// themselves are slices into `body` and only the LIST needs to live
-/// somewhere. Every other key in `results` is skipped rather than rejected:
-/// a portal is allowed to add one, and a client that refuses to decode a
-/// response because of an unfamiliar key in a dictionary is a client that
-/// breaks on someone else's release.
 pub fn decodeResponse(body: []const u8, out: [][]const u8) !Decoded {
     var r = dbus.Reader.init(body);
     const code = try r.readU32();
 
     var n: usize = 0;
 
-    // The array's LENGTH is a u32, so it sits on a 4-byte boundary — and the
-    // first element is then aligned to 8. Aligning the length word to 8 as
-    // well reads a padding word as the length, and the whole results dict is
-    // then decoded from the wrong offset: the portal's answer silently comes
-    // back empty. The live round trip in `file_dialog.zig` is what found it.
+    // The array's LENGTH is a u32, so it sits on a 4-byte boundary — and the first element is then aligned to 8.
     const dict_len = try r.readU32();
     if (dict_len > r.rest().len) return error.Truncated;
     const dict_end = r.pos + dict_len;
 
-    // The reader keeps walking the WHOLE body rather than a sub-slice, and
-    // that is not a style choice. D-Bus alignment is absolute: every offset
-    // is measured from the start of the body. A reader over a slice that
-    // begins mid-body would align to multiples of 8 *within the slice*, and
-    // when the slice happens to start at offset 28 instead of 32 it reads a
-    // key string four bytes to the left of where the key is. The portal then
-    // reports a selection, the decoder returns garbage, and the failure looks
-    // like a portal bug.
+    // The reader keeps walking the WHOLE body rather than a sub-slice, and that is not a style choice.
     while (r.pos < dict_end) {
         r.alignTo(8);
         if (r.pos >= dict_end) break;
@@ -354,10 +211,6 @@ pub fn decodeResponse(body: []const u8, out: [][]const u8) !Decoded {
 }
 
 /// Step over a value of the given signature.
-///
-/// The set is the one the portal can put in a results dict. An unknown
-/// signature is an error rather than a guess: skipping a value without
-/// knowing its size is how a decoder ends up reading a length as a string.
 fn skipVariant(r: *dbus.Reader, sig: []const u8) !void {
     if (sig.len == 0) return error.BadValue;
     switch (sig[0]) {
@@ -373,8 +226,7 @@ fn skipVariant(r: *dbus.Reader, sig: []const u8) !void {
             const n = try r.readU32();
             if (n > r.rest().len) return error.Truncated;
             const end = r.pos + n;
-            // Only the array shapes the portal actually uses are walked;
-            // anything else is refused rather than mis-strided.
+            // Only the array shapes the portal actually uses are walked; anything else is refused rather than mis-strided.
             if (!std.mem.eql(u8, inner, "s") and
                 !std.mem.eql(u8, inner, "o") and
                 !std.mem.eql(u8, inner, "y") and
@@ -399,12 +251,6 @@ fn skipVariant(r: *dbus.Reader, sig: []const u8) !void {
 }
 
 /// The `AddMatch` rule that routes ONE request's Response to us.
-///
-/// Matching on the request path rather than on the member is deliberate. A
-/// member match would deliver every file dialog on the session, including
-/// other applications' — this is a session bus, not a private one — and the
-/// client would then have to filter them by path anyway. Matching the path
-/// means the bus does the filtering, which is what a match rule is for.
 pub fn writeResponseMatchRule(sender_folded: []const u8, token: []const u8, out: []u8) ![]const u8 {
     return std.fmt.bufPrint(
         out,
@@ -413,9 +259,7 @@ pub fn writeResponseMatchRule(sender_folded: []const u8, token: []const u8, out:
     );
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 test "each kind asks for its own portal method" {
     try std.testing.expectEqualStrings("OpenFile", memberFor(.open_file));
@@ -440,9 +284,7 @@ test "a sender with no colon is still usable" {
 
 test "the folded sender is the AddMatch rule's sender" {
     var buf: [64]u8 = undefined;
-    // The match rule and the request path must be built from the SAME folded
-    // name; a client that folded one and not the other waits for a signal on
-    // a path the portal never sends.
+    // The match rule and the request path must be built from the SAME folded name; a client that folded one and not the other waits for a signal on a path.
     try std.testing.expectEqualStrings("1_42", try foldSenderName(":1.42", &buf));
     try std.testing.expectEqualStrings("1_99", try foldSenderName(":1.99", &buf));
 }
@@ -485,8 +327,7 @@ test "an open request asks for a title, modality and its token" {
     try std.testing.expectEqualStrings("s", try options.variant());
     try std.testing.expectEqualStrings("Open a file", try options.readString());
 
-    // And nothing else: a request with a title, a token and modality is
-    // exactly those three options.
+    // And nothing else: a request with a title, a token and modality is exactly those three options.
     try std.testing.expect(!try options.nextKey());
 }
 
@@ -521,8 +362,7 @@ test "multiple is sent for an open request and not for a save target" {
         try std.testing.expect(try options.readBool());
     }
     {
-        // A save target is one path. Sending `multiple` there is a request no
-        // portal can honour, so the encoder does not send it.
+        // A save target is one path.
         var buf: [1024]u8 = undefined;
         var w = dbus.Writer.init(&buf);
         try writeMethodBody(&w, .{ .kind = .save_file, .multiple = true, .current_name = "name.txt" }, "t");
@@ -557,8 +397,7 @@ test "current_folder is a byte array holding a file URI, not a string" {
     while (try options.nextKey()) {
         const sig = try options.variant();
         if (std.mem.eql(u8, options.key, "current_folder")) {
-            // This is the assertion that matters: `ay`, and the bytes are the
-            // percent-encoded URI.
+            // This is the assertion that matters: `ay`, and the bytes are the percent-encoded URI.
             try std.testing.expectEqualStrings("ay", sig);
             const uri = try options.readByteArray();
             try std.testing.expectEqualStrings("file:///home/u/My%20Docs", uri);
@@ -591,10 +430,7 @@ test "filters arrive as the declared type: a name, then label/pattern pairs" {
     while (try options.nextKey()) {
         const sig = try options.variant();
         if (std.mem.eql(u8, options.key, "filters")) {
-            // The constant, not a literal: the declared type is a decision
-            // (`filters_signature` explains it at length), and a test that
-            // hard-coded the documented spelling would fail the moment that
-            // decision was recorded — which is exactly when it should not.
+            // The constant, not a literal: the declared type is a decision (`filters_signature` explains it at length), and a test that hard-coded the documented.
             try std.testing.expectEqualStrings(filters_signature, sig);
             var list = try options.array();
             try std.testing.expectEqualStrings("Images", try list.readFilterName());
@@ -643,8 +479,7 @@ test "the uris come out of the results dict, and other keys are skipped" {
     const dict_at = w.reserveU32();
     w.alignTo(8);
     const first = w.count();
-    // An unfamiliar key FIRST, with a type the decoder must step over, so a
-    // decoder that assumes `uris` is the only key fails here.
+    // An unfamiliar key FIRST, with a type the decoder must step over, so a decoder that assumes `uris` is the only key fails here.
     w.alignTo(8);
     w.writeString("other-key");
     w.writeSignature("u");
@@ -694,15 +529,7 @@ test "the match rule names this request's path and nothing else" {
     );
 }
 
-// ---------------------------------------------------------------------------
-// A test-side D-Bus reader
-//
-// Deliberately independent of `dbus.zig`'s `parse`: these tests are checking
-// what the ENCODER wrote, and a reader built on the same code would only prove
-// the two agree with each other. This one walks the body by the rules in the
-// specification, so a mistake in the encoder cannot hide behind a matching
-// mistake in the decoder.
-// ---------------------------------------------------------------------------
+// A test-side D-Bus reader Deliberately independent of `dbus.zig`'s `parse`: these tests are checking what the ENCODER wrote, and a reader built on the.
 
 const TestReader = struct {
     r: dbus.Reader,
@@ -724,11 +551,6 @@ const TestReader = struct {
     }
 
     /// Reinterpret the rest of the body as the options dictionary.
-    ///
-    /// The returned reader spans the WHOLE body with `pos` moved to the
-    /// dictionary, for the same reason the production decoder does: D-Bus
-    /// alignment is measured from the start of the body, so a reader over a
-    /// sub-slice that begins mid-body aligns to the wrong offsets.
     fn dict(self: *TestReader) !TestDict {
         self.r.alignTo(8);
         const len = try self.r.readU32();
@@ -809,11 +631,6 @@ const TestFilterList = struct {
     }
 
     /// How many rules the filter at the cursor holds, without consuming them.
-    ///
-    /// In BODY coordinates, not a sub-slice: alignment inside a slice that
-    /// begins mid-body is measured from the wrong origin, which is exactly the
-    /// mistake the encoder and this reader have to make together to be wrong
-    /// together.
     fn rules(self: *TestFilterList) !usize {
         const save = self.r.pos;
         const len = try self.r.readU32();

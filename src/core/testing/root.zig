@@ -1,32 +1,4 @@
 //! Reusable headless UI testing for glinlandui applications.
-//!
-//! The harness deliberately drives `wayland.Host` instead of reimplementing
-//! layout or input. It therefore exercises the same pointer/key/scroll path,
-//! Clay arena, component registry, and render-command production used by the
-//! application. No Wayland display, EGL context, or GPU is required.
-//!
-//! Typical use:
-//!!
-//! ```zig
-//! const ui = @import("glinlandui");
-//! const Driver = ui.testing.Driver;
-//!
-//! test "save button applies" {
-//!     var app = App{};
-//!     var driver = try Driver.init(std.testing.allocator, &app, App.root);
-//!     defer driver.deinit();
-//!
-//!     try driver.start(.{ .width = 720, .height = 480 });
-//!     try driver.click("settings.save-button");
-//!     try driver.expectText("Saved");
-//!     try std.testing.expect(app.saved);
-//! }
-//! ```
-//!
-//! IDs passed to the driver are the same stable string IDs used by component
-//! declarations (for example `"settings.save-button"`). Coordinate helpers
-//! remain available for tests of gestures, but semantic-ID helpers should be
-//! preferred.
 const std = @import("std");
 const host_mod = @import("../host.zig");
 const frame_mod = @import("../frame.zig");
@@ -66,10 +38,7 @@ pub const idle_frame_cap: usize = 16;
 /// Frame budget for `performScrollTo` before giving up.
 pub const scroll_frame_cap: usize = 32;
 
-/// A stable result from the most recently completed frame. Command bytes and
-/// text bytes live only until the next frame; query them before requesting the
-/// next frame. Element boxes and command records are copied into fixed test
-/// storage, so common assertions remain valid after a later frame.
+/// A stable result from the most recently completed frame.
 pub const FrameSnapshot = struct {
     width: u32 = 0,
     height: u32 = 0,
@@ -85,8 +54,7 @@ pub const FrameSnapshot = struct {
     cursor_shape: u32 = 0,
 };
 
-/// IDs are looked up after each frame, so a test can target any stable Clay
-/// ID without hard-coding screen coordinates.
+/// IDs are looked up after each frame, so a test can target any stable Clay ID without hard-coding screen coordinates.
 pub const Driver = struct {
     alloc: std.mem.Allocator,
     host: *Host,
@@ -111,15 +79,12 @@ pub const Driver = struct {
         height: u32 = 480,
     };
 
-    /// Initialize a driver around an already-created Host. This is useful
-    /// when the application owns Host state and wants to inspect it directly.
+    /// Initialize a driver around an already-created Host.
     pub fn init(alloc: std.mem.Allocator, host: *Host) Driver {
         return .{ .alloc = alloc, .host = host, .viewport = .{} };
     }
 
-    /// Initialize a Host with the supplied application root callback. The
-    /// Host is intentionally owned by the driver; call deinit when the test
-    /// ends. The allocator is used by Host for its Clay arena.
+    /// Initialize a Host with the supplied application root callback.
     pub fn initOwned(
         alloc: std.mem.Allocator,
         ctx: ?*anyopaque,
@@ -133,12 +98,7 @@ pub const Driver = struct {
 
     pub fn deinit(self: *Driver) void {
         if (self.initialized) {
-            // Clay stores a process-global pointer into the most recently
-            // initialized arena. Freeing that arena would make the next
-            // Host.init() read a dangling currentContext in
-            // Clay_MinMemorySize(). Keep the page-allocator arena alive for
-            // the rest of the test process; this path is only for the
-            // headless test harness, not a production allocator owner.
+            // Clay stores a process-global pointer into the most recently initialized arena.
             self.alloc.destroy(self.host);
             self.host = undefined;
             self.initialized = false;
@@ -159,22 +119,13 @@ pub const Driver = struct {
     }
 
     /// Render one frame through the normal Host/Clay frame path.
-    ///
-    /// This goes through `Host.frameWithOptions` rather than calling
-    /// `clayFrameWithOptions` directly, and that is load-bearing: only the Host
-    /// layer consumes the pending wheel delta and runs the per-frame registry
-    /// resets (click / scroll / image / semantics). Driving the Clay helper
-    /// directly left the wheel delta latched for every subsequent frame and let
-    /// registry entries accumulate, so `waitForIdle` could never settle and
-    /// every tag lookup became ambiguous after the second frame.
     pub fn frame(self: *Driver) void {
         self.last_command_len = 0;
         self.last_text_count = 0;
         self.options = .{
             .probe = captureFrame,
             .probe_user_data = @ptrCast(self),
-            // Resolve the semantics tree so onNode()/waitForIdle() see the
-            // geometry THIS frame produced. Off in production, on here.
+            // Resolve the semantics tree so onNode()/waitForIdle() see the geometry THIS frame produced.
             .resolve_semantics = true,
         };
         const shape = self.host.frameWithOptions(
@@ -190,16 +141,13 @@ pub const Driver = struct {
         self.last_frame.pointer_down = self.host.ptr.down;
     }
 
-    /// Move the pointer and render a frame. `button` is normally 0 for a
-    /// motion-only event; the current Host contract accepts it for parity
-    /// with Wayland forwarding.
+    /// Move the pointer and render a frame.
     pub fn move(self: *Driver, x: f32, y: f32) void {
         self.host.onPointerEvent(x, y, false, 0);
         self.frame();
     }
 
-    /// Press and release at a point, rendering once after the complete
-    /// gesture. This matches Host's release-based click semantics.
+    /// Press and release at a point, rendering once after the complete gesture.
     pub fn clickAt(self: *Driver, x: f32, y: f32) void {
         self.host.onPointerEvent(x, y, true, dispatch.BTN_LEFT);
         self.host.onPointerEvent(x, y, false, dispatch.BTN_LEFT);
@@ -214,8 +162,7 @@ pub const Driver = struct {
         self.clickAt(x, y);
     }
 
-    /// Press at a point without releasing. The next motion/release event is
-    /// delivered through the same Host state as a real Wayland gesture.
+    /// Press at a point without releasing.
     pub fn pressAt(self: *Driver, x: f32, y: f32) void {
         self.host.onPointerEvent(x, y, true, dispatch.BTN_LEFT);
         self.frame();
@@ -227,9 +174,7 @@ pub const Driver = struct {
         self.frame();
     }
 
-    /// Drag from one point to another with one motion event. The final
-    /// release is sent with button 0, matching the framework's current tests
-    /// and its drag-threshold contract.
+    /// Drag from one point to another with one motion event.
     pub fn drag(self: *Driver, x0: f32, y0: f32, x1: f32, y1: f32) void {
         self.host.onPointerEvent(x0, y0, true, dispatch.BTN_LEFT);
         self.host.onPointerEvent(x1, y1, false, 0);
@@ -249,9 +194,7 @@ pub const Driver = struct {
         return consumed;
     }
 
-    /// Type a string as raw evdev key presses. The input component owns the
-    /// exact US-layout mapping; this helper is intentionally simple and
-    /// handles ASCII letters/digits, space, and a few common punctuation keys.
+    /// Type a string as raw evdev key presses.
     pub fn typeText(self: *Driver, input_text: []const u8) !void {
         for (input_text) |byte| {
             const code = keyCodeForAscii(byte) orelse return error.UnsupportedCharacter;
@@ -283,8 +226,6 @@ pub const Driver = struct {
 
     pub fn texts(self: *const Driver) []const []const u8 {
         // This intentionally remains a lightweight compatibility method.
-        // Prefer hasText/expectText for assertions; returning a slice-of-slices
-        // would require temporary storage in a value-returning method.
         _ = self;
         return &.{};
     }
@@ -323,9 +264,6 @@ pub const Driver = struct {
     }
 
     /// Compose's `onNode(matcher)`: find NOW, keep a handle for actions.
-    /// Fails with TooManyNodes when the query is ambiguous, exactly like
-    /// Compose's onNode — a test that matches two widgets has a bug worth
-    /// surfacing rather than papering over with "first match wins".
     pub fn onNode(self: *Driver, q: finders.Query) !Interaction {
         const n = try finders.findSole(q);
         return .{ .driver = self, .query = q, .id = n.id, .tag = n.tag };
@@ -338,8 +276,7 @@ pub const Driver = struct {
         return self.onNode(qq);
     }
 
-    /// Compose's `onNodeWithText`, matched against a component's label
-    /// (a button's caption, a list row's text).
+    /// Compose's `onNodeWithText`, matched against a component's label (a button's caption, a list row's text).
     pub fn onNodeWithText(self: *Driver, expected_label: []const u8) !Interaction {
         return self.onNode(.{ .label = expected_label });
     }
@@ -356,20 +293,6 @@ pub const Driver = struct {
     }
 
     /// Compose's `waitForIdle`, adapted to an immediate-mode engine.
-    ///
-    /// There is no recomposition queue and no animation clock here, so "idle"
-    /// is a FIXED POINT: two consecutive frames must produce an identical
-    /// semantics fingerprint. TWO frames, not one, is required rather than
-    /// merely cautious — the engine has three documented one-frame lags:
-    ///
-    ///   1. scroll.declareScrollbars reads PREVIOUS-frame scroll data, so a
-    ///      thumb declares nothing on the frame the scroll changed.
-    ///   2. hover chrome (`cl.hovered()`) is driven by setPointerState, which
-    ///      hit-tests against the PREVIOUS frame's boxes.
-    ///   3. getScrollContainerData().found is false until one layout has run.
-    ///
-    /// A pending wheel delta also counts as "not idle": frame() consumes it, so
-    /// the fingerprint would change on the next frame by construction.
     pub fn waitForIdle(self: *Driver) !void {
         self.frame();
         var prev = semantics.fingerprint();
@@ -389,25 +312,16 @@ pub const Driver = struct {
         return error.NotIdle;
     }
 
-    /// Drive a pointer gesture: press at the start, motion along the plan, then
-    /// release at the end.
-    ///
-    /// Motions past `dispatch.drag_threshold_px` (6px) make this a DRAG, not a
-    /// click: the release fires no click and each motion scrolls the container
-    /// under the pointer via `scroll.dragScroll`. Routing the gesture through
-    /// real motions is deliberate — it is the only way a test can catch a
-    /// regression in that disambiguation.
+    /// Drive a pointer gesture: press at the start, motion along the plan, then release at the end.
     pub fn performTouch(self: *Driver, g: action_plan.Swipe) void {
-        // `origin`/`dest`, not `start`/`end`: Driver already has a `start`
-        // method (the initial frame), and Zig rejects the shadowing.
+        // `origin`/`dest`, not `start`/`end`: Driver already has a `start` method (the initial frame), and Zig rejects the shadowing.
         const origin = g.start();
         self.host.onPointerEvent(origin.x, origin.y, true, dispatch.BTN_LEFT);
         const n = g.stepCount();
         var i: usize = 1;
         while (i <= n) : (i += 1) {
             const p = g.pointAt(i);
-            // Button 0 marks a MOTION event (not BTN_LEFT), which is what lets
-            // dispatch.pointerEvent cross the drag threshold.
+            // Button 0 marks a MOTION event (not BTN_LEFT), which is what lets dispatch.pointerEvent cross the drag threshold.
             self.host.onPointerEvent(p.x, p.y, false, 0);
         }
         const dest = g.end();
@@ -415,8 +329,7 @@ pub const Driver = struct {
         self.frame();
     }
 
-    /// Find a command by stable Clay numeric ID. This is mainly for command
-    /// snapshots and color assertions; normal tests should use semantic IDs.
+    /// Find a command by stable Clay numeric ID.
     pub fn commandForId(self: *const Driver, id: []const u8) ?RenderCommand {
         const numeric = cl.getElementId(id).id;
         for (self.commands()) |cmd| {
@@ -485,11 +398,6 @@ pub const Driver = struct {
 };
 
 /// A handle to one node — Compose's `SemanticsNodeInteraction`.
-///
-/// It re-resolves against the CURRENT frame on every use rather than caching a
-/// node, because a `semantics.Node` is a frame-scoped snapshot: bounds and
-/// visibility do not exist until `endLayout` and are rebuilt every frame.
-/// Caching would silently assert against stale geometry after any action.
 pub const Interaction = struct {
     driver: *Driver,
     query: finders.Query,
@@ -502,50 +410,27 @@ pub const Interaction = struct {
     }
 
     /// Compose's `performClick`, with more of the pipeline intact.
-    ///
-    /// This does NOT invoke a stored callback: it injects a real pointer
-    /// press+release through `Host.onPointerEvent`, so the click travels the
-    /// same path as a user click — the 6px drag threshold, release-at-press
-    /// -origin, `click_registry` z-order dispatch, and a `getElementData` hit
-    /// test. A test built on this catches hit-testing, z-order and clipping
-    /// bugs that Compose's callback-invoking `performClick` structurally cannot.
-    ///
-    /// `waitForIdle` runs FIRST, and not as politeness: dispatch hit-tests the
-    /// geometry of the previous completed layout, so the frame we resolve the
-    /// click point against has to be settled or the point can miss.
     pub fn performClick(self: Interaction) !void {
         try self.driver.waitForIdle();
         const n = try self.node();
         if (!n.isDisplayed()) return error.NodeNotDisplayed;
-        // Compose raises here too ("the node has no click action"): clicking a
-        // label, a container, or a disabled control is a test bug, and silently
-        // spraying a pointer event at it would hide that.
+        // Compose raises here too ("the node has no click action"): clicking a label, a container, or a disabled control is a test bug, and silently spraying a.
         if (!n.actions.click) return error.NoClickAction;
         const c = n.visibleCenter();
         self.driver.clickAt(c.x, c.y);
         try self.driver.waitForIdle();
     }
 
-    /// Compose's `performScrollTo` / `performScrollToNode`: scroll the nearest
-    /// scrollable ancestor until this node is inside the clip rect.
-    ///
-    /// Uses `scroll.scrollBy` rather than wheel deltas on purpose — it is
-    /// deterministic, 1:1 and clamped, whereas the wheel path multiplies by
-    /// Clay's x10 factor and is routed to whichever container the pointer
-    /// happens to hover. Wheel routing is worth testing, but through
-    /// `Driver.scroll`, not through a scroll-to helper.
+    /// Compose's `performScrollTo` / `performScrollToNode`: scroll the nearest scrollable ancestor until this node is inside the clip rect.
     pub fn performScrollTo(self: Interaction) !void {
-        // The ancestor chain is stable across scrolls (ids do not move; only
-        // geometry does), so it is read once from the first resolved snapshot.
+        // The ancestor chain is stable across scrolls (ids do not move; only geometry does), so it is read once from the first resolved snapshot.
         const container = scrollAncestor(try self.node()) orelse return error.NoScrollableAncestor;
         var i: usize = 0;
         while (i < scroll_frame_cap) : (i += 1) {
             const cur = try self.node();
             if (cur.visible_fraction > 0) return;
             const intent = action_plan.revealDelta(cur);
-            // Zero delta plus zero visibility means no amount of scrolling can
-            // help (a zero-area node, or an empty clip). Fail loudly rather
-            // than spin until the frame budget runs out.
+            // Zero delta plus zero visibility means no amount of scrolling can help (a zero-area node, or an empty clip).
             if (intent.isZero()) return error.NodeNotDisplayed;
             scroll_mod.scrollBy(container.tag, intent.dx, intent.dy);
             self.driver.frame();
@@ -561,7 +446,6 @@ pub const Interaction = struct {
     }
 
     /// Compose's `performTextInput`: type printable ASCII into the node.
-    /// Requires `set_text` on the node, so a test cannot type into a label.
     pub fn performTextInput(self: Interaction, text: []const u8) !void {
         const n = try self.node();
         if (!n.actions.set_text) return error.NoSetTextAction;
@@ -579,8 +463,7 @@ pub const Interaction = struct {
         try assertions.isDisplayed(try self.node());
     }
 
-    /// Absence counts as "not displayed", which is what a test asserting that a
-    /// panel is closed actually means.
+    /// Absence counts as "not displayed", which is what a test asserting that a panel is closed actually means.
     pub fn assertIsNotDisplayed(self: Interaction) !void {
         const n = self.node() catch |e| switch (e) {
             error.NoNodeFound => return,
@@ -639,9 +522,7 @@ pub const Interaction = struct {
     }
 };
 
-/// The nearest CLIPPING ancestor that is a scroll container, from the node's
-/// declare-time snapshot chain. Innermost wins, so a node nested in an inner
-/// scroller is revealed by the scroller the user would use.
+/// The nearest CLIPPING ancestor that is a scroll container, from the node's declare-time snapshot chain.
 fn scrollAncestor(n: semantics.Node) ?semantics.Node {
     var i: usize = n.ancestor_len;
     while (i > 0) {
@@ -655,8 +536,7 @@ fn scrollAncestor(n: semantics.Node) ?semantics.Node {
     return null;
 }
 
-/// Stable public alias so applications can declare their own root callback
-/// without depending on the private test implementation type.
+/// Stable public alias so applications can declare their own root callback without depending on the private test implementation type.
 pub const RootFn = host_mod.RootFn;
 
 /// Linux evdev code table for the subset used by `Driver.typeText`.
@@ -750,18 +630,13 @@ test "driver follows pointer press/release and keyboard routes" {
     try std.testing.expectEqual(@as(usize, 1), app.key_hits);
 }
 
-// ---- E2E: the Compose-style surface -----------------------------------------
-//
-// These exercise the whole stack: component semantics registration, the
-// post-layout resolve, the query layer, and real pointer/scroll injection.
+// ---- E2E: the Compose-style surface ----------------------------------------- These exercise the whole stack: component semantics registration, the.
 
 const box_mod = @import("../components/box.zig");
 const button_mod = @import("../components/button.zig");
 const registry = @import("../components/click_registry.zig");
 
-/// Stable ids for the synthetic list. Distinct literals that outlive every
-/// frame: `ElementId.ID` hashes the string at runtime and the semantics node
-/// borrows it, so a per-frame buffer would dangle.
+/// Stable ids for the synthetic list.
 const e2e_rows = [_][]const u8{
     "e2e-row-0", "e2e-row-1", "e2e-row-2", "e2e-row-3", "e2e-row-4",
     "e2e-row-5", "e2e-row-6", "e2e-row-7", "e2e-row-8", "e2e-row-9",
@@ -780,8 +655,7 @@ const E2eApp = struct {
     }
 
     fn appChildren(ctx: ?*anyopaque) void {
-        // 10 rows of 40px in a 120px viewport: rows 0..2 are visible, the
-        // rest are clipped out until something scrolls them in.
+        // 10 rows of 40px in a 120px viewport: rows 0..2 are visible, the rest are clipped out until something scrolls them in.
         scroll_mod.scroll(.{
             .id = "e2e-scroll",
             .w = .{ .fixed = 200 },
@@ -826,9 +700,7 @@ const E2eApp = struct {
 const e2e_viewport = Driver.Viewport{ .width = 200, .height = 400 };
 
 fn e2eDriver(app: *E2eApp) !Driver {
-    // page_allocator, not testing.allocator: the Clay arena is deliberately
-    // left alive for the test process (see Driver.deinit's note), so a
-    // leak-checking allocator would report it.
+    // page_allocator, not testing.allocator: the Clay arena is deliberately left alive for the test process (see Driver.deinit's note), so a leak-checking.
     var driver = try Driver.initOwned(std.heap.page_allocator, app, E2eApp.root);
     try driver.start(e2e_viewport);
     return driver;
@@ -846,8 +718,7 @@ test "e2e: onNodeWithTag + performClick drives the real pointer path" {
     try row.assertIsDisplayed();
     try row.assertRole(.button);
     try row.assertTextEquals("e2e-row-0");
-    // ...and clickability folded in from click_registry, not from a field
-    // button() set itself.
+    // ...and clickability folded in from click_registry, not from a field button() set itself.
     try row.assertHasClickAction();
     try row.assertIsEnabled();
 
@@ -913,8 +784,7 @@ test "e2e: a disabled control is findable and reports itself disabled" {
     try off.assertTextEquals("Disabled");
     // Disabled widgets never register a hit target, so there is no action.
     try off.assertHasNoClickAction();
-    // And clicking it fails loudly instead of spraying an event at a dead
-    // control: Compose reports the missing click action the same way.
+    // And clicking it fails loudly instead of spraying an event at a dead control: Compose reports the missing click action the same way.
     try std.testing.expectError(error.NoClickAction, off.performClick());
     try std.testing.expectEqual(@as(usize, 0), app.clicks);
 }
@@ -952,14 +822,11 @@ test "e2e: performTouchInput swipes without clicking (drag threshold)" {
     const row = try driver.onNodeWithTag("e2e-row-1");
     const n = try row.node();
     const c = n.visibleCenter();
-    // A 50px swipe is past dispatch.drag_threshold_px, so the release must NOT
-    // fire a click. This is the regression guard for the engine's
-    // "press-drag-release scrolls instead of clicking" contract.
+    // A 50px swipe is past dispatch.drag_threshold_px, so the release must NOT fire a click.
     try row.performTouchInput(Swipe.down(c.x, c.y, 50));
     try std.testing.expectEqual(@as(usize, 0), app.clicks);
 
-    // A plain click on the same node still works, proving the swipe did not
-    // leave the pointer latched down.
+    // A plain click on the same node still works, proving the swipe did not leave the pointer latched down.
     try row.performClick();
     try std.testing.expectEqual(@as(usize, 1), app.clicks);
 }
@@ -969,8 +836,7 @@ test "e2e: waitForIdle converges on a fixed point" {
     var driver = try e2eDriver(&app);
     defer driver.deinit();
 
-    // Repeated idling is idempotent: the second call finds the fixed point
-    // immediately rather than failing after the frame budget.
+    // Repeated idling is idempotent: the second call finds the fixed point immediately rather than failing after the frame budget.
     try driver.waitForIdle();
     try driver.waitForIdle();
     try std.testing.expectEqual(@as(usize, 11), driver.onAllNodes(.{ .role = .button }));
@@ -984,8 +850,7 @@ test "e2e: scrolling via the wheel path also counts as not-idle until settled" {
     defer driver.deinit();
     try driver.waitForIdle();
 
-    // Hover the container, then emit a wheel delta: waitForIdle must consume
-    // the pending delta before declaring the UI settled.
+    // Hover the container, then emit a wheel delta: waitForIdle must consume the pending delta before declaring the UI settled.
     const box = driver.box("e2e-scroll").?;
     driver.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
     driver.scroll(0, 5);
@@ -1006,8 +871,7 @@ fn extHit(ctx: ?*anyopaque, _: usize) void {
 
 const ExtApp = struct {
     fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
-        // Exactly what examples/calculator.zig does: `on_click = null` so
-        // button() does not self-register, then an indexed registration.
+        // Exactly what examples/calculator.zig does: `on_click = null` so button() does not self-register, then an indexed registration.
         button_mod.button(.{
             .id = "ext-key",
             .label = "7",

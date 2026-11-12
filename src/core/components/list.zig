@@ -1,8 +1,4 @@
 // Agnostic reusable Clay list (toolkit-style, library only).
-// Generic over the item type: callers pass any slice + a comptime render
-// callback. Selection is caller-owned by index (props.selected).
-// Imports: std + zclay + core/color + core/render_common + sibling components ONLY.
-// Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
@@ -10,29 +6,19 @@ const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
 
 /// Selection callback: plain fn pointer + opaque ctx (no closures).
-/// Stored in ListProps (declare-only list never fires it); the owner
-/// (views/host) reads the built props back and fires
-/// `props.on_select(props.ctx, i)` on pointer dispatch.
 pub const ListSelectFn = ?*const fn (?*anyopaque, usize) void;
 
-/// Per-row click target (re-exported from the click registry so pages
-/// import list only). See click_registry.RowClick.
+/// Per-row click target (re-exported from the click registry so pages import list only).
 pub const RowClick = registry.RowClick;
 
-/// List layout direction: vertical (rows top-to-bottom), horizontal
-/// (cells left-to-right in one row), or grid (rows of `cols` cells).
+/// List layout direction: vertical (rows top-to-bottom), horizontal (cells left-to-right in one row), or grid (rows of `cols` cells).
 pub const Direction = enum {
     vertical,
     horizontal,
     grid,
 };
 
-/// List props. All styling via props with neutral dark defaults.
-/// `radius` rounds each row; `gap` separates rows (child_gap of the
-/// list container — callers nested in a gapped column pass the same
-/// gap so wrapped rows keep their original pitch).
-/// `selected` is caller-owned selection by index (null = none).
-/// `on_select`/`ctx` are stored verbatim for owner-side dispatch.
+/// List props.
 pub const ListProps = struct {
     id: []const u8,
     direction: Direction = .vertical,
@@ -58,31 +44,23 @@ pub const ListProps = struct {
     /// Uniform row border (0 = none) + color; emits a Clay BORDER per row.
     border_width: u16 = 0,
     border_color: Color = Color.rgb(0x00, 0x00, 0x00),
-    /// Grid/horizontal cell fill (null = transparent, e.g. image grids).
-    /// Vertical rows always use row_bg/selected_bg/hover_bg.
+    /// Grid/horizontal cell fill (null = transparent, e.g.
     cell_bg: ?Color = null,
-    /// Grid/horizontal selected ring (0 = none; vertical rows show
-    /// selected_bg instead and ignore these unless border_width is set).
+    /// Grid/horizontal selected ring (0 = none; vertical rows show selected_bg instead and ignore these unless border_width is set).
     selected_border_width: u16 = 0,
     selected_border_color: Color = Color.rgb(0x7a, 0xb8, 0xff),
-    /// Grid/horizontal hover ring on enabled unselected cells (0 = none;
-    /// vertical rows show hover_bg instead).
+    /// Grid/horizontal hover ring on enabled unselected cells (0 = none; vertical rows show hover_bg instead).
     hover_border_width: u16 = 0,
     hover_border_color: Color = Color.rgb(0x5a, 0x5a, 0x5a),
-    /// Disabled list: rows render `disabled_bg`, never take hover chrome,
-    /// and register no clicks (declare never fires; owners must also check).
+    /// Disabled list: rows render `disabled_bg`, never take hover chrome, and register no clicks (declare never fires; owners must also check).
     disabled: bool = false,
     disabled_bg: Color = Color.rgb(0x1a, 0x1a, 0x1a),
     selected: ?usize = null,
     on_select: ListSelectFn = null,
     ctx: ?*anyopaque = null,
-    /// Per-row clicks (Stage B): when non-null, row i registers
-    /// clicks[i] (guard i < clicks.len; rows beyond get no entry).
-    /// When null, the legacy on_select path is unchanged.
+    /// Per-row clicks (Stage B): when non-null, row i registers clicks[i] (guard i < clicks.len; rows beyond get no entry).
     clicks: ?[]const RowClick = null,
-    /// Dispatch priority for this list's rows: highest-z containing match
-    /// wins regardless of declare order (overlay dropdowns float above
-    /// in-flow rows). Default 0.
+    /// Dispatch priority for this list's rows: highest-z containing match wins regardless of declare order (overlay dropdowns float above in-flow rows).
     click_z: i16 = 0,
 };
 
@@ -98,17 +76,14 @@ fn listSizingW(props: ListProps) cl.SizingAxis {
     return .grow;
 }
 
-/// Pure: responsive grid column count for a content width. 2 cols
-/// under 420px, 3 under 640px, else 4 (clamped 2..4 so narrow windows
-/// get big cards and wide windows stay within click-slot caps).
+/// Pure: responsive grid column count for a content width.
 pub fn gridCols(content_w: u32) usize {
     if (content_w < 420) return 2;
     if (content_w < 640) return 3;
     return 4;
 }
 
-/// Pure: grid cell size filling content_w with `cols` columns at `gap`
-/// px. 16:9 cells. Returns [w, h] (min 1).
+/// Pure: grid cell size filling content_w with `cols` columns at `gap` px.
 pub fn gridCell(content_w: u32, cols: usize, gap: u16) [2]u32 {
     const c: u32 = @intCast(@max(cols, 1));
     const g: u32 = gap;
@@ -118,33 +93,7 @@ pub fn gridCell(content_w: u32, cols: usize, gap: u16) [2]u32 {
     return .{ @max(w, 1), h };
 }
 
-/// Declare a list over any slice: container (.ID(props.id)) + one cell
-/// per item (.IDI(props.id, index + 1)).
-///
-/// Direction branches:
-/// - vertical: rows top-to-bottom (existing behavior, pixel parity).
-///   Row chrome: bg = selected ? selected_bg : hover ? hover_bg :
-///   row_bg (hover via cl.hovered() inside the row literal).
-/// - horizontal: cells left-to-right in one row (fixed height row_h,
-///   fit width). Same bg chrome as vertical rows.
-/// - grid: rows of `cols` fixed cells (cell_w × cell_h). Cells are
-///   transparent unless cell_bg is set; the selected index draws the
-///   selected ring, a hovered enabled unselected cell draws the hover
-///   ring (both evaluated inside the cell literal).
-///
-/// Content is declared by the caller's comptime
-/// `renderItem(item_ctx, items[i], i)`. Text color stays the render
-/// callback's job (list owns bg/border chrome only).
-///
-/// The +1 cell-ID offset is load-bearing: Clay defines
-/// `CLAY_ID(x) == CLAY_IDI(x, 0)`, so cell 0 as IDI(props.id, 0) would
-/// collide with the container .ID(props.id). Cells are therefore
-/// IDI(base, 1..N) for items 0..N-1 — same scheme, unique identities.
-///
-/// `items` must be a slice (comptime-asserted, else @compileError).
-/// Click/selection handling stays owner-side: the owner stores the
-/// built ListProps and fires on_select on pointer dispatch; list()
-/// itself never fires callbacks and never mutates selection.
+/// Declare a list over any slice: container (.ID(props.id)) + one cell per item (.IDI(props.id, index + 1)).
 pub fn list(
     props: ListProps,
     items: anytype,
@@ -168,15 +117,9 @@ pub fn list(
     }
 }
 
-/// Shared click wiring for one cell/row (Stage B clicks win over the
-/// legacy on_select; disabled registers nothing so hover stays .default).
-/// Rows that register use the .pointer cursor.
+/// Shared click wiring for one cell/row (Stage B clicks win over the legacy on_select; disabled registers nothing so hover stays .default).
 fn registerCell(props: ListProps, i: usize) void {
-    // Semantics FIRST, before the disabled early-return: a disabled row must
-    // still be discoverable so `assertIsDisabled` has something to assert on.
-    // Rows carry no label of their own (the text comes from the caller's
-    // renderItem), so tests select them by container plus index:
-    //     onNodeWithIndex(.{ .role = .list_item }, 3)
+    // Semantics FIRST, before the disabled early-return: a disabled row must still be discoverable so `assertIsDisabled` has something to assert on.
     semantics.register(.{
         .id = rowId(props.id, i),
         .role = .list_item,
@@ -212,14 +155,9 @@ fn listVertical(
         for (items, 0..) |item, i| {
             const is_sel: bool = if (props.selected) |sel| sel == i else false;
             const base_bg: Color = if (props.disabled) props.disabled_bg else if (is_sel) props.selected_bg else props.row_bg;
-            // NOTE: cl.hovered() must be evaluated INSIDE this row's UI()
-            // config literal (while the row element is open) so it queries
-            // this row — calling it beforehand would query the list
-            // container instead and leak hover_bg to every unselected row.
+            // NOTE: cl.hovered() must be evaluated INSIDE this row's UI() config literal (while the row element is open) so it queries this row — calling it.
             cl.UI()(.{
-                // +1: CLAY_ID(base) == CLAY_IDI(base, 0) — row i takes
-                // IDI(base, i + 1) so row 0 never collides with the
-                // container .ID(props.id) above.
+                // +1: CLAY_ID(base) == CLAY_IDI(base, 0) — row i takes IDI(base, i + 1) so row 0 never collides with the container .ID(props.id) above.
                 .id = .IDI(props.id, @as(u32, @intCast(i + 1))),
                 .layout = .{
                     .direction = .left_to_right,
@@ -299,8 +237,7 @@ fn listGrid(
     })({
         var row: usize = 0;
         while (row * cols < items.len) : (row += 1) {
-            // Row boxes are layout-only (no id — hit-testing lives on
-            // the cells, so no identity is needed here).
+            // Row boxes are layout-only (no id — hit-testing lives on the cells, so no identity is needed here).
             cl.UI()(.{
                 .layout = .{
                     .direction = .left_to_right,
@@ -323,8 +260,7 @@ fn listGrid(
                         },
                         .background_color = if (props.cell_bg) |bg| bg.toClay() else .{ 0, 0, 0, 0 },
                         .corner_radius = .all(@floatFromInt(props.radius)),
-                        // Selected ring wins; hover ring only on enabled
-                        // unselected cells (evaluated inside the literal).
+                        // Selected ring wins; hover ring only on enabled unselected cells (evaluated inside the literal).
                         .border = if (is_sel and props.selected_border_width > 0) .{
                             .color = props.selected_border_color.toClay(),
                             .width = .outside(props.selected_border_width),
@@ -382,10 +318,7 @@ const demo_items = [_]TitleItem{
     .{ .title = "Gamma" },
 };
 
-// NOTE (Zig 0.16): `arr[0..]` on a const global folds to *const [N]T,
-// not a slice — so every call site coerces through an explicitly typed
-// slice const (still static: points at the static array). list() takes
-// true slices only (comptime-asserted).
+// NOTE (Zig 0.16): `arr[0..]` on a const global folds to *const [N]T, not a slice — so every call site coerces through an explicitly typed slice const.
 const demo_slice: []const TitleItem = &demo_items;
 
 fn declareList() void {
@@ -427,19 +360,15 @@ fn declareStrList() void {
     list(.{ .id = "test-str-list" }, str_slice, {}, renderB);
 }
 
-/// Run one headless Clay frame around `declare_fn`, counting rectangle
-/// and text render commands.
+/// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
 fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !void {
     const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed). Clay keeps
-    // a global currentContext pointer inside this arena, so freeing it
-    // would dangle the *next* test's minMemorySize/initialize (segfault).
+    // NOTE: intentionally leaked (page_allocator, never freed).
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
     cl.setMeasureTextFunction(void, {}, stubMeasure);
-    // Park the pointer far outside the layout so hovered() is false and
-    // the test observes the resting bg path deterministically.
+    // Park the pointer far outside the layout so hovered() is false and the test observes the resting bg path deterministically.
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     declare_fn();
@@ -573,9 +502,7 @@ test "generic list selected index uses selected_bg; hover hits one row" {
     try std.testing.expect(sel1 != null);
     try std.testing.expectEqual(sel_c, sel1.?);
 
-    // Frame 2: pointer over row-0 center (frame-1 box). Only row-0 takes
-    // hover_bg; the sibling unselected row keeps row_bg and the selected
-    // row keeps selected_bg.
+    // Frame 2: pointer over row-0 center (frame-1 box).
     const box = cl.getElementData(rowId("test-hover-list", 0)).bounding_box;
     cl.setPointerState(.{ .x = box.x + box.width * 0.5, .y = box.y + box.height * 0.5 }, false);
     cl.beginLayout();
@@ -596,8 +523,7 @@ test "generic list selected index uses selected_bg; hover hits one row" {
 
 // ---- Agnostic extensions for app wiring (sidebar/content parity) ----
 
-/// Run one headless Clay frame around `declare_fn`, returning the render
-/// commands (valid until the next beginLayout).
+/// Run one headless Clay frame around `declare_fn`, returning the render commands (valid until the next beginLayout).
 fn layoutCommands(declare_fn: *const fn () void) ![]cl.RenderCommand {
     const mem_size = cl.minMemorySize();
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
@@ -961,8 +887,7 @@ fn declareSelGrid() void {
 
 test "grid selected cell draws the selected ring, others none" {
     const cmds = try layoutCommands(declareSelGrid);
-    // NOTE: Clay tags border commands with a derived id (not the cell
-    // element id), so match by count + color instead of by id.
+    // NOTE: Clay tags border commands with a derived id (not the cell element id), so match by count + color instead of by id.
     var borders: usize = 0;
     for (cmds) |c| {
         if (c.command_type != .border) continue;
@@ -1015,8 +940,7 @@ test "grid hover draws the hover ring on one cell only" {
     list(hover_grid, g_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
     const cmds = cl.endLayout();
     try std.testing.expect(cl.pointerOver(rowId("test-hov-grid", 0)));
-    // One hover ring + the selected ring (matched by color: border
-    // commands carry derived ids, not cell element ids).
+    // One hover ring + the selected ring (matched by color: border commands carry derived ids, not cell element ids).
     var hov_n: usize = 0;
     var sel_n: usize = 0;
     for (cmds) |c| {

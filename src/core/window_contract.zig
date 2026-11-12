@@ -1,11 +1,4 @@
 //! Shared, platform-neutral window contract + tests.
-//!
-//! Everything in this module is pure Zig with no C imports, no Wayland
-//! objects, and no windowing system. Both the native Wayland backend and the
-//! macOS/CoreGraphics backend build on exactly these definitions, and the
-//! tests here run IDENTICALLY on both platforms. This is what makes the
-//! test count equal across operating systems: the window contract is tested
-//! once, in one place, with one set of expected values.
 const std = @import("std");
 const consts = @import("protocol_consts.zig");
 
@@ -15,16 +8,14 @@ pub const Placement = struct {
     y: i32,
 };
 
-/// 5.1: center the 720x480 window in the output; clamp to 0,0 when the
-/// output is smaller than the window.
+/// 5.1: center the 720x480 window in the output; clamp to 0,0 when the output is smaller than the window.
 pub fn computePlacement(out_w: u32, out_h: u32) Placement {
     const x: i32 = if (out_w > 720) @intCast((out_w - 720) / 2) else 0;
     const y: i32 = if (out_h > 480) @intCast((out_h - 480) / 2) else 0;
     return .{ .x = x, .y = y };
 }
 
-/// Tiled window size limits: min 520x360. A 0 dimension means the
-/// compositor defers to the client -> keep the default size.
+/// Tiled window size limits: min 520x360.
 pub const min_width: u32 = 520;
 pub const min_height: u32 = 360;
 
@@ -34,8 +25,7 @@ pub fn clampSize(w: u32, h: u32) struct { w: u32, h: u32 } {
     return .{ .w = cw, .h = ch };
 }
 
-/// Escape closes the window. Accepts the linux input-event-codes keycode
-/// (1) and the wl_keyboard keysym (0xff1b).
+/// Escape closes the window.
 pub fn keyToClose(keycode: u32) bool {
     return keycode == 1 or keycode == 0xff1b;
 }
@@ -62,22 +52,13 @@ pub fn layerSize() LayerSize {
 pub const eglConfigAttribs = consts.eglConfigAttribs;
 
 /// Parse QS_SETTINGS_TEST_FRAMES — null/empty/invalid means "run forever".
-///
-/// Surrounding whitespace is trimmed, and that is not tidiness: on Windows
-/// `set QS_SETTINGS_TEST_FRAMES=1 & app` — with a space before the `&`, the
-/// way it is naturally typed — sets the variable to "1 " WITH a trailing
-/// space, because cmd's `set` takes everything up to the `&`. A strict
-/// `parseInt` rejects that, the cap silently becomes "run forever", and the
-/// consequence is not a wrong number, it is a process that never exits: a hung
-/// CI job and a developer who cannot tell why their window will not close.
 pub fn parseTestFrames(env: ?[]const u8) ?u32 {
     const s = std.mem.trim(u8, env orelse return null, " \t\r\n");
     if (s.len == 0) return null;
     return std.fmt.parseInt(u32, s, 10) catch null;
 }
 
-/// Engine-side motion dedup (memoized immediate, input half): hover floods
-/// and sub-pixel repeats must not dirty the frame loop.
+/// Engine-side motion dedup (memoized immediate, input half): hover floods and sub-pixel repeats must not dirty the frame loop.
 pub fn pointerPosChanged(old_x: f32, old_y: f32, new_x: f32, new_y: f32) bool {
     const ox: i32 = @intFromFloat(@floor(old_x));
     const oy: i32 = @intFromFloat(@floor(old_y));
@@ -86,8 +67,7 @@ pub fn pointerPosChanged(old_x: f32, old_y: f32, new_x: f32, new_y: f32) bool {
     return ox != nx or oy != ny;
 }
 
-/// Wayland 24.8 fixed-point → float. Portable so both platforms test the
-/// same conversion.
+/// Wayland 24.8 fixed-point → float.
 pub fn fixedToFloat(f: i32) f32 {
     return @as(f32, @floatFromInt(f)) / 256.0;
 }
@@ -112,8 +92,7 @@ pub const WindowConfig = struct {
     min_height: u32 = 360,
 };
 
-/// UI delegate: the backend owns the window/present; the delegate draws in
-/// on_frame and receives input/lifecycle callbacks.
+/// UI delegate: the backend owns the window/present; the delegate draws in on_frame and receives input/lifecycle callbacks.
 pub const Delegate = struct {
     ptr: *anyopaque,
     on_frame: *const fn (*anyopaque, w: u32, h: u32) void,
@@ -125,9 +104,7 @@ pub const Delegate = struct {
     is_quit: *const fn (*anyopaque) bool,
 };
 
-/// A backend-neutral window: the state every backend shares. The native
-/// Wayland Window and the macOS Window both hold one of these and add their
-/// platform objects alongside it.
+/// A backend-neutral window: the state every backend shares.
 pub const WindowState = struct {
     config: WindowConfig,
     delegate: ?Delegate = null,
@@ -150,8 +127,7 @@ pub const WindowState = struct {
         };
     }
 
-    /// 0 in a dimension defers to the client -> config default size;
-    /// otherwise max(dim, config min).
+    /// 0 in a dimension defers to the client -> config default size; otherwise max(dim, config min).
     pub fn clamp(self: WindowState, w: u32, h: u32) struct { w: u32, h: u32 } {
         const cw = if (w == 0) self.config.width else @max(w, self.config.min_width);
         const ch = if (h == 0) self.config.height else @max(h, self.config.min_height);
@@ -317,18 +293,13 @@ test "parseTestFrames parses N, rejects null/empty/invalid" {
 }
 
 test "parseTestFrames tolerates surrounding whitespace" {
-    // The Windows footgun this exists for: `set QS_SETTINGS_TEST_FRAMES=1 & app`
-    // — a space before the `&`, which is how it gets typed — sets the value to
-    // "1 " WITH a trailing space, because cmd's `set` takes everything up to
-    // the `&`. A strict parse turns that into "no cap", and the symptom is a
-    // process that never exits rather than an error message.
+    // The Windows footgun this exists for: `set QS_SETTINGS_TEST_FRAMES=1 & app` — a space before the `&`, which is how it gets typed — sets the value to.
     try std.testing.expectEqual(@as(?u32, 1), parseTestFrames("1 "));
     try std.testing.expectEqual(@as(?u32, 1), parseTestFrames(" 1"));
     try std.testing.expectEqual(@as(?u32, 1), parseTestFrames(" 1 "));
     try std.testing.expectEqual(@as(?u32, 1), parseTestFrames("1\t"));
     try std.testing.expectEqual(@as(?u32, 3), parseTestFrames("\t3\r\n"));
-    // Whitespace-only is still "unset", not zero: a cap of 0 means interactive
-    // too, but the distinction is not worth losing.
+    // Whitespace-only is still "unset", not zero: a cap of 0 means interactive too, but the distinction is not worth losing.
     try std.testing.expectEqual(@as(?u32, null), parseTestFrames("   "));
     try std.testing.expectEqual(@as(?u32, null), parseTestFrames(""));
     // And a number with junk inside it is still rejected, not truncated.

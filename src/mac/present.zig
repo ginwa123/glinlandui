@@ -1,46 +1,4 @@
 //! Pixel hand-off from the software surface to CoreGraphics (pure).
-//!
-//! ## What CoreGraphics actually wants here — measured, not assumed
-//!
-//! The obvious guess is "CGBitmapContext wants BGR with the origin at the
-//! bottom-left, so swap R/B and flip vertically". That guess is WRONG for this
-//! path, and it cost a day: it rendered the calculator upside down with the
-//! accent key at the top, and blue as pink.
-//!
-//! What was measured, by reproducing the shim's exact CoreGraphics round trip
-//! (`CGBitmapContextCreate` -> `CGBitmapContextCreateImage` ->
-//! `CGContextDrawImage`) and reading back the DISPLAYED colour:
-//!
-//!   - `soft.Surface` is TOP-LEFT origin: its row 0 is the visual top, and its
-//!     bytes are plain R, G, B, A. Going through a `CGImage` is what removes
-//!     the vertical flip — a CGImage's row 0 is its TOP row — so the rows stay
-//!     in order.
-//!   - with the shim's bitmap info, `kCGImageAlphaPremultipliedLast |
-//!     kCGBitmapByteOrder32Big`, the four bytes of a pixel are read as
-//!     R, G, B, A: exactly the order they are already in.
-//!
-//! So the required transform is the IDENTITY. Both the channel swap and the
-//! vertical flip are over-corrections, and each one produces a plausible,
-//! wrong-looking window rather than an obvious failure.
-//!
-//! ## Read this before trusting the tests below
-//!
-//! Every test in this file compares the blit buffer against the surface it
-//! was copied from — i.e. against this module's own idea of the answer. They
-//! are worth having, and they pin the layout, but they CANNOT catch a wrong
-//! hand-off to CoreGraphics, because the thing that goes wrong lives in
-//! `mac/shim.m`'s `kGlinBitmapInfo` and is invisible from here. They stayed
-//! green through a bug that rendered the entire window bright red.
-//!
-//! The check that actually guards the hand-off is `ci/check_macos_colors.c`,
-//! which drives CoreGraphics for real and compares the DISPLAYED colour with
-//! the colour that was written. It needs no window server and no Screen
-//! Recording permission, so it runs on every macOS build machine. Run it with
-//! `./ci/check_macos_colors.sh`.
-//!
-//! `identityRgba8` keeps the call site honest and the buffer reusable across
-//! frames, and the tests below pin the layout and the colours — the two things
-//! a wrong transform actually breaks.
 
 const std = @import("std");
 
@@ -52,22 +10,12 @@ pub fn blitBufLen(width: u32, height: u32) usize {
     return @as(usize, width) * @as(usize, height) * bytes_per_pixel;
 }
 
-/// True when the geometry can produce a blittable buffer at all. A zero
-/// dimension means "no surface yet", and a 0-byte CGBitmapContext is rejected
-/// by CoreGraphics, so this must be false rather than producing a tiny buffer.
+/// True when the geometry can produce a blittable buffer at all.
 pub fn blitSizeValid(width: u32, height: u32) bool {
     return width > 0 and height > 0;
 }
 
 /// Copy a top-left-origin RGBA8 surface into the buffer CoreGraphics will read.
-///
-/// This is deliberately an identity copy — see the module comment for the
-/// measurement that disproved the channel-swap/vertical-flip assumption. The
-/// function exists (rather than the caller just copying) so the contract has
-/// one named home and the tests have something to assert against.
-///
-/// `dst` must be at least `blitBufLen(width, height)`; a longer `dst` keeps its
-/// tail untouched so one caller-owned buffer can be reused every frame.
 pub fn identityRgba8(src: []const u8, dst: []u8, width: u32, height: u32) void {
     if (!blitSizeValid(width, height)) return;
     const want = blitBufLen(width, height);
@@ -75,9 +23,7 @@ pub fn identityRgba8(src: []const u8, dst: []u8, width: u32, height: u32) void {
     @memcpy(dst[0..n], src[0..n]);
 }
 
-/// The accent blue the calculator's `=` key uses. Used by the tests below to
-/// prove channel order survives the hand-off, because a swapped R/B turns this
-/// into a red that still looks like "a colour" rather than an error.
+/// The accent blue the calculator's `=` key uses.
 pub const test_accent: [4]u8 = .{ 0x2f, 0x6d, 0xf6, 0xff };
 
 // ===================== tests (parity suite — every platform) =====================
@@ -109,9 +55,7 @@ test "a single pixel survives the hand-off byte for byte" {
 }
 
 test "channels are NOT swapped — the accent blue stays blue" {
-    // THE regression guard for the bug this module documents. Swapping R and B
-    // turns 0x2f6df6 into 0xf66d2f, a red. Nothing errors; the window just
-    // looks wrong, which is why this is pinned by colour and not by count.
+    // THE regression guard for the bug this module documents.
     var src: [4]u8 = undefined;
     var dst: [4]u8 = undefined;
     src = test_accent;
@@ -122,8 +66,7 @@ test "channels are NOT swapped — the accent blue stays blue" {
 }
 
 test "rows are NOT flipped — row 0 stays row 0" {
-    // THE other regression guard. A vertical flip mirrors the whole UI: on the
-    // calculator the display moves to the bottom and the `=` key to the top.
+    // THE other regression guard.
     const src = [_]u8{
         1, 1, 1, 255, // row 0 = top
         2, 2, 2, 255,
@@ -135,10 +78,7 @@ test "rows are NOT flipped — row 0 stays row 0" {
 }
 
 test "the calculator's real layout survives in the right place" {
-    // A miniature of the actual frame: a display panel along the TOP and a
-    // single accent key at the BOTTOM-right. This is the whole bug in one
-    // test — the panel must stay in the first rows and the accent must stay in
-    // the last, and the accent must still be blue.
+    // A miniature of the actual frame: a display panel along the TOP and a single accent key at the BOTTOM-right.
     const w: u32 = 8;
     const h: u32 = 6;
     var src: [w * h * 4]u8 = undefined;
@@ -166,8 +106,7 @@ test "the calculator's real layout survives in the right place" {
 }
 
 test "every distinct colour round-trips to the same position" {
-    // A 2x2 of four different colours, checked per pixel — catches a channel
-    // swap that happens to be right for greys but wrong for colour.
+    // A 2x2 of four different colours, checked per pixel — catches a channel swap that happens to be right for greys but wrong for colour.
     const src = [_]u8{
         255, 0,   0,   255,
         0,   255, 0,   255,
@@ -180,8 +119,7 @@ test "every distinct colour round-trips to the same position" {
 }
 
 test "left and right stay left and right" {
-    // A mirror would pass a row-order-only test, so pin the column order
-    // explicitly: two visually different cells in one row.
+    // A mirror would pass a row-order-only test, so pin the column order explicitly: two visually different cells in one row.
     const src = [_]u8{
         10, 0, 0, 255, // left
         20, 0, 0, 255, // right

@@ -1,37 +1,4 @@
 //! The deterministic text estimator — the pure half of the text backend.
-//!
-//! ## Why this is its own module (and not just "the top of text_portable")
-//!
-//! `core/text_portable.zig` used to hold two things that have nothing to do
-//! with each other:
-//!
-//!   1. this estimator — a pure function of (bytes, font_size), plus a small
-//!      extent cache and its hit/miss counters. No I/O, no allocator, no
-//!      platform.
-//!   2. macOS system-font *discovery* — a list of `/System/Library/Fonts/...`
-//!      paths and an `exists` check that goes through `std.Io`.
-//!
-//! Every build reaches (2) through `platform.zig`'s `is_test` branch, so
-//! `text_portable.zig` is the macOS production text backend AND the test
-//! backend on every OS (README invariant I2). That made (1) — the part a new
-//! platform actually needs — unreachable for any host that cannot run
-//! `std.Io`: the wasm/browser backend included, since `std.Io.Threaded` is an
-//! OS-threaded reactor with no meaning in a wasm module.
-//!
-//! Splitting (1) out is what lets a backend take the estimator without taking
-//! a filesystem. `text_portable.zig` and `src/mac/text.zig` keep their exact
-//! public surface (they re-export from here), and `src/web/text.zig` re-exports
-//! from here too while supplying its own no-fs font resolution.
-//!
-//! The three `test` blocks below moved here from `text_portable.zig`. That is a
-//! MOVE, not an addition: the count in `tests.lock` is unchanged, because
-//! `text_portable.zig` still reaches this file and the parity suite still
-//! collects the same three tests exactly once.
-//!
-//! `ResolveFontError` also lives here, which looks like a layering slip until
-//! you see the alternative: both `text_portable.zig` (via fs) and
-//! `src/web/text.zig` (via embedded/fetched bytes) must return it, and the web
-//! module must not import `text_portable.zig` at all. One definition, shared.
 const std = @import("std");
 
 /// Clay-shaped text extent.
@@ -40,9 +7,7 @@ pub const TextExtent = struct {
     h: f32,
 };
 
-/// Returned by a font resolver that cannot find a usable face. Shared by every
-/// text backend — see the module comment for why it lives in the pure module
-/// rather than in the fs-backed one.
+/// Returned by a font resolver that cannot find a usable face.
 pub const ResolveFontError = error{
     FontNotFound,
 };
@@ -104,9 +69,7 @@ pub fn extentCacheReset() void {
     extent_misses = 0;
 }
 
-/// The estimator behind the cache. Backends with a real text engine (Linux's
-/// pangocairo) call their own measure first and fall back to
-/// `estimatorExtent`; backends without one (macOS, the browser) call this.
+/// The estimator behind the cache.
 pub fn measureText(text_bytes: []const u8, font_size: u16) TextExtent {
     const key = hashMeasureKey(text_bytes, font_size);
     if (extentLookup(key)) |hit| {

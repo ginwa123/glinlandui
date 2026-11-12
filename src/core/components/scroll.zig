@@ -1,17 +1,11 @@
 // Agnostic reusable Clay scroll container (toolkit-style, library only).
-// Vertical, horizontal, or both axes: a fixed-viewport Clay clip element
-// whose overflowing children scroll (wheel via updateScroll, drag via Clay)
-// with an automatic floating scrollbar thumb per scroll axis.
-// Imports: std + zclay + core/color + core/render_common + sibling box (Size) ONLY.
-// Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
 const box_mod = @import("box.zig");
 const semantics = @import("../semantics.zig");
 
-/// Scroll axes: vertical (column content, clips top-to-bottom),
-/// horizontal (row content, clips left-to-right), or both.
+/// Scroll axes: vertical (column content, clips top-to-bottom), horizontal (row content, clips left-to-right), or both.
 pub const Direction = enum {
     vertical,
     horizontal,
@@ -19,21 +13,10 @@ pub const Direction = enum {
 };
 
 /// Reserved Clay IDI offsets under .ID(props.id) for the floating thumbs.
-/// The container itself is .ID(props.id) == IDI(props.id, 0), so thumbs at
-/// 1/2 never collide with it (same +1 scheme as list rows). Content keeps
-/// its own id namespaces, so these never collide with children either.
 pub const vthumb_index: u32 = 1;
 pub const hthumb_index: u32 = 2;
 
-/// Toolkit-style scroll props. All styling via props with neutral dark
-/// defaults — no theme/app imports. `id` becomes the Clay element ID
-/// (stable across frames for scroll-position + geometry queries).
-/// The viewport MUST be bounded on every scroll axis (e.g. h fixed for
-/// vertical) or there is nothing to clip — content just grows.
-/// `show_scrollbar` (default true) draws a floating thumb per scroll axis
-/// whenever content overflows the viewport; the thumb is purely visual
-/// (passthrough) — it never eats clicks meant for rows underneath.
-/// `track_bg`, when non-null, paints a full-length track behind the thumb.
+/// Toolkit-style scroll props.
 pub const ScrollProps = struct {
     id: []const u8,
     direction: Direction = .vertical,
@@ -70,16 +53,12 @@ pub fn clipAxes(direction: Direction) struct { h: bool, v: bool } {
     };
 }
 
-/// Pure: true when content overflows the viewport on an axis (a scrollbar
-/// is needed). The 0.5px epsilon ignores sub-pixel rounding so a fitting
-/// list never flickers a 1-frame thumb.
+/// Pure: true when content overflows the viewport on an axis (a scrollbar is needed).
 pub fn needsScrollbar(viewport: f32, content: f32) bool {
     return content > viewport + 0.5;
 }
 
-/// Pure: thumb length for a track of `track_len` px. Proportional to the
-/// visible fraction (viewport / content), clamped to [min_thumb, track].
-/// Returns 0 when there is nothing to scroll (no thumb declared).
+/// Pure: thumb length for a track of `track_len` px.
 pub fn thumbLen(viewport: f32, content: f32, track_len: f32, min_thumb: f32) f32 {
     if (!needsScrollbar(viewport, content)) return 0;
     if (content <= 0 or track_len <= 0) return 0;
@@ -88,9 +67,6 @@ pub fn thumbLen(viewport: f32, content: f32, track_len: f32, min_thumb: f32) f32
 }
 
 /// Pure: thumb offset from the track start for a Clay scroll position.
-/// Clay scroll positions run 0 (start) to -(content - viewport) (end), so
-/// the offset maps that range onto the thumb travel (track - thumb),
-/// clamped to [0, travel]. Returns 0 when there is nothing to scroll.
 pub fn thumbOffset(scroll_pos: f32, viewport: f32, content: f32, track_len: f32, thumb_len: f32) f32 {
     const max_scroll = content - viewport;
     if (max_scroll <= 0) return 0;
@@ -100,27 +76,17 @@ pub fn thumbOffset(scroll_pos: f32, viewport: f32, content: f32, track_len: f32,
     return @min(travel, @max(0, t * travel));
 }
 
-/// Forward a wheel delta to Clay's scroll containers. Call once per frame
-/// BEFORE beginLayout (after setPointerState) with the accumulated
-/// wl_pointer axis values for that frame (px; dt = seconds since last
-/// frame). Clay routes the delta to the hovered scroll container.
-/// NOTE: raw Clay coords — negative dy scrolls down (content moves up).
-/// Live code should go through Host.frame/clayFrame, which negate
-/// Wayland coords (positive = down) at the boundary.
+/// Forward a wheel delta to Clay's scroll containers.
 pub fn updateScroll(dx: f32, dy: f32, dt: f32) void {
     cl.updateScrollContainers(false, .{ .x = dx, .y = dy }, dt);
 }
 
-/// Programmatic scroll: nudge the container's scroll position directly
-/// (positive dy scrolls down, matching Wayland axis coords — negated
-/// internally for Clay's 0-to-negative convention). Clamped to the
-/// content bounds. No-op when the id is not a scroll container this frame.
+/// Programmatic scroll: nudge the container's scroll position directly (positive dy scrolls down, matching Wayland axis coords — negated internally for.
 pub fn scrollBy(id: []const u8, dx: f32, dy: f32) void {
     nudgeClamped(id, .both, dx, dy);
 }
 
-/// Clamped 1:1 nudge of one container along its axes (slider units, NOT
-/// Clay's x10 wheel factor). Positive dy scrolls down (content up).
+/// Clamped 1:1 nudge of one container along its axes (slider units, NOT Clay's x10 wheel factor).
 fn nudgeClamped(id: []const u8, dir: Direction, dx: f32, dy: f32) void {
     const data = cl.getScrollContainerData(cl.getElementId(id));
     if (!data.found) return;
@@ -135,11 +101,7 @@ fn nudgeClamped(id: []const u8, dir: Direction, dx: f32, dy: f32) void {
     }
 }
 
-// ---- Per-frame scroll-container registry (for drag hit-testing) ----
-// scroll() registers its id + direction every declare; the owner resets
-// per frame via beginScrollFrame (Host.declareThunk, mirroring
-// click_registry.beginFrame). Stale ids are harmless: dragScroll skips
-// ids with no element/scroll data this frame. Cap 8 (the app has one).
+// ---- Per-frame scroll-container registry (for drag hit-testing) ---- scroll() registers its id + direction every declare; the owner resets per frame.
 
 const ScrollReg = struct {
     id: []const u8,
@@ -163,12 +125,7 @@ fn registerScroll(id: []const u8, dir: Direction) void {
     scroll_reg_n += 1;
 }
 
-/// Slider-style drag scroll: nudge the topmost registered scroll
-/// container under (x, y), 1:1 clamped. Pointer down = scroll down
-/// (content up) — the scrollbar-slider convention. Called on pointer
-/// motion while dragging; no-op with no containers or no hit. (Clay's
-/// built-in drag is touch-style/inverted for a slider, so it stays off
-/// and drag goes through here instead.)
+/// Slider-style drag scroll: nudge the topmost registered scroll container under (x, y), 1:1 clamped.
 pub fn dragScroll(x: f32, y: f32, dx: f32, dy: f32) void {
     var i = scroll_reg_n;
     while (i > 0) {
@@ -193,27 +150,11 @@ fn toSizingAxis(s: box_mod.Size, min: f32, max: f32) cl.SizingAxis {
     };
 }
 
-/// Declare a scroll container: Clay clip element (.ID(props.id)) with the
-/// mapped sizing/padding/gap/radius, `children(ctx)` invoked inside for
-/// caller-declared content, then one floating scrollbar thumb per scroll
-/// axis (previous-frame geometry — same one-frame lag as the official
-/// Clay scrollbar example; invisible until content overflows).
-/// Declare-only: never fires callbacks, never mutates selection.
-///
-/// The clip's child_offset is wired to Clay's live scroll position
-/// (official pattern: `.childOffset = Clay_GetScrollOffset()`): without
-/// it UpdateScrollContainers mutates scrollPosition — the thumb moves —
-/// while children stay static, because layout offsets children ONLY from
-/// childOffset (clay.h layout DFS). getScrollOffset() runs while this
-/// element is open (UI() opens before evaluating config), so it returns
-/// this container's own position, already updated by this frame's
-/// updateScrollContainers call.
+/// Declare a scroll container: Clay clip element (.ID(props.id)) with the mapped sizing/padding/gap/radius, `children(ctx)` invoked inside for.
 pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void) void {
     registerScroll(props.id, props.direction);
     const axes = clipAxes(props.direction);
-    // Content flows along the scroll axis: rows overflow horizontally,
-    // columns overflow vertically (both => column; wrap rows in a row box
-    // for horizontal strips inside a both-axis viewport).
+    // Content flows along the scroll axis: rows overflow horizontally, columns overflow vertically (both => column; wrap rows in a row box for horizontal.
     const dir: cl.LayoutDirection = switch (props.direction) {
         .horizontal => .left_to_right,
         .vertical, .both => .top_to_bottom,
@@ -237,15 +178,12 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
             .width = .outside(props.border_width),
         } else .{},
     })({
-        // Clip ancestry for the semantics layer: every node registered inside
-        // this container records it, so resolve() can compute what is actually
-        // visible and performScrollTo() can find the container to nudge.
+        // Clip ancestry for the semantics layer: every node registered inside this container records it, so resolve() can compute what is actually visible and.
         semantics.pushAncestor(cl.getElementId(props.id), true);
         children(ctx);
         semantics.popAncestor();
     });
-    // The container's own node is registered AFTER the pop, so it does not
-    // list itself as an ancestor.
+    // The container's own node is registered AFTER the pop, so it does not list itself as an ancestor.
     semantics.register(.{
         .id = cl.getElementId(props.id),
         .tag = props.id,
@@ -257,9 +195,7 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
     declareScrollbars(props);
 }
 
-/// Floating scrollbar thumbs for every overflowing scroll axis, attached
-/// to the viewport (previous-frame scroll data; first frame declares
-/// nothing — found == false until one layout has run).
+/// Floating scrollbar thumbs for every overflowing scroll axis, attached to the viewport (previous-frame scroll data; first frame declares nothing —.
 fn declareScrollbars(props: ScrollProps) void {
     const data = cl.getScrollContainerData(cl.getElementId(props.id));
     if (!data.found) return;
@@ -289,8 +225,7 @@ fn declareScrollbars(props: ScrollProps) void {
                         .corner_radius = .all(@floatFromInt(props.thumb_radius)),
                     })({});
                 }
-                // NOTE: cl.hovered() stays INSIDE the UI() literal (while
-                // this thumb is open) — hoisting it would query the parent.
+                // NOTE: cl.hovered() stays INSIDE the UI() literal (while this thumb is open) — hoisting it would query the parent.
                 cl.UI()(.{
                     .id = .IDI(props.id, vthumb_index),
                     .floating = .{
@@ -365,13 +300,10 @@ fn declareEmptyScroll() void {
     scroll(.{ .id = "test-empty-scroll", .h = .{ .fixed = 100 } }, {}, emptyChildren);
 }
 
-/// Run one headless Clay frame around `declare_fn`, returning the render
-/// commands (valid until the next beginLayout).
+/// Run one headless Clay frame around `declare_fn`, returning the render commands (valid until the next beginLayout).
 fn layoutCommands(declare_fn: *const fn () void) ![]cl.RenderCommand {
     const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed). Clay keeps
-    // a global currentContext pointer inside this arena, so freeing it
-    // would dangle the *next* test's minMemorySize/initialize (segfault).
+    // NOTE: intentionally leaked (page_allocator, never freed).
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
@@ -482,9 +414,7 @@ test "horizontal scroll lays content out in a row (x grows)" {
     try std.testing.expect(countScissors(try layoutCommands(declareEmptyScroll)) >= 1);
 }
 
-// ---- Two-frame scrollbar tests: the thumb reads previous-frame scroll
-// data (same one-frame lag as the official Clay scrollbar example), so
-// frame 1 populates the scroll container and frame 2 declares the thumb.
+// ---- Two-frame scrollbar tests: the thumb reads previous-frame scroll data (same one-frame lag as the official Clay scrollbar example), so frame 1.
 
 fn overflowChildren(_: void) void {
     var i: usize = 0;
@@ -508,8 +438,7 @@ fn declareFitScroll() void {
     scroll(.{ .id = "test-scroll-fit", .h = .{ .fixed = 400 }, .w = .{ .fixed = 200 } }, {}, overflowChildren);
 }
 
-/// Run TWO headless frames around `declare_fn` in one Clay context and
-/// return the second frame's commands (scroll data is previous-frame).
+/// Run TWO headless frames around `declare_fn` in one Clay context and return the second frame's commands (scroll data is previous-frame).
 fn layoutCommandsSecondFrame(declare_fn: *const fn () void) ![]cl.RenderCommand {
     const mem_size = cl.minMemorySize();
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
@@ -551,10 +480,7 @@ test "overflowing horizontal scroll shows a bottom thumb on the second frame" {
     try std.testing.expect(!cl.getElementData(cl.ElementId.IDI("test-scroll-h", vthumb_index)).found);
 }
 
-// ---- Scroll-delta regression tests: a wheel delta must move CONTENT,
-// not just the thumb. (Bug 2026-09-07: scroll() never set child_offset,
-// so UpdateScrollContainers mutated scrollPosition — the thumb moved —
-// while children stayed static because layout only reads childOffset.)
+// ---- Scroll-delta regression tests: a wheel delta must move CONTENT, not just the thumb.
 
 fn scrollProbeChildren(_: void) void {
     cl.UI()(.{
@@ -575,11 +501,7 @@ fn declareProbeScroll() void {
     scroll(.{ .id = "test-scroll-probe", .h = .{ .fixed = 100 }, .w = .{ .fixed = 200 } }, {}, scrollProbeChildren);
 }
 
-/// Two frames in one context with pointer + wheel control. Frame 1 parks
-/// the pointer (registers the container); frame 2 hovers the container
-/// center, applies (dx, dy) via updateScroll (production clayFrame order:
-/// setPointerState -> updateScrollContainers -> beginLayout), re-declares.
-/// Returns the probe's y in each frame so callers can assert movement.
+/// Two frames in one context with pointer + wheel control.
 fn layoutScrollFrames(dx: f32, dy: f32) ![2]f32 {
     const mem_size = cl.minMemorySize();
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
@@ -617,14 +539,11 @@ test "wheel delta updates scrollPosition consistently with content" {
     try std.testing.expectApproxEqAbs(@as(f32, -50), data.scroll_position.y, 0.5);
 }
 
-// ---- Slider-style drag tests: pointer down = scroll down (content up),
-// 1:1 clamped — the scrollbar-slider convention (Clay's built-in drag is
-// touch-style/inverted for this, so dragScroll() implements it manually).
+// ---- Slider-style drag tests: pointer down = scroll down (content up), 1:1 clamped — the scrollbar-slider convention (Clay's built-in drag is.
 
 const dispatch = @import("dispatch.zig");
 
-/// Drag harness: fresh context + parked frame-1 declare (registers the
-/// container id); returns container center + probe y at scroll 0.
+/// Drag harness: fresh context + parked frame-1 declare (registers the container id); returns container center + probe y at scroll 0.
 fn dragSetup(s: *dispatch.PtrState) !struct { cx: f32, cy: f32, y0: f32 } {
     const mem_size = cl.minMemorySize();
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);

@@ -1,15 +1,9 @@
 // Agnostic reusable Clay box (div-like container, toolkit-style, library only).
-// Imports: std + zclay + core/color + core/render_common ONLY.
-// Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
 
-/// Box sizing per axis: fit contents, grow to fill, exact pixels, or
-/// percent of the parent (0.0-1.0).
-/// `fixed` is f32 (not u32) so fractional heights map 1:1 — e.g. the
-/// sidebar gap (60 - 16 - measure("Settings",18).h ≈ 22.4) keeps its exact
-/// Clay `.fixed(f32)` value instead of truncating to u32.
+/// Box sizing per axis: fit contents, grow to fill, exact pixels, or percent of the parent (0.0-1.0).
 pub const Size = union(enum) {
     fit,
     grow,
@@ -23,24 +17,7 @@ pub const Direction = enum {
     column,
 };
 
-/// Toolkit-style box props. All styling via props with neutral defaults —
-/// no theme/app imports. `id` becomes the Clay element ID (stable across
-/// frames for geometry/selection queries). `bg`, when non-null, paints a
-/// rectangle (null = transparent = no rect command). `pad` is uniform
-/// padding on all sides; `gap` separates children along the layout axis;
-/// `radius` rounds the bg rect (a.k.a. `rounded`: 0 = square, >0 = pill
-/// when >= half the height). `child_align` forwards to Clay `child_alignment`
-/// (default left/top = Clay default, so existing boxes are unaffected —
-/// the content header passes left/center for pixel parity).
-/// `min_w`/`min_h`/`max_w`/`max_h` clamp the fit/grow axes (0 = no
-/// constraint; forwarded to Clay fitMinMax/growMinMax). `percent` sizing
-/// ignores min/max (Clay percent carries no minmax payload).
-/// `border_width` (uniform, 0 = none) + `border_color` emit a Clay BORDER
-/// command (drawn by the GLES3 renderer as an inset outline).
-/// `disabled` is stored verbatim for owner-side dispatch: the box itself
-/// never fires `on_click`, so owners must skip firing when disabled.
-/// `on_click`/`ctx` are stored verbatim for
-/// owner-side dispatch; the box declaration itself never fires them.
+/// Toolkit-style box props.
 pub const BoxProps = struct {
     id: []const u8,
     direction: Direction = .column,
@@ -72,14 +49,7 @@ fn toSizingAxis(s: Size, min: f32, max: f32) cl.SizingAxis {
     };
 }
 
-/// Declare a div-like container: Clay element (.ID(props.id)) with the
-/// mapped direction/sizing/padding/gap/radius, bg only when non-null,
-/// and `children(ctx)` invoked inside for caller-declared content.
-/// Declare-only: never fires `on_click` (owner dispatches via stored props).
-/// Cursor note: box stores on_click/ctx for owner-side dispatch but never
-/// self-registers in click_registry (no registry import by design), so it
-/// contributes no hover entry and hoverCursorAt reports .default over it.
-/// This is intentional — boxes are layout containers, not click targets.
+/// Declare a div-like container: Clay element (.ID(props.id)) with the mapped direction/sizing/padding/gap/radius, bg only when non-null, and.
 pub fn box(props: BoxProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void) void {
     const dir: cl.LayoutDirection = switch (props.direction) {
         .row => .left_to_right,
@@ -108,35 +78,23 @@ pub fn box(props: BoxProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) v
     });
 }
 
-// ---- Arrange helpers: Row / Column / Spacer over Box ----
-//
-// Same declare-only Box underneath; these fix the layout direction (or
-// the grow-spacer shape) so call sites read as intent:
-//   row(.{ .id = "header", ... }, ctx, headerChildren)
-//   column(.{ .id = "content", ... }, ctx, contentChildren)
-//   spacer("content-spacer")
-// `box()` stays the generic escape hatch (back-compat — all existing
-// call sites keep working unchanged).
+// ---- Arrange helpers: Row / Column / Spacer over Box ---- Same declare-only Box underneath; these fix the layout direction (or the grow-spacer shape).
 
-/// Row container: Box forced to left-to-right. `props.direction` is
-/// ignored (overwritten to .row) so a stale .column can't slip through.
+/// Row container: Box forced to left-to-right.
 pub fn row(props: BoxProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void) void {
     var p = props;
     p.direction = .row;
     box(p, ctx, children);
 }
 
-/// Column container: Box forced to top-to-bottom. `props.direction` is
-/// ignored (overwritten to .column).
+/// Column container: Box forced to top-to-bottom.
 pub fn column(props: BoxProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void) void {
     var p = props;
     p.direction = .column;
     box(p, ctx, children);
 }
 
-/// Grow spacer: transparent Box that expands on both axes, pushing
-/// siblings apart (header/content/sidebar spacers). Emits no rectangle
-/// (bg null) — layout-only.
+/// Grow spacer: transparent Box that expands on both axes, pushing siblings apart (header/content/sidebar spacers).
 pub fn spacer(id: []const u8) void {
     box(.{ .id = id, .w = .grow, .h = .grow }, {}, emptyChildren);
 }
@@ -149,19 +107,15 @@ fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions
     };
 }
 
-/// Run one headless Clay frame around `declare_fn`, counting rectangle
-/// and text render commands.
+/// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
 fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !void {
     const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed). Clay keeps
-    // a global currentContext pointer inside this arena, so freeing it
-    // would dangle the *next* test's minMemorySize/initialize (segfault).
+    // NOTE: intentionally leaked (page_allocator, never freed).
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
     cl.setMeasureTextFunction(void, {}, stubMeasure);
-    // Park the pointer far outside the layout so hover state is
-    // deterministic (box itself has no hover chrome; children might).
+    // Park the pointer far outside the layout so hover state is deterministic (box itself has no hover chrome; children might).
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     declare_fn();
@@ -177,8 +131,7 @@ fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !v
     texts.* = t;
 }
 
-/// Run one headless Clay frame around `declare_fn`, returning the render
-/// commands (valid until the next beginLayout).
+/// Run one headless Clay frame around `declare_fn`, returning the render commands (valid until the next beginLayout).
 fn layoutCommands(declare_fn: *const fn () void) ![]cl.RenderCommand {
     const mem_size = cl.minMemorySize();
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);

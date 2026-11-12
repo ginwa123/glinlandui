@@ -1,39 +1,4 @@
-//! The Linux file dialog: a D-Bus client that asks the XDG Desktop Portal for
-//! a file, a folder or a save target.
-//!
-//! ## The shape of the thing
-//!
-//! The portal lives in ANOTHER PROCESS. This module is a short-lived client:
-//!
-//!   connect to the session bus -> authenticate -> say Hello -> AddMatch ->
-//!   call FileChooser.OpenFile/OpenDirectory/SaveFile -> wait for the
-//!   org.freedesktop.portal.Response signal -> hand back the paths.
-//!
-//! Everything protocol-shaped is in `dbus.zig` and `portal.zig`, which are
-//! pure and tested on every platform. What is left here is the part that
-//! cannot be tested without a bus: sockets, the SASL handshake, framing reads
-//! out of a `recv`, and the blocking wait while the user is looking at the
-//! dialog.
-//!
-//! ## Why blocking is the right default
-//!
-//! `choose()` blocks until the user answers, and that is deliberate. A file
-//! dialog is MODAL: the application cannot usefully do anything else while it
-//! is open, and on the Wayland backend the event loop is parked in
-//! `wl_display_dispatch` anyway. A non-blocking API here would have to be
-//! pumped from somewhere, and the only somewhere is a frame callback that
-//! runs when the compositor sends an event — which, while a file dialog is
-//! open, is rarely. The honest shape is therefore: the caller blocks, and
-//! `Options.timeout_ms` is the escape hatch for an application that has a
-//! deadline of its own.
-//!
-//! ## The socket
-//!
-//! A plain `AF_UNIX`/`SOCK_STREAM` socket through raw Linux syscalls
-//! (`std.os.linux`), not a C shim. The repo's shim is for Wayland, EGL and
-//! pango — libraries whose APIs are C-shaped. A socket is a handful of
-//! syscalls, and writing them here keeps the feature free of both a new system
-//! dependency and a new translation unit that no test can reach.
+//! The Linux file dialog: a D-Bus client that asks the XDG Desktop Portal for a file, a folder or a save target.
 const std = @import("std");
 const posix = std.posix;
 const linux = std.os.linux;
@@ -42,8 +7,7 @@ const dbus = @import("dbus.zig");
 const portal = @import("portal.zig");
 const contract = @import("../core/file_dialog_contract.zig");
 
-// The portable surface, re-exported so a consumer writes
-// `glinlandui.file_dialog.Options` and never names a Linux module.
+// The portable surface, re-exported so a consumer writes `glinlandui.file_dialog.Options` and never names a Linux module.
 pub const Kind = contract.Kind;
 pub const Rule = contract.Rule;
 pub const Filter = contract.Filter;
@@ -53,11 +17,6 @@ pub const Selection = contract.Selection;
 pub const Error = contract.Error;
 
 /// True when this host can open a dialog at all.
-///
-/// The test build takes the portable stub (see `platform.zig`), so this is
-/// also how an application finds out at COMPILE time that it is talking to
-/// the stub: `available()` is a constant false there, and a UI that honours it
-/// never draws the button.
 pub fn available() bool {
     return true;
 }
@@ -70,9 +29,6 @@ pub fn openFile(alloc: std.mem.Allocator, options: Options) !Selection {
 }
 
 /// Ask for one existing DIRECTORY — the "select folder" case.
-///
-/// This is `OpenDirectory`, not `OpenFile` with a flag. See
-/// `portal.memberFor`.
 pub fn openFolder(alloc: std.mem.Allocator, options: Options) !Selection {
     var opts = options;
     opts.kind = .open_folder;
@@ -86,55 +42,31 @@ pub fn saveFile(alloc: std.mem.Allocator, options: Options) !Selection {
     return choose(alloc, opts);
 }
 
-/// How long the CONTROL calls (Hello, AddMatch, the chooser call itself) may
-/// take before the client gives up. The user's half of the conversation — the
-/// Response signal — is governed by `Options.timeout_ms` instead, because it
-/// is bounded by a human, not by the bus.
+/// How long the CONTROL calls (Hello, AddMatch, the chooser call itself) may take before the client gives up.
 const control_timeout_ms: i32 = 5_000;
 
 /// A connected, authenticated bus session.
-///
-/// Small and self-contained on purpose: one connection per dialog, torn down
-/// when the dialog returns. Keeping a long-lived connection would mean
-/// handling bus restarts, re-`Hello`, and match-rule re-registration — a lot
-/// of machinery for a dialog that is open for a few seconds.
 pub const Client = struct {
     fd: i32,
     alloc: std.mem.Allocator,
     /// The well-known name the chooser call is addressed to.
-    ///
-    /// `pub` so a test can point a client at a fake portal, and so an
-    /// application on a system whose portal is reachable under a different
-    /// name (a vendor portal, an X11-only setup) is not out of options. It
-    /// changes only WHERE the call goes: the request path, the token, the
-    /// options and the Response all work exactly the same way.
     service_name: []const u8 = portal.desktop_service,
-    /// The unique name the bus assigned us (`1.42`), which is what the
-    /// request path is built from.
+    /// The unique name the bus assigned us (`1.42`), which is what the request path is built from.
     unique: [64]u8 = undefined,
     unique_len: usize = 0,
     serial: u32 = 0,
     /// Monotonic, so two dialogs in one process never collide on a token.
     token_counter: u64 = 0,
-    /// The request path the CURRENT attempt will be answered on, and the
-    /// buffer it borrows. Set by `attempt`, waited on by `choose`.
+    /// The request path the CURRENT attempt will be answered on, and the buffer it borrows.
     request_path_buf: [256]u8 = undefined,
     request_path: []const u8 = "",
-    /// Receive buffer. A file-chooser response is hundreds of bytes; 8 KiB
-    /// holds several messages, so a burst does not need two `recv`s.
+    /// Receive buffer.
     in_buf: [8 * 1024]u8 = undefined,
     in_len: usize = 0,
     in_pos: usize = 0,
     /// Scratch for `errorReply`, which builds a frame by hand.
     frame_buf: [1024]u8 = undefined,
     /// Scratch space for the URIs a response carries.
-    ///
-    /// It lives HERE, on the client, rather than in a local of the waiting
-    /// function. The decoded URIs are slices into `in_buf`, and the list of
-    /// slices is handed back to the caller — so a list on the stack of a
-    /// function that has already returned is a dangling pointer, and this was
-    /// a crash rather than a wrong answer, which is the luckiest version of
-    /// the bug.
     uri_scratch: [64][]const u8 = undefined,
 
     /// Connect, authenticate, and say Hello.
@@ -142,10 +74,7 @@ pub const Client = struct {
         const env = if (std.c.getenv("DBUS_SESSION_BUS_ADDRESS")) |raw| std.mem.span(raw) else null;
         const address = dbus.parseBusAddress(alloc, env, @intCast(linux.getuid())) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            // An address we cannot use, or none at all, means there is no
-            // session bus to talk to — which is the app-level statement a UI
-            // can act on, rather than "your DBUS_SESSION_BUS_ADDRESS is
-            // malformed".
+            // An address we cannot use, or none at all, means there is no session bus to talk to — which is the app-level statement a UI can act on, rather than.
             else => return error.NoSessionBus,
         };
         defer address.deinit(alloc);
@@ -174,16 +103,11 @@ pub const Client = struct {
         const fd: i32 = @intCast(raw);
         self.fd = fd;
 
-        // `std.os.linux.sockaddr` is the flat kernel struct, and `sun` is the
-        // view of it for AF_UNIX. Building `sun` and handing `connect` its
-        // bytes is clearer than filling the flat struct by hand.
+        // `std.os.linux.sockaddr` is the flat kernel struct, and `sun` is the view of it for AF_UNIX.
         var sun: linux.sockaddr.un = std.mem.zeroes(linux.sockaddr.un);
         sun.family = linux.AF.UNIX;
 
-        // The address LENGTH matters for an abstract socket and not for a path
-        // one, and getting it wrong for the abstract case connects to a
-        // different name than the bus is listening on — a connection refused
-        // with nothing to suggest why.
+        // The address LENGTH matters for an abstract socket and not for a path one, and getting it wrong for the abstract case connects to a different name.
         const len: linux.socklen_t = switch (address) {
             .path => |p| blk: {
                 if (p.len >= sun.path.len) return error.NoSessionBus;
@@ -192,8 +116,7 @@ pub const Client = struct {
                 break :blk @intCast(@sizeOf(linux.sa_family_t) + p.len + 1);
             },
             .abstract => |a| blk: {
-                // `a[0]` IS the NUL that makes the name abstract; the name is
-                // the rest of the slice.
+                // `a[0]` IS the NUL that makes the name abstract; the name is the rest of the slice.
                 if (a.len - 1 >= sun.path.len) return error.NoSessionBus;
                 @memcpy(sun.path[0 .. a.len - 1], a[1..]);
                 break :blk @intCast(@sizeOf(linux.sa_family_t) + 1 + (a.len - 1));
@@ -201,16 +124,11 @@ pub const Client = struct {
         };
 
         const sa: *const linux.sockaddr = @ptrCast(&sun);
-        // Every failure here means the same thing to a caller: there is no
-        // session bus to ask. A missing socket, a refused connection and a
-        // permission problem are all "no portal in this environment", and
-        // distinguishing them would only invite an app to show a message
-        // about the wrong one.
+        // Every failure here means the same thing to a caller: there is no session bus to ask.
         if (linux.errno(linux.connect(fd, sa, len)) != .SUCCESS) return error.NoSessionBus;
     }
 
-    /// SASL EXTERNAL, then BEGIN. Three lines of text, and getting any of
-    /// them wrong looks like a permissions problem rather than a protocol one.
+    /// SASL EXTERNAL, then BEGIN.
     fn authenticate(self: *Client) !void {
         var cred: [64]u8 = undefined;
         const line = try dbus.authExternal(@intCast(linux.getuid()), &cred);
@@ -256,31 +174,20 @@ pub const Client = struct {
         var token_buf: [32]u8 = undefined;
         const token = try portal.writeToken(self.token_counter, &token_buf);
 
-        // The filter list is a documented option, and a portal is entitled to
-        // refuse it — and this one does, in a way that takes the whole dialog
-        // with it: the bus closes the connection rather than answering, so
-        // there is no error to read and no connection left to read it on.
-        //
-        // So a first attempt that dies is retried once, without filters, on a
-        // fresh connection. The user gets a working file dialog either way,
-        // and the only thing lost is the filter dropdown.
+        // The filter list is a documented option, and a portal is entitled to refuse it — and this one does, in a way that takes the whole dialog with it: the.
         var handle = self.attempt(opts, token, opts.filters.len != 0) catch |first_err| blk: {
             if (opts.filters.len == 0) return first_err;
-            // The connection may be gone entirely; a new one is cheap, and the
-            // old socket, if it still exists, goes with it.
+            // The connection may be gone entirely; a new one is cheap, and the old socket, if it still exists, goes with it.
             self.reconnect() catch |e| return e;
             break :blk self.attempt(opts, token, false) catch |e| return e;
         };
         if (handle.kind == .error_reply and opts.filters.len != 0) {
-            // Refused in words rather than by disconnecting. Same remedy, and
-            // a second refusal falls through to the check below, which reports
-            // it as the portal's answer rather than as a crash.
+            // Refused in words rather than by disconnecting.
             handle = self.attempt(opts, token, false) catch |e| return e;
         }
         if (handle.kind == .error_reply) {
             const name = handle.error_name orelse "";
-            // The two cases a UI must tell apart: nothing owns the name (no
-            // portal installed) versus the portal answered and refused.
+            // The two cases a UI must tell apart: nothing owns the name (no portal installed) versus the portal answered and refused.
             if (std.mem.indexOf(u8, name, "ServiceUnknown") != null or
                 std.mem.indexOf(u8, name, "NameHasNoOwner") != null) return error.NoPortal;
             return error.PortalError;
@@ -291,29 +198,13 @@ pub const Client = struct {
         return self.toSelection(decoded);
     }
 
-    /// One attempt: derive the request path from the name this connection
-    /// holds NOW, listen on it, and make the call.
-    ///
-    /// The path is derived HERE and stored, rather than derived by the caller
-    /// and passed in, because the two must come from the same name — and the
-    /// only name that matters is the one held at the moment of the call. A
-    /// reconnect, which is what the filter retry does, changes the unique name,
-    /// and a path derived before it names a request the portal will never
-    /// answer on: the dialog opens, the user picks a file or presses Cancel,
-    /// the Response arrives at the new path, and the client is still listening
-    /// on the old one and waits there for ever.
-    ///
-    /// That is not hypothetical. It is exactly what Cancel did here, and no
-    /// timeout hid it, because the default is to wait as long as the user
-    /// takes.
+    /// One attempt: derive the request path from the name this connection holds NOW, listen on it, and make the call.
     fn attempt(self: *Client, opts: Options, token: []const u8, with_filters: bool) !dbus.Header {
         var folded_buf: [64]u8 = undefined;
         const folded = try portal.foldSenderName(self.uniqueName(), &folded_buf);
         self.request_path = try portal.writeRequestPath(self.uniqueName(), token, &self.request_path_buf);
 
-        // The match rule goes before the call: the bus processes messages in
-        // order, so by the time the portal can answer, the bus is already
-        // routing that signal here.
+        // The match rule goes before the call: the bus processes messages in order, so by the time the portal can answer, the bus is already routing that.
         try self.registerForToken(token, folded);
 
         var body_buf: [4096]u8 = undefined;
@@ -332,15 +223,6 @@ pub const Client = struct {
     }
 
     /// Install the match rule that routes THIS request's Response to us.
-    ///
-    /// It goes before the chooser call because the bus processes messages in
-    /// order: by the time the portal can answer, the bus is already routing
-    /// that signal here. The alternative is a race in which a fast portal
-    /// answers before we are listening, and the dialog silently never
-    /// returns.
-    ///
-    /// Separate from `choose` because the filter-retry path needs it twice,
-    /// on two different connections.
     fn registerForToken(self: *Client, token: []const u8, folded: []const u8) !void {
         var rule_buf: [512]u8 = undefined;
         const rule = try portal.writeResponseMatchRule(folded, token, &rule_buf);
@@ -359,10 +241,6 @@ pub const Client = struct {
     }
 
     /// Throw the current connection away and open a new one.
-    ///
-    /// Only used after a call that the bus closed the connection over, which
-    /// is the one failure there is no recovering from in place. The unique
-    /// name changes, so the caller re-registers its match rule afterwards.
     fn reconnect(self: *Client) !void {
         const fresh = try Client.connect(self.alloc);
         self.deinit();
@@ -370,11 +248,6 @@ pub const Client = struct {
     }
 
     /// Cancel a dialog that is already open.
-    ///
-    /// Fire-and-forget (`no_reply_expected`), because the only thing that can
-    /// go wrong is that the portal has already finished — and in that case
-    /// there is nothing useful to report to a caller that is about to be told
-    /// the answer anyway.
     pub fn close(self: *Client, request_path: []const u8) void {
         self.serial +%= 1;
         var frame: [512]u8 = undefined;
@@ -396,10 +269,7 @@ pub const Client = struct {
 
     /// Wait for the one signal this request is waiting for.
     fn waitForResponse(self: *Client, request_path: []const u8, timeout_ms: ?u32) !portal.Decoded {
-        // The budget is wall-clock, not "time spent in poll": a bus can keep
-        // sending unrelated signals (NameOwnerChanged from another app) for
-        // as long as it likes, and a counter that only ticked on the final
-        // wait would let a dialog outlive its timeout by hours.
+        // The budget is wall-clock, not "time spent in poll": a bus can keep sending unrelated signals (NameOwnerChanged from another app) for as long as it.
         const started = nowMs();
 
         while (true) {
@@ -423,16 +293,12 @@ pub const Client = struct {
         errdefer self.alloc.free(paths);
 
         var made: usize = 0;
-        // Free whatever was already duplicated if a later allocation fails:
-        // a caller that gets an error has no Selection to free, so this is the
-        // only place those strings can be released.
+        // Free whatever was already duplicated if a later allocation fails: a caller that gets an error has no Selection to free, so this is the only place.
         errdefer for (paths[0..made]) |p| self.alloc.free(p);
 
         for (decoded.uris) |uri| {
             var path_buf: [4096]u8 = undefined;
-            // A URI this client cannot turn into a path (a `recent://` from an
-            // exotic portal, say) is skipped rather than fatal: the other
-            // selections are still perfectly good paths.
+            // A URI this client cannot turn into a path (a `recent://` from an exotic portal, say) is skipped rather than fatal: the other selections are still.
             const path = portal.uriToPath(uri, &path_buf) catch continue;
             paths[made] = self.alloc.dupe(u8, path) catch return error.OutOfMemory;
             made += 1;
@@ -441,8 +307,7 @@ pub const Client = struct {
         return .{ .status = .selected, .paths = paths[0..made] };
     }
 
-    /// Send a method call and wait for its reply, skipping any signals that
-    /// arrive in the meantime (the bus sends `NameAcquired` unbidden).
+    /// Send a method call and wait for its reply, skipping any signals that arrive in the meantime (the bus sends `NameAcquired` unbidden).
     fn callMethod(
         self: *Client,
         destination: []const u8,
@@ -521,12 +386,7 @@ pub const Client = struct {
         }
     }
 
-    /// The next message, or null when `timeout_ms` (or the time left of it)
-    /// expires first.
-    ///
-    /// The returned header borrows `in_buf`, so it is valid only until the
-    /// next call on this client. Every caller here consumes what it needs
-    /// before asking again.
+    /// The next message, or null when `timeout_ms` (or the time left of it) expires first.
     fn nextMessage(self: *Client, timeout_ms: ?i32) !?dbus.Header {
         while (true) {
             if (self.in_pos < self.in_len) {
@@ -537,8 +397,7 @@ pub const Client = struct {
                         self.in_pos += len;
                         return header;
                     }
-                    // A frame that is complete per its own header but not yet
-                    // delivered: keep it and read more.
+                    // A frame that is complete per its own header but not yet delivered: keep it and read more.
                 }
             }
             if (self.in_len == self.in_buf.len) return error.BusProtocol;
@@ -559,11 +418,6 @@ pub const Client = struct {
 };
 
 /// Milliseconds on a MONOTONIC clock.
-///
-/// Monotonic, not wall-clock: a dialog that is open across an NTP correction
-/// must not gain or lose the time it has left. `CLOCK_MONOTONIC` is one
-/// vDSO call on every Linux since 2.6, so the cost is a few nanoseconds
-/// against a `poll` measured in milliseconds.
 fn nowMs() i64 {
     var ts: linux.timespec = undefined;
     if (linux.clock_gettime(.MONOTONIC, &ts) != 0) return 0;
@@ -571,9 +425,7 @@ fn nowMs() i64 {
         @divTrunc(@as(i64, @intCast(ts.nsec)), std.time.ns_per_ms);
 }
 
-/// Milliseconds left of a budget that started at `started`, or null when
-/// there is no budget. Zero is a meaningful answer: it means "give up now",
-/// which is what turns a timeout into `error.Timeout` instead of a wait.
+/// Milliseconds left of a budget that started at `started`, or null when there is no budget.
 fn leftOf(timeout_ms: ?u32, started: i64) ?i32 {
     const budget = timeout_ms orelse return null;
     const left = @as(i64, budget) - (nowMs() - started);
@@ -583,47 +435,13 @@ fn leftOf(timeout_ms: ?u32, started: i64) ?i32 {
 
 /// Ask the portal and return what the user chose.
 fn choose(alloc: std.mem.Allocator, opts: Options) !Selection {
-    // No `builtin.is_test` gate here: `platform.zig` already selects
-    // `core/file_dialog_portable.zig` for a test build, so this module is not
-    // even in the parity suite. The Linux-only `native-test` root imports it
-    // on purpose, to drive a real bus.
+    // No `builtin.is_test` gate here: `platform.zig` already selects `core/file_dialog_portable.zig` for a test build, so this module is not even in the.
     var client = try Client.connect(alloc);
     defer client.deinit();
     return client.choose(opts);
 }
 
-// ---------------------------------------------------------------------------
 // The live round trip.
-//
-// `xdg-desktop-portal` is not something this repository can depend on: it is a
-// desktop service, absent from a CI runner and from a bare Wayland
-// compositor. So the test provides its own — a fake portal that takes the
-// well-known name, answers a FileChooser call and emits a Response on the
-// request path. Everything in between is the real thing: a real unix socket,
-// a real SASL handshake, real frames on a real session bus, through a real
-// `dbus-daemon` that enforces its own rules about names and routing. That is
-// what makes this test worth its length — a codec test cannot tell you that
-// the request path the client listens on is the one the bus will actually
-// route a signal to.
-//
-// ## Why the fake portal runs on a thread
-//
-// `choose()` blocks, by design (see the file header). A fake portal on this
-// same thread could therefore never answer it: the thread is inside `poll`
-// waiting for the very message the fake portal has not been told to produce.
-// The alternative — a non-blocking client — is a different API for a different
-// day, and it would have to be tested against a portal that does not exist
-// here anyway.
-//
-// ## When it skips
-//
-//   - no session bus at all (every CI runner),
-//   - a real portal already owns the name (a developer's desktop — and taking
-//     a running desktop's portal away would be rude as well as wrong).
-//
-// The test COUNT is the same either way, which is the parity contract this
-// repository keeps.
-// ---------------------------------------------------------------------------
 
 /// A second, minimal D-Bus client — enough to be a service on the bus.
 const FakeService = struct {
@@ -653,9 +471,7 @@ const FakeService = struct {
         sun.family = linux.AF.UNIX;
         const p = address.socketPath();
         if (p.len == 0) return error.NoBus;
-        // For an abstract address `p[0]` IS the NUL and the name is the rest;
-        // for a path address the whole slice is the name and `connect` gets
-        // the terminating NUL's worth of length.
+        // For an abstract address `p[0]` IS the NUL and the name is the rest; for a path address the whole slice is the name and `connect` gets the terminating.
         const abstract = p[0] == 0;
         const name = if (abstract) p[1..] else p;
         if (name.len >= sun.path.len) return error.NoBus;
@@ -668,17 +484,11 @@ const FakeService = struct {
         try self.writeAll(try dbus.authExternal(@intCast(linux.getuid()), &cred));
         try self.writeAll(dbus.begin_line);
 
-        // The bus answers the whole credential phase with one line. Reading
-        // it is not optional: the bus does not process a single binary message
-        // until the credential exchange is finished, so a service that skipped
-        // this would time out on its own Hello.
+        // The bus answers the whole credential phase with one line.
         var sink: [256]u8 = undefined;
         _ = try posix.read(self.fd, &sink);
 
-        // Hello, and read the reply. Not optional: dbus-broker will not let a
-        // connection own a name until it has said Hello, so a service that
-        // skipped it got `AccessDenied` for every RequestName — an error that
-        // says nothing about policies and everything about this.
+        // Hello, and read the reply.
         var hello_body: [64]u8 = undefined;
         var hb = dbus.Writer.init(&hello_body);
         _ = hb.written();
@@ -732,16 +542,12 @@ const FakeService = struct {
         }
     }
 
-    /// The method return for `msg`, carrying one object path — the request
-    /// path, which is how a real portal tells the client where the answer will
-    /// arrive.
+    /// The method return for `msg`, carrying one object path — the request path, which is how a real portal tells the client where the answer will arrive.
     fn replyHandle(self: *FakeService, msg: dbus.Header, handle: []const u8) !void {
         self.serial +%= 1;
         var body: [512]u8 = undefined;
         var w = dbus.Writer.init(&body);
-        // An object path marshals like a string; the SIGNATURE is what says so,
-        // and a reply whose signature field is missing makes the bus answer the
-        // caller with an error instead of delivering the reply.
+        // An object path marshals like a string; the SIGNATURE is what says so, and a reply whose signature field is missing makes the bus answer the caller.
         w.writeString(handle);
 
         var frame: [1024]u8 = undefined;
@@ -781,36 +587,7 @@ const FakeService = struct {
         try self.writeAll(dbus.encode(&frame, .signal, .{}, self.serial, &fields, w.written()));
     }
 
-    /// An ERROR message: how a portal refuses a call. Type 3, with the reason
-    /// in the ERROR_NAME header field and the call being answered in
-    /// REPLY_SERIAL.
-    ///
-    /// Hand-built rather than produced by `dbus.encode`, because `encode` only
-    /// writes method calls and returns; an error reply is the one message a
-    /// service sends that this codec has no path for. Note that BOTH fields
-    /// are elements of the SAME header array — there is no array per field —
-    /// and that the array's length starts after its own length word, which is
-    /// the mistake that killed the fake service the first time this was
-    /// written: the broker rejected the frame, the service vanished, and the
-    /// client saw a second attempt fail with ServiceUnknown.
-    ///
-    /// Two things below are load-bearing in a way nothing about the code
-    /// suggests, and both were found by watching a refusal that never arrived.
-    ///
-    /// The endianness marker comes first because the fixed header is
-    /// ENDIANNESS, TYPE, FLAGS, VERSION, BODY LENGTH, SERIAL, ARRAY LENGTH.
-    /// Writing the type without it does not produce a short frame the bus
-    /// complains about — it produces a frame shifted one byte left, whose
-    /// first byte is `0x03` where the broker expects `'l'`. The broker rejects
-    /// that, closes the connection, and the fake portal is GONE.
-    ///
-    /// DESTINATION is not optional. The bus routes a reply by the destination
-    /// the sending service names in it, so an error reply without one is a
-    /// frame the broker accepts, parses, and then has nowhere to put: it is
-    /// DROPPED, silently. The service sees a successful write and the client
-    /// sees nothing at all — two facts that are equally consistent with a
-    /// portal that simply went quiet. `replyHandle` has carried this field
-    /// from the start, which is why only this path lost the reply.
+    /// An ERROR message: how a portal refuses a call.
     fn errorReply(self: *FakeService, request: dbus.Header, name: []const u8) []const u8 {
         self.serial +%= 1;
         var w = dbus.Writer.init(&self.frame_buf);
@@ -835,20 +612,7 @@ const FakeService = struct {
         w.writeSignature("s");
         w.writeString(request.sender orelse "");
         w.patchU32(array_at, @intCast(w.count() - (array_at + 4)));
-        // The frame ends on an 8-byte boundary, and `dbus.encode` ends with
-        // `w.alignTo(8)` for exactly this reason. A message with an empty body
-        // still occupies whole 8-byte words on the wire, and a frame that is
-        // short of one is a frame whose length the BUS and the client compute
-        // differently.
-        //
-        // This is invisible under dbus-broker, which is what made it survive:
-        // the client here is our own codec, so when both ends were short by
-        // the same few bytes they agreed with each other and the test passed.
-        // dbus-daemon pads, sees a length that does not match, and closes the
-        // connection — which surfaces as the fake portal vanishing and the
-        // client reporting `NameHasNoOwner` for a portal that was there a
-        // moment ago. One bus being lenient about a malformed frame and the
-        // other not is a coin flip, not a property.
+        // The frame ends on an 8-byte boundary, and `dbus.encode` ends with `w.alignTo(8)` for exactly this reason.
         w.alignTo(8);
         return w.written();
     }
@@ -885,11 +649,9 @@ const FakeService = struct {
 
 /// Whether the well-known name is free, ours, or somebody else's.
 const NameClaim = enum {
-    /// We are the primary owner. The name is released when this connection
-    /// closes.
+    /// We are the primary owner.
     claimed,
-    /// Another connection already owns it — on a desktop, that is the real
-    /// portal, and the fake one must not take it away.
+    /// Another connection already owns it — on a desktop, that is the real portal, and the fake one must not take it away.
     taken,
     /// The bus would not say.
     unknown,
@@ -900,8 +662,7 @@ fn claimName(service: *FakeService, name: []const u8) !NameClaim {
     var body: [256]u8 = undefined;
     var w = dbus.Writer.init(&body);
     w.writeString(name);
-    // 4 = DO_NOT_QUEUE: fail now rather than waiting for the current owner to
-    // go away, which is what makes this safe to run on a real desktop.
+    // 4 = DO_NOT_QUEUE: fail now rather than waiting for the current owner to go away, which is what makes this safe to run on a real desktop.
     w.writeU32(4);
     const reply = try service.call(
         "org.freedesktop.DBus",
@@ -939,8 +700,7 @@ fn addMatch(service: *FakeService, rule: []const u8) !void {
 /// The fake portal's side of one conversation, run on its own thread.
 const Responder = struct {
     service: *FakeService,
-    /// Refuse this many calls before answering one. It is how a portal that
-    /// will not take a filter list behaves, and the client has to survive it.
+    /// Refuse this many calls before answering one.
     refuse_first: usize = 0,
     code: u32 = 1,
     uris: []const []const u8 = &.{},
@@ -958,36 +718,20 @@ const Responder = struct {
     }
 
     fn run(self: *Responder) !void {
-        // Until it has actually answered one. A client that is refused may
-        // come back — the filter retry is exactly that — and a responder
-        // that returns after the first reply is a portal that goes silent
-        // rather than one that refuses, which is a different bug to chase.
+        // Until it has actually answered one.
         while (true) {
             const msg = (try self.service.next()) orelse return error.NoPortalTimeout;
 
-            // The handshake is not part of the chooser conversation, and
-            // answering it is actively harmful. `Hello`, `RequestName` and
-            // `AddMatch` are all sent to the BUS, and the bus routes their
-            // replies back to this same socket; `call` drains each as it waits
-            // for its serial, so by the time this loop starts they are normally
-            // gone. "Normally" is not "always" — and an error reply to a
-            // `Hello` makes the broker drop the connection outright, which
-            // takes the fake portal with it. Step over anything that is not
-            // the chooser call rather than risk answering the handshake.
+            // The handshake is not part of the chooser conversation, and answering it is actively harmful.
             if (msg.kind != .method_call) continue;
             if (msg.interface_name == null or
                 !std.mem.eql(u8, msg.interface_name.?, portal.chooser_interface)) return error.NotAChooserCall;
             if (msg.path == null or !std.mem.eql(u8, msg.path.?, portal.desktop_path)) return error.NotAChooserCall;
 
-            // The refusal applies to the CHOOSER call, after those checks
-            // rather than before them. Placed earlier it is a statement about
-            // whichever message happened to arrive first, which is a weaker
-            // and less honest claim than "the first chooser request is
-            // refused" — and only the second actually exercises the retry.
+            // The refusal applies to the CHOOSER call, after those checks rather than before them.
             if (self.refuse_first > 0) {
                 self.refuse_first -= 1;
-                // A refusal in words, which is how a portal complains about an
-                // option it will not take.
+                // A refusal in words, which is how a portal complains about an option it will not take.
                 try self.service.write(self.service.errorReply(msg, "org.freedesktop.portal.Error.InvalidArgument"));
                 continue;
             }
@@ -1003,8 +747,7 @@ const Responder = struct {
             self.title_len = @min(title.len, self.title_buf.len);
             @memcpy(self.title_buf[0..self.title_len], title[0..self.title_len]);
 
-            // The request path the portal will answer on is derived from the
-            // token the CLIENT sent and from the sender it saw.
+            // The request path the portal will answer on is derived from the token the CLIENT sent and from the sender it saw.
             const token = findOptionToken(msg.body) orelse return error.NoToken;
             var path_buf: [256]u8 = undefined;
             const request_path = try portal.writeRequestPath(msg.sender orelse return error.NoSender, token, &path_buf);
@@ -1014,18 +757,11 @@ const Responder = struct {
         }
     }
 
-    /// Find `handle_token`'s value by scanning for the key rather than by
-    /// using the client's own options decoder. Deliberately independent: this
-    /// test is here to prove the client's ENCODING, and a decoder that shared
-    /// its assumptions could not.
+    /// Find `handle_token`'s value by scanning for the key rather than by using the client's own options decoder.
     fn findOptionToken(body: []const u8) ?[]const u8 {
         const key = "handle_token";
         const idx = std.mem.indexOf(u8, body, key) orelse return null;
-        // The reader spans the WHOLE body with `pos` moved to the value, not a
-        // slice starting there: D-Bus alignment is measured from the start of
-        // the body, and a reader over a slice that begins at offset 42 aligns
-        // four bytes to the left of where the value actually is. (The same
-        // trap is why the production decoder in `portal.zig` does this.)
+        // The reader spans the WHOLE body with `pos` moved to the value, not a slice starting there: D-Bus alignment is measured from the start of the body.
         var r = dbus.Reader{ .buf = body, .pos = idx + key.len + 1 };
         const sig = r.readSignature() catch return null;
         if (!std.mem.eql(u8, sig, "s")) return null;
@@ -1034,26 +770,9 @@ const Responder = struct {
 };
 
 /// The name the fake portal owns.
-///
-/// NOT `org.freedesktop.portal.Desktop`: on a machine with a real portal that
-/// name is taken, and taking it from a running desktop is not something a
-/// test should do. A name nobody else uses removes that question entirely —
-/// the client is pointed at it with `Client.service_name`, which is the only
-/// thing that changes.
 const fake_portal_name = "org.glinlandui.TestPortal";
 
 /// Serializes the live tests against each other.
-///
-/// They all need the ONE well-known name `org.freedesktop.portal.Desktop`, and
-/// the test runner runs tests on several threads at once. Without this, two of
-/// them claim the name, the loser skips itself, and the client-only test
-/// ("with no portal on the bus") finds a portal that belongs to a test already
-/// in flight — which fails it for a reason that has nothing to do with the
-/// code under test.
-///
-/// A spin lock rather than `std.Thread.Mutex`, which 0.16 does not have. The
-/// critical section is a whole test, so a contended wait is rare and short,
-/// and `yield` keeps the other test runnable rather than burning a core.
 var live_test_held = std.atomic.Value(bool).init(false);
 
 fn liveLock() void {
@@ -1066,19 +785,13 @@ fn liveUnlock() void {
     live_test_held.store(false, .release);
 }
 
-/// Set the fake portal up, or skip the test. The caller must already hold
-/// `live_test_lock`.
+/// Set the fake portal up, or skip the test.
 fn startFakePortal() !FakeService {
-    // A failed connect is the test for "is there a bus here", which is more
-    // honest than probing for a socket file: a socket can exist and still
-    // refuse, and a connect that works is the only thing that matters.
+    // A failed connect is the test for "is there a bus here", which is more honest than probing for a socket file: a socket can exist and still refuse, and.
     var service = FakeService.connect(std.testing.allocator) catch return error.SkipZigTest;
     errdefer service.deinit();
     if (try claimName(&service, fake_portal_name) != .claimed) return error.SkipZigTest;
-    // The match names the fake portal, because that is where the client is
-    // pointed. Matching on the destination is the point: the bus only delivers
-    // a method_call to a connection that asked for it, and a rule on the
-    // member would also collect every other application's file dialogs.
+    // The match names the fake portal, because that is where the client is pointed.
     var rule_buf: [256]u8 = undefined;
     const rule = try std.fmt.bufPrint(
         &rule_buf,
@@ -1113,8 +826,7 @@ test "a folder selection survives a real session bus, end to end" {
         .title = "Choose a workspace",
         .timeout_ms = 15_000,
     }) catch |err| switch (err) {
-        // The bus went away between the fake portal claiming the name and the
-        // client connecting. Nothing to assert, and not a failure either.
+        // The bus went away between the fake portal claiming the name and the client connecting.
         error.BusDisconnected, error.BusProtocol => return error.SkipZigTest,
         else => return err,
     };
@@ -1133,26 +845,13 @@ test "a folder selection survives a real session bus, end to end" {
 }
 
 test "a portal that refuses the first call still gets answered" {
-    // The regression this file needed and did not have. A portal that refuses
-    // the filter list makes the client reconnect — and a reconnect means a
-    // NEW unique bus name, which is half of the request path. Derive the path
-    // before the reconnect instead of after it, and the dialog opens, the user
-    // presses Cancel, and the client waits for a Response that arrives on a
-    // path it is no longer listening to. For ever, with no timeout set.
-    //
-    // `timeout_ms` is what makes this a test rather than a hang: before the
-    // fix the client waits out the budget and fails.
+    // The regression this file needed and did not have.
     liveLock();
     defer liveUnlock();
     var service = try startFakePortal();
     defer service.deinit();
 
-    // `code = 0` is the portal's "dismissed" answer, and it is the one this
-    // test wants: the subject is that the client is ANSWERED at all after a
-    // refusal, so the status has to be the one a dismissed dialog produces.
-    // The default is `1`, which means "succeeded, here are the URIs" — and
-    // with none attached that decodes to `.other`, which is a perfectly good
-    // status and a different one.
+    // `code = 0` is the portal's "dismissed" answer, and it is the one this test wants: the subject is that the client is ANSWERED at all after a refusal.
     var responder = Responder{ .service = &service, .refuse_first = 1, .code = 0 };
     const thread = try std.Thread.spawn(.{}, Responder.threadMain, .{&responder});
 
@@ -1192,8 +891,7 @@ test "a dismissed dialog is a status, not an error" {
     thread.join();
     if (responder.err) |e| return e;
 
-    // The user closed the window on purpose. An app must be able to carry on,
-    // which it cannot do if this is an error.
+    // The user closed the window on purpose.
     try std.testing.expectEqual(contract.Status.cancelled, selection.status);
     try std.testing.expectEqual(@as(usize, 0), selection.paths.len);
     try std.testing.expectEqual(@as(?[]const u8, null), selection.first());
@@ -1204,21 +902,14 @@ test "with no portal on the bus the client says so, rather than waiting forever"
     liveLock();
     defer liveUnlock();
 
-    // This test needs the name to be FREE, which it is not on a desktop that
-    // has a real portal. Claiming it here and dropping the connection is how
-    // the name is proved free — and the same probe doubles as the check that
-    // skips us on a machine that has one.
+    // This test needs the name to be FREE, which it is not on a desktop that has a real portal.
     {
         var probe = FakeService.connect(std.testing.allocator) catch return error.SkipZigTest;
         defer probe.deinit();
         if (try claimName(&probe, portal.desktop_service) != .claimed) return error.SkipZigTest;
     }
 
-    // With no portal owning the name, the bus answers the chooser call with
-    // ServiceUnknown — which is exactly what an app on a bare Wayland session
-    // with no desktop portal installed sees. The point is that the client
-    // REPORTS that, rather than waiting out `timeout_ms` for a Response that
-    // can never arrive.
+    // With no portal owning the name, the bus answers the chooser call with ServiceUnknown — which is exactly what an app on a bare Wayland session with no.
     var client = Client.connect(std.testing.allocator) catch return error.SkipZigTest;
     defer client.deinit();
 
@@ -1234,8 +925,7 @@ test "a request that is never answered times out instead of hanging" {
     var service = try startFakePortal();
     defer service.deinit();
 
-    // A portal that takes the call, answers it, and then says nothing — the
-    // user leaving the dialog open forever.
+    // A portal that takes the call, answers it, and then says nothing — the user leaving the dialog open forever.
     var responder = Responder{ .service = &service, .code = 0, .uris = &.{} };
     var silent = true;
     responder.uris = &.{};
@@ -1255,8 +945,7 @@ test "a request that is never answered times out instead of hanging" {
     defer client.deinit();
     client.service_name = fake_portal_name;
 
-    // 300 ms is long enough for a local bus round trip and short enough to
-    // keep the suite quick.
+    // 300 ms is long enough for a local bus round trip and short enough to keep the suite quick.
     try std.testing.expectError(
         error.Timeout,
         client.choose(.{ .kind = .open_file, .timeout_ms = 300 }),

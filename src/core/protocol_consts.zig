@@ -1,14 +1,4 @@
 //! Shared numeric protocol constants.
-//!
-//! These are the *values* defined by the Wayland protocol XMLs, in a
-//! platform-neutral module with no C imports. Both the native Wayland backend
-//! and the portable backend assert against this single table, so the two
-//! platforms cannot drift apart or disagree about what "shape_pointer" means.
-//!
-//! Provenance (the values are not invented here):
-//!   protocols/cursor-shape-v1.xml         -> CursorShape
-//!   protocols/wlr-layer-shell-unstable-v1.xml -> LayerAnchor
-//!   EGL 1.5 spec (EGL/egl.h)              -> EglAttrib / EglConfigKey
 const std = @import("std");
 
 /// wp_cursor_shape_manager_v1 <enum name="shape"> (cursor-shape-v1.xml).
@@ -20,8 +10,6 @@ pub const CursorShape = struct {
 };
 
 /// wlr_layer_shell_v1 <enum name="anchor"> (wlr-layer-shell-unstable-v1.xml).
-/// Legacy: the tiled window no longer uses layer-shell, but the anchored
-/// window helpers are still part of the public surface.
 pub const LayerAnchor = struct {
     pub const top: u32 = 1;
     pub const bottom: u32 = 2;
@@ -51,9 +39,7 @@ pub const EglConfigValue = struct {
     pub const openGL_es3_bit: i32 = 0x00000040;
 };
 
-/// The canonical EGL config attribute list for a RGBA8, ES3, window-surface
-/// config, terminated by EGL_NONE. Returned as i32 so it is identical on every
-/// platform regardless of the C typedef the native backend would use.
+/// The canonical EGL config attribute list for a RGBA8, ES3, window-surface config, terminated by EGL_NONE.
 pub fn eglConfigAttribs() [13]i32 {
     return .{
         EglAttrib.red_size,        8,

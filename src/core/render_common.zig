@@ -1,19 +1,8 @@
-//! Renderer-independent helpers shared by the GLES3 backend and every
-//! platform that runs the CPU-only Clay test surface.
-//!
-//! Nothing in this file talks to EGL, GLES, Pango, or the filesystem, so it
-//! is the portion of the render contract that the reusable components and
-//! test harness can safely import on every supported platform.
+//! Renderer-independent helpers shared by the GLES3 backend and every platform that runs the CPU-only Clay test surface.
 const std = @import("std");
 const Color = @import("color.zig").Color;
 
 /// Headless-testable draw command: rect fill or text run.
-///
-/// Lives here (not in a backend file) because it is pure data: applications
-/// map their own layout summary to a Draw list and assert on it in tests
-/// without a GL context. Keeping it backend-agnostic means `render.Draw`
-/// resolves identically on every platform, including hosts that never
-/// compile renderer.zig.
 pub const Draw = struct {
     kind: enum { rect, text },
     x: i32,
@@ -24,16 +13,6 @@ pub const Draw = struct {
 };
 
 /// Convert 0xRRGGBB to a Clay color ([4]f32 in 0-255 range, alpha 255).
-///
-/// LEGACY SHIM. `Color` is the color type across the library now and this
-/// exists only so a pre-`Color` caller keeps compiling — the widget layer,
-/// the renderers and the examples all use `color.toClay()` directly. It is
-/// literally `Color.argb(0xFF000000 | hex).toClay()`, which is the point:
-/// there is one expansion rule in the library, not two that can drift.
-///
-/// The forced `0xFF` alpha is why this is a shim and not a peer of
-/// `toU32()`: a 0xRRGGBB value has no alpha to carry, so a caller that
-/// wanted translucency has to use `Color` and say so.
 pub fn u32ToClayColor(hex: u32) [4]f32 {
     return Color.argb(0xFF00_0000 | (hex & 0x00ff_ffff)).toClay();
 }
@@ -42,21 +21,15 @@ pub fn u32ToClayColor(hex: u32) [4]f32 {
 pub const ImageFit = enum { cover, contain, stretch };
 
 /// Opaque payload a widget passes through Clay's image_data pointer.
-/// The widget owns the slot (static per-declare scratch, synchronous
-/// lifetime like all props); the renderer only reads it during the same
-/// frame's drawCommands. `path` points at the owner's stable bytes
-/// (e.g. AppState file paths) — never retained past the frame.
 pub const ImageRef = struct {
     path_ptr: [*]const u8,
     path_len: usize,
     fit: ImageFit = .cover,
-    /// Decode ceiling: the longest side is downscaled to this (no
-    /// upscale). Thumbnails pass small values, the preview a larger one.
+    /// Decode ceiling: the longest side is downscaled to this (no upscale).
     max_dim: u16 = 256,
 };
 
-/// Pure: downscaled dims preserving aspect so the longest side is at
-/// most max_dim. Never upscales. Returns [w, h] (min 1).
+/// Pure: downscaled dims preserving aspect so the longest side is at most max_dim.
 pub fn scaledDims(iw: u32, ih: u32, max_dim: u16) [2]u32 {
     if (iw == 0 or ih == 0) return .{ 1, 1 };
     const m: u32 = @max(iw, ih);
@@ -71,9 +44,7 @@ pub fn scaledDims(iw: u32, ih: u32, max_dim: u16) [2]u32 {
     return .{ w, h };
 }
 
-/// Pure: cover-fit UV crop (u0, v0, u1, v1 fractions of the source) so
-/// the image fills a bw×bh box with no distortion. v=0 is the top row
-/// (matches the unflipped upload + unit-quad VBO convention).
+/// Pure: cover-fit UV crop (u0, v0, u1, v1 fractions of the source) so the image fills a bw×bh box with no distortion.
 pub fn coverUv(iw: f32, ih: f32, bw: f32, bh: f32) [4]f32 {
     if (iw <= 0 or ih <= 0 or bw <= 0 or bh <= 0) return .{ 0, 0, 1, 1 };
     const img_aspect = iw / ih;
@@ -93,8 +64,7 @@ pub fn coverUv(iw: f32, ih: f32, bw: f32, bh: f32) [4]f32 {
     return .{ 0, 0, 1, 1 };
 }
 
-/// Pure + headless-testable key for the image cache. FNV-1a over the path
-/// bytes and the decode ceiling.
+/// Pure + headless-testable key for the image cache.
 pub fn hashImageKey(path: []const u8, max_dim: u16) u64 {
     var h: u64 = 0xcbf29ce484222325;
     for (path) |b| {
@@ -187,8 +157,7 @@ pub fn lruVictim(entries: anytype) ?usize {
     return best;
 }
 
-/// Pure: contain-fit inner box (x, y, w, h relative to the bw×bh box)
-/// so the whole image shows letterboxed. Never upscales beyond the box.
+/// Pure: contain-fit inner box (x, y, w, h relative to the bw×bh box) so the whole image shows letterboxed.
 pub fn containBox(iw: f32, ih: f32, bw: f32, bh: f32) [4]f32 {
     if (iw <= 0 or ih <= 0 or bw <= 0 or bh <= 0) return .{ 0, 0, bw, bh };
     const s = @min(bw / iw, bh / ih);

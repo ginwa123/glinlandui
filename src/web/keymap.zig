@@ -1,39 +1,8 @@
 //! `KeyboardEvent.code` -> Linux evdev code translation.
-//!
-//! The Delegate contract carries *evdev* keycodes: `components.input.keyChar` is
-//! a pure evdev -> ASCII table, `keyToClose` accepts evdev 1, and the calculator
-//! example maps the numeric keypad's evdev codes itself. The DOM reports
-//! `KeyboardEvent.code`, a completely different namespace (`"KeyQ"`,
-//! `"Digit1"`, `"NumpadAdd"`), so the backend MUST translate before handing a key
-//! to the delegate. Doing it here — rather than making `components.input`
-//! platform-aware — is what keeps the whole widget layer and the Delegate
-//! contract identical on all three platforms.
-//!
-//! ## Why the table is keyed by `code` and not by `key`
-//!
-//! `KeyboardEvent.code` names the PHYSICAL key at its US-layout position, which
-//! is the same abstraction evdev uses — so this is a straight translation with no
-//! layout reasoning in it. `KeyboardEvent.key` would carry the *produced
-//! character*, which would fold the user's keyboard layout into the toolkit.
-//!
-//! The known consequence is that an AZERTY user types US characters, because
-//! `keyChar(evdev)` is a US table. That is **exactly what Linux/Wayland does
-//! today** — Wayland also speaks evdev — so the browser is consistent with the
-//! existing native behaviour rather than newly wrong. Fixing it properly means an
-//! `event.key`/composition text-input path, which is shared work with Linux and
-//! is deliberately out of scope here.
-//!
-//! ## Everything here is a pure table lookup
-//!
-//! No DOM, no runtime state, so it is unit-tested in the cross-platform parity
-//! suite and runs on Linux and macOS too — the same treatment `mac/keymap.zig`
-//! gets, and for the same reason: a dropped code means a key that silently does
-//! nothing, which is indistinguishable from a widget bug.
 
 const std = @import("std");
 
-/// Returned for a code with no evdev equivalent. Zero is evdev KEY_RESERVED, so 0
-/// is a safe "not ours" sentinel — no real key maps to it.
+/// Returned for a code with no evdev equivalent.
 pub const KEY_NONE: u32 = 0;
 
 /// One row of a translation table.
@@ -81,9 +50,7 @@ const DIGITS = [_]Row{
     .{ .code = "Digit0", .ev = 11 },
 };
 
-/// Punctuation maps to the UNSHIFTED key's evdev code. The shifted character is
-/// `keyChar`'s job, not ours: evdev 13 is the only code `keyChar` knows that
-/// yields '+', so `"Equal"` must land on 13 and let shift do the rest.
+/// Punctuation maps to the UNSHIFTED key's evdev code.
 const PUNCT = [_]Row{
     .{ .code = "Minus", .ev = 12 }, // shift -> _
     .{ .code = "Equal", .ev = 13 }, // shift -> +
@@ -100,8 +67,7 @@ const PUNCT = [_]Row{
 };
 
 const NAMED = [_]Row{
-    // keyToClose() accepts evdev 1, so a browser tab gets quit-on-Escape with no
-    // per-platform code at all.
+    // keyToClose() accepts evdev 1, so a browser tab gets quit-on-Escape with no per-platform code at all.
     .{ .code = "Escape", .ev = 1 },
     .{ .code = "Tab", .ev = 15 },
     .{ .code = "Enter", .ev = 28 },
@@ -134,14 +100,7 @@ const FKEYS = [_]Row{
     .{ .code = "F12", .ev = 88 },
 };
 
-/// The numeric keypad is mapped EXPLICITLY, including its arithmetic keys, which
-/// are deliberately NOT folded onto the digit row: the calculator example routes
-/// evdev 78/74/55/98/96 to its own operations, and folding `"NumpadAdd"` onto
-/// `"Equal"` would make it type '+' into a text field instead of adding.
-///
-/// The digits use their own evdev codes (71..83) rather than the digit row's, so
-/// NumLock-off keys (`"Numpad7"` as Home) still arrive as keypad codes — the same
-/// identity `mac/keymap.zig` preserves for macOS's keypad.
+/// The numeric keypad is mapped EXPLICITLY, including its arithmetic keys, which are deliberately NOT folded onto the digit row: the calculator example.
 const NUMPAD = [_]Row{
     .{ .code = "Numpad0", .ev = 82 },
     .{ .code = "Numpad1", .ev = 79 },
@@ -161,17 +120,7 @@ const NUMPAD = [_]Row{
     .{ .code = "NumpadEnter", .ev = 96 },
 };
 
-/// Modifier keys, delivered as ordinary key events so the Host's `Mods.track`
-/// updates itself exactly as it does on Wayland. Left and right get their OWN
-/// evdev codes here (unlike `mac/keymap.zig`, which collapses both shifts onto 42
-/// because macOS's two keycodes have no distinct meaning it can express).
-/// `Mods.track` watches 42/54 and 29/97, so both sides update the same latch —
-/// but keeping them distinct means the translation is faithful to the DOM, and a
-/// caller that later wants "which shift" already has the information.
-///
-/// Alt/Meta are listed so they are *recognised* (reported as real keys) instead
-/// of falling through to KEY_NONE: an app cannot tell "user pressed Alt" from
-/// "unknown key" otherwise.
+/// Modifier keys, delivered as ordinary key events so the Host's `Mods.track` updates itself exactly as it does on Wayland.
 const MODIFIERS = [_]Row{
     .{ .code = "ShiftLeft", .ev = 42 },
     .{ .code = "ShiftRight", .ev = 54 },
@@ -183,15 +132,10 @@ const MODIFIERS = [_]Row{
     .{ .code = "MetaRight", .ev = 126 },
 };
 
-/// Every table, in one place, so the duplicate check below cannot drift from the
-/// lookup order.
+/// Every table, in one place, so the duplicate check below cannot drift from the lookup order.
 pub const tables = [_][]const Row{ &LETTERS, &DIGITS, &PUNCT, &NAMED, &FKEYS, &NUMPAD, &MODIFIERS };
 
 /// Translate one `KeyboardEvent.code` to its evdev code, or KEY_NONE.
-///
-/// Total and pure: an unknown or empty code answers KEY_NONE rather than
-/// guessing, because a wrong mapping types the wrong character — far more
-/// confusing than typing nothing.
 pub fn evdevFor(code: []const u8) u32 {
     for (tables) |table| {
         for (table) |r| {
@@ -201,8 +145,7 @@ pub fn evdevFor(code: []const u8) u32 {
     return KEY_NONE;
 }
 
-/// True when the code is one we translate. Useful for a caller that wants to
-/// distinguish "not ours" from "mapped to a code that happens to be reserved".
+/// True when the code is one we translate.
 pub fn isMapped(code: []const u8) bool {
     return evdevFor(code) != KEY_NONE;
 }
@@ -222,9 +165,7 @@ test "letters translate to their evdev codes" {
 }
 
 test "the home row is not transposed" {
-    // The three easiest pairs to get wrong when transcribing a physical layout
-    // into a second numbering. Named explicitly so a regression cannot hide
-    // inside a round-trip test.
+    // The three easiest pairs to get wrong when transcribing a physical layout into a second numbering.
     try std.testing.expectEqual(@as(u32, 34), evdevFor("KeyG"));
     try std.testing.expectEqual(@as(u32, 35), evdevFor("KeyH"));
     try std.testing.expectEqual(@as(u32, 36), evdevFor("KeyJ"));
@@ -242,9 +183,7 @@ test "the digit row translates, and 0 is the tenth key not the first" {
 }
 
 test "every translated key round-trips through keyChar to the right ASCII" {
-    // The contract that actually matters: the Delegate hands evdev to
-    // `components.input.keyChar`, so a wrong translation surfaces as the wrong
-    // character. This is the test that would catch a transposition.
+    // The contract that actually matters: the Delegate hands evdev to `components.input.keyChar`, so a wrong translation surfaces as the wrong character.
     const cases = [_]struct { code: []const u8, want: u8 }{
         .{ .code = "KeyA", .want = 'a' },
         .{ .code = "KeyS", .want = 's' },
@@ -284,9 +223,7 @@ test "every translated key round-trips through keyChar to the right ASCII" {
 }
 
 test "shifted punctuation keeps the unshifted evdev code" {
-    // '=' must map to evdev 13, and `keyChar` turns THAT into '+' when shift is
-    // held. Mapping it to some dedicated "plus" code would be wrong: evdev 13 is
-    // the only code `keyChar` knows that yields '+'.
+    // '=' must map to evdev 13, and `keyChar` turns THAT into '+' when shift is held.
     try std.testing.expectEqual(@as(u32, 13), evdevFor("Equal"));
     try std.testing.expectEqual(@as(?u8, '='), input.keyChar(evdevFor("Equal"), false));
     try std.testing.expectEqual(@as(?u8, '+'), input.keyChar(evdevFor("Equal"), true));
@@ -302,14 +239,12 @@ test "shifted letters come out uppercase through the same code" {
 
 test "escape maps to evdev 1 so keyToClose quits the UI in a tab" {
     try std.testing.expectEqual(@as(u32, 1), evdevFor("Escape"));
-    // The point of the whole table: Escape-to-close works unchanged, with no
-    // browser-specific code anywhere.
+    // The point of the whole table: Escape-to-close works unchanged, with no browser-specific code anywhere.
     try std.testing.expect(contract.keyToClose(evdevFor("Escape")));
 }
 
 test "return maps to KEY_ENTER, and the keypad's enter stays distinct" {
-    // The calculator routes KEY_ENTER to '=' and the keypad's 96 separately, so
-    // these two must not collapse.
+    // The calculator routes KEY_ENTER to '=' and the keypad's 96 separately, so these two must not collapse.
     try std.testing.expectEqual(input.KEY_ENTER, evdevFor("Enter"));
     try std.testing.expectEqual(@as(u32, 96), evdevFor("NumpadEnter"));
     try std.testing.expect(input.KEY_ENTER != evdevFor("NumpadEnter"));
@@ -331,16 +266,13 @@ test "arrow keys and Home/End map to the navigation codes input.zig documents" {
 }
 
 test "the keypad's arithmetic keys keep the codes the calculator maps itself" {
-    // Regressing any of these breaks keyboard arithmetic in the example with no
-    // other symptom.
+    // Regressing any of these breaks keyboard arithmetic in the example with no other symptom.
     try std.testing.expectEqual(@as(u32, 78), evdevFor("NumpadAdd"));
     try std.testing.expectEqual(@as(u32, 74), evdevFor("NumpadSubtract"));
     try std.testing.expectEqual(@as(u32, 55), evdevFor("NumpadMultiply"));
     try std.testing.expectEqual(@as(u32, 98), evdevFor("NumpadDivide"));
     try std.testing.expectEqual(@as(u32, 83), evdevFor("NumpadDecimal"));
-    // And '*', '+', '-' are NOT printable through keyChar — the calculator routes
-    // them by code. If one of them started producing ASCII, arithmetic typed
-    // into a text field would change meaning.
+    // And '*', '+', '-' are NOT printable through keyChar — the calculator routes them by code.
     try std.testing.expectEqual(@as(?u8, null), input.keyChar(evdevFor("NumpadMultiply"), false));
     try std.testing.expectEqual(@as(?u8, null), input.keyChar(evdevFor("NumpadAdd"), false));
 }
@@ -353,9 +285,7 @@ test "the keypad's digits are NOT folded onto the digit row" {
 }
 
 test "shift and control reach the evdev codes Mods.track watches" {
-    // `Mods.track` watches 42/54 for shift and 29/97 for control. Every DOM
-    // shift and control code must land on one of those, or Shift+'=' would type
-    // '=' instead of '+'.
+    // `Mods.track` watches 42/54 for shift and 29/97 for control.
     var mods = input.Mods{};
     for ([_][]const u8{ "ShiftLeft", "ShiftRight" }) |code| {
         const ev = evdevFor(code);
@@ -374,8 +304,7 @@ test "shift and control reach the evdev codes Mods.track watches" {
 }
 
 test "alt and meta are recognised keys, not KEY_NONE" {
-    // Reporting them as unmapped would make "user pressed Alt" indistinguishable
-    // from "unknown key".
+    // Reporting them as unmapped would make "user pressed Alt" indistinguishable from "unknown key".
     try std.testing.expect(evdevFor("AltLeft") != KEY_NONE);
     try std.testing.expect(evdevFor("AltRight") != KEY_NONE);
     try std.testing.expect(evdevFor("MetaLeft") != KEY_NONE);
@@ -392,9 +321,7 @@ test "a modifier press followed by '=' produces '+' through the chain" {
 }
 
 test "no code appears in two tables" {
-    // A duplicate would make translation order-dependent: the first row wins, so
-    // the table would silently depend on its own order. 99 rows today, so the
-    // scratch list is sized with room and asserted non-trivially full.
+    // A duplicate would make translation order-dependent: the first row wins, so the table would silently depend on its own order.
     var seen: [128][]const u8 = undefined;
     var n: usize = 0;
     for (tables) |table| {
@@ -411,8 +338,7 @@ test "no code appears in two tables" {
 }
 
 test "every row is reachable through the public lookup" {
-    // Guards against a table being added to `tables` but left out of the lookup,
-    // or a row whose key can never match (a typo in a `code` literal).
+    // Guards against a table being added to `tables` but left out of the lookup, or a row whose key can never match (a typo in a `code` literal).
     for (tables) |table| {
         for (table) |r| {
             try std.testing.expectEqual(r.ev, evdevFor(r.code));
@@ -431,16 +357,14 @@ test "an unmapped code reports KEY_NONE rather than a plausible wrong key" {
 }
 
 test "no mapped code collides with the KEY_NONE sentinel" {
-    // If a real key mapped to 0 it would be indistinguishable from "unmapped" and
-    // the keystroke would vanish.
+    // If a real key mapped to 0 it would be indistinguishable from "unmapped" and the keystroke would vanish.
     for (tables) |table| {
         for (table) |r| try std.testing.expect(r.ev != 0);
     }
 }
 
 test "esoteric codes the toolkit ignores still translate to a real key" {
-    // CapsLock, Insert and the function keys are not used by any widget, but
-    // resolving them means an app can observe them rather than seeing KEY_NONE.
+    // CapsLock, Insert and the function keys are not used by any widget, but resolving them means an app can observe them rather than seeing KEY_NONE.
     try std.testing.expect(evdevFor("CapsLock") != KEY_NONE);
     try std.testing.expect(evdevFor("Insert") != KEY_NONE);
     try std.testing.expect(evdevFor("PageUp") != KEY_NONE);

@@ -1,26 +1,4 @@
 //! Portable software rasterizer — the reference renderer for glinlandui.
-//!
-//! This is a faithful, pure-Zig reimplementation of the GLES3 renderer's
-//! pixel semantics. It has NO dependency on EGL, GLES, Pango, or any system
-//! graphics library, so it compiles and runs identically on Linux and macOS
-//! (and anywhere else Zig targets). It is what the shared pixel-assertion
-//! suite exercises, and on macOS it is the renderer that actually produces
-//! the pixels shown in the window (blitted through CoreGraphics).
-//!
-//! Ported semantics (from the GLSL in renderer.zig):
-//!   - Coverage is a signed-distance rounded-box field with a 1px AA band:
-//!     cov(d) = clamp(0.5 - d, 0, 1). A 2px smoothstep band is deliberately
-//!     NOT used (it blurred 1px borders and eroded corners — see the GLES3
-//!     regression note); this 1px clamp keeps borders crisp.
-//!   - Corner radius is clamped per-axis against min(w,h)/2, so a large radius
-//!     yields a pill/stadium, never an ellipse.
-//!   - Border is a second, independent rounded box subtracted from the first;
-//!     coverage is the product of the two ramps.
-//!   - Blending is straight (non-premultiplied) alpha:
-//!       dst.rgb = src.rgb*sa + dst.rgb*(1-sa)
-//!       dst.a   = sa       + dst.a  *(1-sa)
-//!   - Y is top-down: pixel (px,py) samples at (px+0.5, py+0.5).
-//!   - No V-flip: texture row 0 is the top row and maps to the top of a quad.
 const std = @import("std");
 const cl = @import("zclay");
 const glyphs = @import("glyphs.zig");
@@ -34,8 +12,7 @@ pub const coverUv = common.coverUv;
 pub const containBox = common.containBox;
 pub const hashImageKey = common.hashImageKey;
 
-/// Placeholder color drawn when an image cannot be decoded (mirrors
-/// `img_placeholder = 0x1a1a1a` in the GLES3 backend).
+/// Placeholder color drawn when an image cannot be decoded (mirrors `img_placeholder = 0x1a1a1a` in the GLES3 backend).
 pub const img_placeholder: Color = .rgb(0x1a, 0x1a, 0x1a);
 
 /// Corner radii, ordered (top_left, top_right, bottom_left, bottom_right).
@@ -43,10 +20,7 @@ const R4 = [4]f32;
 
 // ---- Signed distance field ----
 
-/// Rounded-box signed distance for a sample in LOCAL box space, where the box
-/// spans [0,bx*2] x [0,by*2] and the sample is centred at the origin. This is
-/// the scalar port of the `sdRoundBox` GLSL helper. `r` is ordered
-/// (top_left, top_right, bottom_left, bottom_right) and assumed pre-clamped.
+/// Rounded-box signed distance for a sample in LOCAL box space, where the box spans [0,bx*2] x [0,by*2] and the sample is centred at the origin.
 inline fn sdRoundBox(px: f32, py: f32, bx: f32, by: f32, r: R4) f32 {
     // v_box grows downward, so p.y < 0 is the top half and p.x < 0 the left.
     const rad = if (px < 0.0)
@@ -60,14 +34,12 @@ inline fn sdRoundBox(px: f32, py: f32, bx: f32, by: f32, r: R4) f32 {
     return @sqrt(mx * mx + my * my) + @min(@max(qx, qy), 0.0) - rad;
 }
 
-/// 1px antialias band: exactly 1.0 when the sample is >= half a pixel inside,
-/// 0.0 when half a pixel outside, linear in between.
+/// 1px antialias band: exactly 1.0 when the sample is >= half a pixel inside, 0.0 when half a pixel outside, linear in between.
 inline fn cov(d: f32) f32 {
     return @min(@max(0.5 - d, 0.0), 1.0);
 }
 
-/// Fragment coverage for a rounded box. `mode == 1` punches a rounded hole for
-/// a border of width `border_w`. Returns the coverage alpha in 0..1.
+/// Fragment coverage for a rounded box.
 pub fn fragRoundBox(
     vbox_x: f32,
     vbox_y: f32,
@@ -81,8 +53,7 @@ pub fn fragRoundBox(
     const cy = h * 0.5;
     const px = vbox_x - cx;
     const py = vbox_y - cy;
-    // Clamp every corner against min(c.x, c.y) — the minimum half-extent, not
-    // each axis separately, so an oversized radius becomes a pill shape.
+    // Clamp every corner against min(c.x, c.y) — the minimum half-extent, not each axis separately, so an oversized radius becomes a pill shape.
     const m = @min(cx, cy);
     const r: R4 = .{
         @min(@max(radius[0], 0.0), m),
@@ -92,10 +63,7 @@ pub fn fragRoundBox(
     };
     var a = cov(sdRoundBox(px, py, cx, cy, r));
     if (mode == 1) {
-        // Inner box: per-axis inset, radius shrunk by the border width and
-        // re-clamped to the inner minimum half-extent. Coverage is the product
-        // of the outer and inner ramps, so a 1px integer border lands on
-        // exactly one fully-opaque ring with a fully-transparent interior.
+        // Inner box: per-axis inset, radius shrunk by the border width and re-clamped to the inner minimum half-extent.
         const ibx = @max(cx - border_w, 0.0);
         const iby = @max(cy - border_w, 0.0);
         const mi = @min(ibx, iby);
@@ -112,9 +80,7 @@ pub fn fragRoundBox(
 
 // ---- Framebuffer ----
 
-/// A decoded RGBA8 image, top-left origin, row 0 = top. The software renderer
-/// does not decode files itself; callers (tests, or the platform window
-/// backend) supply decoded pixels through `Surface.putImage`.
+/// A decoded RGBA8 image, top-left origin, row 0 = top.
 pub const Image = struct {
     width: u32,
     height: u32,
@@ -124,9 +90,7 @@ pub const Image = struct {
 /// The scissor region, top-down, half-open on the max edges.
 const Scissor = struct { x0: i64, y0: i64, x1: i64, y1: i64 };
 
-/// An RGBA8 software framebuffer plus a scissor stack of depth 1. Pixels are
-/// stored RGBA, row-major, top-down (row 0 is the top of the image), which is
-/// also the layout both EGL and CoreGraphics accept with a stride of w*4.
+/// An RGBA8 software framebuffer plus a scissor stack of depth 1.
 pub const Surface = struct {
     alloc: std.mem.Allocator,
     width: u32,
@@ -148,8 +112,7 @@ pub const Surface = struct {
         self.images.deinit(self.alloc);
     }
 
-    /// Reallocate the framebuffer at a new size and clear it. Reallocation is
-    /// expected only on resize, not per frame.
+    /// Reallocate the framebuffer at a new size and clear it.
     pub fn resize(self: *Surface, width: u32, height: u32) !void {
         if (width == 0 or height == 0) return error.InvalidSize;
         if (self.width == width and self.height == height) return;
@@ -163,8 +126,6 @@ pub const Surface = struct {
     }
 
     /// Fill the whole framebuffer with the stored clear color (opaque).
-    /// Note: clear_rgb is stored in 0-255, so clamp directly — do NOT run it
-    /// through to8(), which expects a normalized 0..1 value.
     pub fn clear(self: *Surface) void {
         const r = clamp8(self.clear_rgb[0]);
         const g = clamp8(self.clear_rgb[1]);
@@ -198,9 +159,7 @@ pub const Surface = struct {
     fn blend(self: *Surface, x: usize, y: usize, src: [3]f32, sa: f32) void {
         const i = y * self.width * 4 + x * 4;
         const inv = 1.0 - sa;
-        // Straight-alpha blend of the RGB channels, then the alpha channel
-        // with the same source-over equation (GL blend func
-        // SRC_ALPHA/ONE_MINUS_SRC_ALPHA for RGB, ONE/ONE_MINUS_SRC_ALPHA for A).
+        // Straight-alpha blend of the RGB channels, then the alpha channel with the same source-over equation (GL blend func SRC_ALPHA/ONE_MINUS_SRC_ALPHA for.
         for (0..3) |c| {
             const dst = @as(f32, @floatFromInt(self.pixels[i + c])) / 255.0;
             self.pixels[i + c] = to8(src[c] * sa + dst * inv);
@@ -212,8 +171,6 @@ pub const Surface = struct {
     // ---- drawing primitives ----
 
     /// Rasterize one axis-aligned rounded box with straight-alpha blending.
-    /// `radius` is (top_left, top_right, bottom_left, bottom_right); `mode == 1`
-    /// renders a border ring of width `border_w` instead of a fill.
     pub fn drawBox(
         self: *Surface,
         x: f32,
@@ -256,8 +213,7 @@ pub const Surface = struct {
         }
     }
 
-    /// Sample an image with bilinear filtering and CLAMP_TO_EDGE addressing,
-    /// matching the GLES3 texture sampler. Returns straight-alpha RGBA 0..1.
+    /// Sample an image with bilinear filtering and CLAMP_TO_EDGE addressing, matching the GLES3 texture sampler.
     fn sampleBilinear(img: Image, u: f32, v: f32) [4]f32 {
         const tw: f32 = @floatFromInt(img.width);
         const th: f32 = @floatFromInt(img.height);
@@ -284,8 +240,7 @@ pub const Surface = struct {
         return acc;
     }
 
-    /// Blit a texture into a box with the given UV window (u0,v0,u1,v1),
-    /// sampling bilinearly and blending straight-alpha over the destination.
+    /// Blit a texture into a box with the given UV window (u0,v0,u1,v1), sampling bilinearly and blending straight-alpha over the destination.
     pub fn drawImageQuad(
         self: *Surface,
         img: Image,
@@ -334,22 +289,6 @@ pub const Surface = struct {
     // ---- command dispatch ----
 
     /// Render a slice of Clay render commands into the surface, in order.
-    ///
-    /// This is the portable mirror of `Renderer.drawCommands` in the GLES3
-    /// backend. The per-command semantics — including the subtle ones — are
-    /// reproduced exactly:
-    ///   - `border` with uniform widths uses the single rounded-box border path
-    ///     (corner radius honoured); mixed widths fall back to up to four
-    ///     square quads with radius 0, and side quads are dropped entirely when
-    ///     top+bottom exceed the box height.
-    ///   - `text` draws a real glyph run centred in the box the layout gave it
-    ///     (see `drawTextRun`); the per-byte bar fallback is used only when the
-    ///     host has no font the rasterizer can parse.
-    ///   - `image` draws nothing when `image_data` is null, a placeholder box
-    ///     when the path has no decoded source, and a bilinear blit otherwise.
-    ///   - `scissor_start` replaces (does not intersect) the clip region;
-    ///     `scissor_end` clears it.
-    ///   - `none` and `custom` paint nothing.
     pub fn renderCommands(self: *Surface, commands: []const cl.RenderCommand) void {
         for (commands) |cmd| {
             switch (cmd.command_type) {
@@ -370,8 +309,7 @@ pub const Surface = struct {
                 .text => {
                     const td = cmd.render_data.text;
                     const bytes = td.string_contents.chars[0..@intCast(td.string_contents.length)];
-                    // The box's HEIGHT matters: it is the box the layout
-                    // reserved for this run, and the run is centred in it.
+                    // The box's HEIGHT matters: it is the box the layout reserved for this run, and the run is centred in it.
                     self.drawTextRun(
                         cmd.bounding_box.x,
                         cmd.bounding_box.y,
@@ -434,23 +372,6 @@ pub const Surface = struct {
     }
 
     /// Rasterize a text run with real glyphs.
-    ///
-    /// Uses the stb_truetype path (see glyphs.zig) so the software backend
-    /// draws the same characters as the GLES3 backend. The font is loaded once
-    /// and cached; if the host has no usable font, or stb refuses one, this
-    /// falls back to `drawTextRunFallback` below — the portable per-byte bars.
-    /// Degrading to bars is deliberate: a machine with no font must still
-    /// render, and must still pass the shared pixel suite.
-    ///
-    /// `bbox_h` is the HEIGHT of the box the layout gave this run (the text
-    /// command's bounding box). The font's line box is centred inside it, with
-    /// the baseline one full ascent below the line box's top — that is what
-    /// puts a label in the middle of a keycap. This argument is not optional
-    /// decoration: the earlier version took only (x, y) and guessed the box
-    /// height, which left every run drawn against the top edge of its box on
-    /// macOS while the Pango path (which blits a texture the size the layout
-    /// reserved) looked centred. Pass 0 when the caller genuinely has no box;
-    /// the line box is then placed with its top at `bbox_y`.
     pub fn drawTextRun(
         self: *Surface,
         bbox_x: f32,
@@ -473,12 +394,7 @@ pub const Surface = struct {
             self.drawTextRunFallback(bbox_x, bbox_y, text_bytes, font_size, color);
             return;
         }
-        // Centre the font's LINE BOX (ascent..descent) in the box the layout
-        // reserved, then drop the baseline a full ascent from the line box's
-        // top. This is the same placement the Pango path gets for free: there
-        // the laid-out texture IS the line box and the quads sit where the
-        // layout put them. `slack` is 0 whenever the measured height already
-        // equals the line box, which is the usual case.
+        // Centre the font's LINE BOX (ascent..descent) in the box the layout reserved, then drop the baseline a full ascent from the line box's top.
         const line_h = font.lineHeight(fs);
         const slack: f32 = if (bbox_h > 0) bbox_h - line_h else 0;
         const baseline = bbox_y + slack * 0.5 + m.ascent;
@@ -492,12 +408,7 @@ pub const Surface = struct {
                 var mask = mask_g;
                 defer glyphs.freeMask(&mask);
                 const gx: isize = @intFromFloat(@floor(pen + mask.xoff));
-                // stb's yoff is measured from the BASELINE, positive downward
-                // (stbtt_GetGlyphBitmapBoxSubpixel negates the font-space y1),
-                // so the mask's top row sits at baseline + yoff. Subtracting
-                // the ascent here — as this code once did, reading yoff as an
-                // offset from the top of the line — lifted every run by one
-                // ascent: the "macOS text is not centred" bug.
+                // stb's yoff is measured from the BASELINE, positive downward (stbtt_GetGlyphBitmapBoxSubpixel negates the font-space y1), so the mask's top row sits.
                 const top = baseline + mask.yoff;
                 const gy: isize = @intFromFloat(@floor(top));
                 for (0..mask.h) |row| {
@@ -509,8 +420,7 @@ pub const Surface = struct {
                         if (x < 0 or y < 0) continue;
                         if (x >= @as(isize, @intCast(self.width)) or
                             y >= @as(isize, @intCast(self.height))) continue;
-                        // Glyph coverage multiplies the colour's alpha, so a
-                        // dim label stays dim.
+                        // Glyph coverage multiplies the colour's alpha, so a dim label stays dim.
                         self.blend(
                             @intCast(x),
                             @intCast(y),
@@ -524,9 +434,7 @@ pub const Surface = struct {
         }
     }
 
-    /// The deterministic per-byte rect fallback used for text when no glyph
-    /// backend is available. One AA'd box per UTF-8 *byte*; this is the
-    /// portable, glyph-free text rendering the shared pixel suite verifies.
+    /// The deterministic per-byte rect fallback used for text when no glyph backend is available.
     pub fn drawTextRunFallback(
         self: *Surface,
         bbox_x: f32,
@@ -571,8 +479,7 @@ pub const Surface = struct {
 
 const noRadius: R4 = .{ 0, 0, 0, 0 };
 
-/// Map a Clay CornerRadius to the (TL, TR, BL, BR) order, clamping negatives
-/// to zero. Identical to the GLES3 backend's `cornerRadiusVec4`.
+/// Map a Clay CornerRadius to the (TL, TR, BL, BR) order, clamping negatives to zero.
 pub fn cornerRadiusVec4(r: cl.CornerRadius) R4 {
     return .{
         @max(r.top_left, 0),
@@ -582,8 +489,7 @@ pub fn cornerRadiusVec4(r: cl.CornerRadius) R4 {
     };
 }
 
-/// Convert a 0-255 (or 0-1) RGBA color to normalized 0..1, auto-detecting range
-/// exactly like the GLES3 `mx <= 1.0` heuristic.
+/// Convert a 0-255 (or 0-1) RGBA color to normalized 0..1, auto-detecting range exactly like the GLES3 `mx <= 1.0` heuristic.
 fn normalizeColor(color: [4]f32) [4]f32 {
     const mx = @max(@max(color[0], color[1]), @max(color[2], color[3]));
     if (mx <= 1.0) return color;
@@ -608,9 +514,7 @@ fn to8(v: f32) u8 {
 
 // ---- Renderer (matches the frame.zig Renderer contract) ----
 
-/// Adapter so the software surface plugs into the same `render.Renderer`
-/// interface frame.zig already calls (`init`, `deinit`, `drawCommands`). The
-/// surface is resized on demand to match each drawCommands call.
+/// Adapter so the software surface plugs into the same `render.Renderer` interface frame.zig already calls (`init`, `deinit`, `drawCommands`).
 pub const Renderer = struct {
     surface: Surface,
 
@@ -630,9 +534,7 @@ pub const Renderer = struct {
         win_h: i32,
     ) void {
         if (win_w <= 0 or win_h <= 0) return;
-        // `self` is stable here (the renderer lives inside the owning Host), so
-        // exposing &self.surface for a window backend to blit is safe. This is
-        // set on draw, not on init, because init returns by value.
+        // `self` is stable here (the renderer lives inside the owning Host), so exposing &self.surface for a window backend to blit is safe.
         current_surface = &self.surface;
         self.surface.resize(@intCast(win_w), @intCast(win_h)) catch return;
         self.surface.clear();
@@ -640,29 +542,10 @@ pub const Renderer = struct {
     }
 };
 
-/// Process-global font, loaded once on first text and reused after. A single
-/// engine owns one window, so there is no reason to load per frame — and
-/// per-frame loading would be visibly slow on every redraw.
-///
-/// `null` means "not tried yet"; a failed load also leaves it null so the
-/// per-byte fallback is used, which keeps a font-less host rendering.
+/// Process-global font, loaded once on first text and reused after.
 var textBytes: ?glyphs.Font = null;
 
 /// True once a glyph-bearing font is available, so the fallback can be skipped.
-///
-/// Resolution order is deliberate, and it is the web backend's entry point:
-///
-///   1. a font INSTALLED by the backend (`glyphs.installFont`) wins, because a
-///      host with no filesystem can never satisfy step 2 — the wasm text
-///      backend reports an empty candidate list on purpose;
-///   2. otherwise the platform's font paths are walked, which is what every
-///      native host has always done.
-///
-/// The struct copy in step 1 is shallow and safe: it duplicates `bytes` (a
-/// slice header) and `stbtt_fontinfo` (offsets plus pointers into `bytes`),
-/// while the backing memory stays owned by whoever installed the font — the
-/// web backend allocates it for process lifetime. That is also why `Font.deinit`
-/// must never run on the installed font.
 pub fn hasGlyphFont() bool {
     if (glyphs.installedFont()) |f| {
         textBytes = f.*;
@@ -672,10 +555,7 @@ pub fn hasGlyphFont() bool {
     return textBytes != null;
 }
 
-/// The surface the most recent `drawCommands` wrote to. The engine is a
-/// single-window design, so a window backend reads this immediately after the
-/// delegate's on_frame to blit exactly the pixels just produced. Null until the
-/// first draw.
+/// The surface the most recent `drawCommands` wrote to.
 var current_surface: ?*Surface = null;
 
 pub fn currentSurface() ?*Surface {

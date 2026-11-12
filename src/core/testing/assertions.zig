@@ -1,24 +1,8 @@
-//! Assertions over a resolved semantics node — the `assertIsDisplayed` /
-//! `assertHasClickAction` half of the E2E API.
-//!
-//! Every function here is PURE over a `semantics.Node` value, so they are
-//! unit-testable without a Clay context, and `testing/root.zig`'s
-//! `Interaction` methods are thin wrappers that supply the node.
-//!
-//! Why `Node` by value and not by id: a node is a FRAME-SCOPED SNAPSHOT
-//! (bounds and visibility do not exist until `endLayout` and change every
-//! frame). Taking the value makes that explicit and forces callers to
-//! re-resolve — which is exactly what Compose's SemanticsNodeInteraction does.
-//!
-//! Imports: std + the sibling semantics module ONLY (layering R1-R3, R6).
+//! Assertions over a resolved semantics node — the `assertIsDisplayed` / `assertHasClickAction` half of the E2E API.
 const std = @import("std");
 const sm = @import("../semantics.zig");
 
-/// Failure reasons. Naming rule: the error names what was FOUND, so a positive
-/// assertion reports the missing state (`isDisplayed` -> `NotDisplayed`) and a
-/// negative one reports the state that should not have been there
-/// (`isNotDisplayed` -> `Displayed`). That keeps a bare `error.Displayed` in a
-/// test log unambiguous about which direction failed.
+/// Failure reasons.
 pub const Error = error{
     // Display / existence
     NotDisplayed,
@@ -64,8 +48,7 @@ pub fn hasClickAction(n: sm.Node) Error!void {
     if (!n.actions.click) return error.NoClickAction;
 }
 
-/// The complement: a node that must NOT be clickable (a label, a container, a
-/// disabled control).
+/// The complement: a node that must NOT be clickable (a label, a container, a disabled control).
 pub fn hasNoClickAction(n: sm.Node) Error!void {
     if (n.actions.click) return error.HasClickAction;
 }
@@ -118,9 +101,7 @@ pub fn roleIs(n: sm.Node, expected: sm.Role) Error!void {
     if (n.role != expected) return error.RoleMismatch;
 }
 
-/// The node must be at least partially visible AND, when a minimum fraction is
-/// given, at least that much of it. Useful for "the row is scrolled into view"
-/// without demanding pixel-exact geometry.
+/// The node must be at least partially visible AND, when a minimum fraction is given, at least that much of it.
 pub fn visibleAtLeast(n: sm.Node, min_fraction: f32) Error!void {
     if (!n.isDisplayed() or n.visible_fraction < min_fraction) return error.NotDisplayed;
 }
@@ -155,8 +136,7 @@ test "a fully visible, enabled, clickable node passes the positive checks" {
     try visibleAtLeast(n, 1.0);
     // ...and fails the negative complements, each naming what was found.
     try std.testing.expectError(error.Displayed, isNotDisplayed(n));
-    // isDisabled on an ENABLED node reports error.Enabled (the state found),
-    // not error.Disabled (the state required).
+    // isDisabled on an ENABLED node reports error.Enabled (the state found), not error.Disabled (the state required).
     try std.testing.expectError(error.Enabled, isDisabled(n));
     try std.testing.expectError(error.HasClickAction, hasNoClickAction(n));
 }

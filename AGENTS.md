@@ -32,23 +32,31 @@ ci/check_test_parity.sh    # the test count is identical on Linux and macOS
 ci/check_macos_colors.sh   # the macOS blit's channel order
 ```
 
-## Lint status — read this before you add a rule
+## Lint and size gates
 
-zginlint is **not wired into this build yet**. Run it by hand:
+Both are wired and both must be green:
 
 ```sh
-zig build -Dtarget=native   # in ../zglint, or use a pinned copy
-../zglint/zig-out/bin/zginlint --max-comment-lines 1 src build.zig
+zig build zginlint:check   # zginlint, --max-comment-lines 1, zero findings
+zig build lines:check      # no .zig file over 3000 lines
 ```
 
-Two things block the gate:
+zginlint is pinned by URL + hash in `build.zig.zon`; `zig build zginlint` installs the CLI into
+`zig-out/bin/zginlint` if you want to run it by hand. There is no baseline and no suppression —
+a finding is a finding.
 
-- **706 comment blocks are still multi-line.** The ceiling is 1; the tree has not been converted.
-  New and changed code must comply — do not add a second line to a block you touch.
-- **6 `std.log.warn` sites** (`src/core/frame.zig`, `src/linux/renderer.zig`,
-  `src/linux/window.zig` ×3, `src/mac/window.zig`) trip `zginlint/no-std-log-warn`. Clearing them
-  needs a global Logger that a test never installs, which this repo does not have yet. That
-  migration is the prerequisite for wiring `zginlint:check` as a gate.
+The three rules it enforces:
+
+| rule | what it means |
+|---|---|
+| `zginlint/max-comment-lines` | a comment block is at most **1** line |
+| `zginlint/no-catch-unreachable` | banned — use `catch @panic("what failed")` or `try` |
+| `zginlint/no-std-log-warn` | no bare `std.log.warn`; go through `core/log.zig` |
+
+`core/log.zig` is the sink the last rule asks for: `log.warn` / `log.err` route to a sink the
+application installs with `setSink`, defaulting to stderr in production and **nothing at all**
+under `builtin.is_test`. A toolkit that writes to stderr behind the app's back breaks the app's
+test runner, because the Zig runner relays any stderr byte from a passing test as a failure.
 
 ## Layout
 

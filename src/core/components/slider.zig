@@ -1,6 +1,4 @@
 // Agnostic reusable Clay slider (toolkit-style, library only).
-// Imports: std + zclay + core/color + core/render_common + sibling components ONLY.
-// Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
@@ -8,32 +6,14 @@ const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
-/// Same shape as toggle.ClickFn / button.ClickFn. Stored in SliderProps
-/// (declare-only slider never fires it); the owner reads the built props
-/// back and fires `props.on_change(props.ctx)` on pointer dispatch.
 pub const ClickFn = ?*const fn (?*anyopaque) void;
 
 /// Reserved Clay IDI offsets under .ID(props.id) for inner parts.
-/// The outer itself is .ID(props.id) == IDI(props.id, 0), so 1/2/3 never
-/// collide with it (same +1 scheme as scroll thumbs / list rows).
 pub const track_index: u32 = 1;
 pub const fill_index: u32 = 2;
 pub const thumb_index: u32 = 3;
 
-/// Toolkit-style slider props. All styling via props with neutral dark
-/// defaults — no theme/app imports. `id` becomes the Clay element ID
-/// (stable across frames for hover/selection queries).
-/// `value` is clamped to [min, max]; fraction = (value-min)/(max-min or 1).
-/// `w`/`h` fix the outer hit area to an exact pixel size. `track_h` is the
-/// bar thickness, `radius` rounds track + fill. `track_bg` paints the empty
-/// bar, `fill_bg` the filled portion, `thumb_color` the knob circle
-/// (`thumb_size` square, radius = size/2).
-/// `hover_fill` (null = no hover tint) overrides the fill bg while hovered.
-/// `disabled` paints track + fill with `disabled_bg`, suppresses hover chrome
-/// and skips click registration (declare never fires; owner dispatch via
-/// stored props must also check `disabled`).
-/// `on_change`/`ctx` are stored verbatim for owner-side dispatch; the
-/// slider declaration itself is unchanged (hover chrome only).
+/// Toolkit-style slider props.
 pub const SliderProps = struct {
     id: []const u8,
     value: f32 = 0.5,
@@ -55,42 +35,20 @@ pub const SliderProps = struct {
 };
 
 /// Pure: clamped 0..1 fraction for value in [min, max].
-/// Guards max <= min with denom 1 (avoids div-by-zero; yields 0 at min).
 pub fn fracOf(value: f32, min: f32, max: f32) f32 {
     const lo = @min(min, max);
     const hi = @max(min, max);
     const clamped = @min(@max(value, lo), hi);
     const denom = hi - lo;
     const d: f32 = if (denom <= 0) 1 else denom;
-    // NOTE: when min > max the range is inverted; anchor to lo so the
-    // fraction still runs 0 (at lo) .. 1 (at hi).
+    // NOTE: when min > max the range is inverted; anchor to lo so the fraction still runs 0 (at lo) ..
     const frac = (clamped - lo) / d;
     return @min(1, @max(0, frac));
 }
 
-/// Declare a slider: outer hit area (fixed w/h, transparent) + track bar
-/// (fixed w x track_h) + fill bar (w*frac x track_h, left-aligned) + thumb
-/// circle (thumb_size, parked at the fill end via the fill's right+center
-/// child_alignment — the child_alignment trick).
-/// Hover: uses `cl.hovered()` (Clay_Hovered — true when the pointer is over
-/// the currently open element) to switch the fill bg to `hover_fill` when
-/// set. Callers must feed pointer state via `cl.setPointerState()` each
-/// frame (same as Shell.frame); without it the slider renders the resting bg.
-/// Selection/click handling stays caller-side (like the button hitTest
-/// pattern): after layout, query
-/// `cl.pointerOver(cl.getElementId(props.id))`.
-///
-/// No drag yet: the engine has no per-component drag (click_registry is
-/// click-only). scroll.zig / host.zig carry slider-style press-drag for
-/// scroll containers (pointer down = scroll down, 1:1 clamped) — a future
-/// slider-drag would follow that pattern (press latch + motion nudge +
-/// value remap) but is out of scope here; this component is click-only.
+/// Declare a slider: outer hit area (fixed w/h, transparent) + track bar (fixed w x track_h) + fill bar (w*frac x track_h, left-aligned) + thumb circle.
 pub fn slider(props: SliderProps) void {
-    // NOTE: cl.hovered() must be evaluated INSIDE the UI() config literal
-    // (after Clay__OpenElement runs, while this element is open) so it
-    // queries this slider part — calling it here beforehand would query the
-    // parent/root instead and hover_fill would never (or spuriously) trigger.
-    // Disabled sliders never take hover chrome and never register clicks.
+    // NOTE: cl.hovered() must be evaluated INSIDE the UI() config literal (after Clay__OpenElement runs, while this element is open) so it queries this.
     const frac = fracOf(props.value, props.min, props.max);
     const w_f: f32 = @floatFromInt(props.w);
     const h_f: f32 = @floatFromInt(props.h);
@@ -132,9 +90,7 @@ pub fn slider(props: SliderProps) void {
                     },
                     .child_alignment = .{ .x = .right, .y = .center },
                 },
-                // NOTE: cl.hovered() stays INSIDE this UI() literal (while
-                // the fill is open) — hoisting it above would query the
-                // track/outer instead.
+                // NOTE: cl.hovered() stays INSIDE this UI() literal (while the fill is open) — hoisting it above would query the track/outer instead.
                 .background_color = (if (props.disabled) props.disabled_bg else if (cl.hovered()) (props.hover_fill orelse props.fill_bg) else props.fill_bg).toClay(),
                 .corner_radius = .all(@floatFromInt(props.radius)),
             })({
@@ -152,9 +108,7 @@ pub fn slider(props: SliderProps) void {
             });
         });
     });
-    // Semantics: a slider is draggable, so it reports `drag` rather than a
-    // plain click. The numeric value is not mirrored into `value` (a []const u8
-    // would need a per-frame buffer); assert on it through the app's own state.
+    // Semantics: a slider is draggable, so it reports `drag` rather than a plain click.
     semantics.register(.{
         .id = cl.getElementId(props.id),
         .tag = props.id,
@@ -165,7 +119,6 @@ pub fn slider(props: SliderProps) void {
     if (!props.disabled) {
         if (props.on_change) |cb| {
             // Horizontal-resize cursor: draggable slider track.
-            // Disabled skips registration so hover stays .default.
             registry.registerClickCursor(cl.getElementId(props.id), cb, props.ctx, .ew_resize);
         }
     }
@@ -183,19 +136,15 @@ fn declareSlider() void {
     slider(.{ .id = "test-slider" });
 }
 
-/// Run one headless Clay frame around `declare_fn`, counting rectangle
-/// and text render commands.
+/// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
 fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !void {
     const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed). Clay keeps
-    // a global currentContext pointer inside this arena, so freeing it
-    // would dangle the *next* test's minMemorySize/initialize (segfault).
+    // NOTE: intentionally leaked (page_allocator, never freed).
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
     cl.setMeasureTextFunction(void, {}, stubMeasure);
-    // Park the pointer far outside the layout so hovered() is false and
-    // the test observes the resting bg path deterministically.
+    // Park the pointer far outside the layout so hovered() is false and the test observes the resting bg path deterministically.
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     declare_fn();
@@ -215,8 +164,7 @@ test "slider emits outer + track + fill + thumb rectangles and no text" {
     var rects: usize = 0;
     var texts: usize = 0;
     try countCommands(declareSlider, &rects, &texts);
-    // Outer (transparent) + track + fill + thumb = 4; allow 3 if the
-    // backend culls the transparent outer or a zero-size fill.
+    // Outer (transparent) + track + fill + thumb = 4; allow 3 if the backend culls the transparent outer or a zero-size fill.
     try std.testing.expect(rects >= 3 and rects <= 4);
     try std.testing.expectEqual(@as(usize, 0), texts);
 }

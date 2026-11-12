@@ -1,16 +1,4 @@
 //! A scriptable file dialog, for tests.
-//!
-//! Install a `Fake` and `openFile` answers from it instead of reaching the platform. It is
-//! opt-in: with nothing installed the portable stub answers exactly as before, so a test that
-//! does not install one sees no change.
-//!
-//! The fake also records what it was ASKED for — title, starting folder, the whole filter list —
-//! because a test that only asserts on the answer cannot catch a dialog opening in the wrong
-//! directory or offering the wrong extensions.
-//!
-//! The paths it returns are DUPLICATED into the caller's allocator, so `Selection.deinit` is
-//! safe on a fake selection exactly as it is on a real one. A borrowed slice would make the
-//! caller free memory it does not own.
 
 const std = @import("std");
 const contract = @import("file_dialog_contract.zig");

@@ -1,6 +1,4 @@
 // Agnostic reusable Clay checkbox (toolkit-style, library only).
-// Imports: std + zclay + core/color + core/render_common + sibling components ONLY.
-// Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
@@ -8,25 +6,9 @@ const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
-/// Same shape as button.ClickFn. Stored in CheckboxProps (declare-only
-/// checkbox never fires it); the owner reads the built props back and fires
-/// `props.on_click(props.ctx)` on pointer dispatch.
 pub const ClickFn = ?*const fn (?*anyopaque) void;
 
-/// Toolkit-style checkbox props. All styling via props with neutral
-/// defaults — no theme/app imports. `id` becomes the Clay element ID
-/// (stable across frames for hover/selection queries).
-/// `checked` selects `checked_bg` vs `box_bg` and draws the inner check
-/// mark (a 60% inner box painted `check_color`) when true.
-/// `size` fixes the box to an exact pixel square. `radius` rounds the box.
-/// `border_width` (uniform, 0 = none) + `border_color` emit a Clay BORDER
-/// command.
-/// `hover_bg` (null = no hover tint) overrides the box bg while hovered.
-/// `disabled` paints `disabled_bg`, suppresses hover chrome and skips click
-/// registration (declare never fires; owner dispatch via stored props must
-/// also check `disabled`).
-/// `on_click`/`ctx` are stored verbatim for owner-side dispatch; the
-/// checkbox declaration itself is unchanged (hover chrome only).
+/// Toolkit-style checkbox props.
 pub const CheckboxProps = struct {
     id: []const u8,
     checked: bool = false,
@@ -44,22 +26,9 @@ pub const CheckboxProps = struct {
     ctx: ?*anyopaque = null,
 };
 
-/// Declare a checkbox: outer fixed square (unchecked/checked bg) + inner
-/// check box (60% size, `check_color`) when `checked`.
-/// Hover: uses `cl.hovered()` (Clay_Hovered — true when the pointer is
-/// over the currently open element) to switch the box bg to `hover_bg`
-/// when set. Callers must feed pointer state via `cl.setPointerState()`
-/// each frame (same as Shell.frame); without it the checkbox renders the
-/// resting bg.
-/// Selection/click handling stays caller-side (like the button hitTest
-/// pattern): after layout, query
-/// `cl.pointerOver(cl.getElementId(props.id))`.
+/// Declare a checkbox: outer fixed square (unchecked/checked bg) + inner check box (60% size, `check_color`) when `checked`.
 pub fn checkbox(props: CheckboxProps) void {
-    // NOTE: cl.hovered() must be evaluated INSIDE the UI() config literal
-    // (after Clay__OpenElement runs, while this element is open) so it
-    // queries this checkbox — calling it here beforehand would query the
-    // parent/root instead and hover_bg would never (or spuriously) trigger.
-    // Disabled checkboxes never take hover chrome and never register clicks.
+    // NOTE: cl.hovered() must be evaluated INSIDE the UI() config literal (after Clay__OpenElement runs, while this element is open) so it queries this.
     const box_f: f32 = @floatFromInt(props.size);
     const inner_f: f32 = box_f * 0.6;
     cl.UI()(.{
@@ -91,8 +60,7 @@ pub fn checkbox(props: CheckboxProps) void {
             })({});
         }
     });
-    // Semantics: `checked` is the state a test asserts on, and the node is
-    // registered even when disabled so `assertIsDisabled` can find it.
+    // Semantics: `checked` is the state a test asserts on, and the node is registered even when disabled so `assertIsDisabled` can find it.
     semantics.register(.{
         .id = cl.getElementId(props.id),
         .tag = props.id,
@@ -101,8 +69,7 @@ pub fn checkbox(props: CheckboxProps) void {
     });
     if (!props.disabled) {
         if (props.on_click) |cb| {
-            // Pointer cursor: clickable checkbox. Disabled skips
-            // registration so hover stays .default.
+            // Pointer cursor: clickable checkbox.
             registry.registerClickCursor(cl.getElementId(props.id), cb, props.ctx, .pointer);
         }
     }
@@ -124,19 +91,15 @@ fn declareCheckedCheckbox() void {
     checkbox(.{ .id = "test-checkbox-checked", .checked = true });
 }
 
-/// Run one headless Clay frame around `declare_fn`, counting rectangle
-/// and text render commands.
+/// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
 fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !void {
     const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed). Clay keeps
-    // a global currentContext pointer inside this arena, so freeing it
-    // would dangle the *next* test's minMemorySize/initialize (segfault).
+    // NOTE: intentionally leaked (page_allocator, never freed).
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
     cl.setMeasureTextFunction(void, {}, stubMeasure);
-    // Park the pointer far outside the layout so hovered() is false and
-    // the test observes the resting bg path deterministically.
+    // Park the pointer far outside the layout so hovered() is false and the test observes the resting bg path deterministically.
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     declare_fn();

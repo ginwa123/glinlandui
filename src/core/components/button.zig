@@ -1,6 +1,4 @@
 // Agnostic reusable Clay button (toolkit-style, library only).
-// Imports: std + zclay + core/color + core/render_common + sibling components ONLY.
-// Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
@@ -8,26 +6,9 @@ const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
-/// Stored in ButtonProps (declare-only button never fires it); the owner
-/// (views/host) reads the built props back and fires
-/// `props.on_click(props.ctx)` on pointer dispatch (e.g. close box).
 pub const ClickFn = ?*const fn (?*anyopaque) void;
 
-/// Toolkit-style button props. All styling via props with neutral dark
-/// defaults — no theme/app imports. `id` becomes the Clay element ID
-/// (stable across frames for hover/selection queries).
-/// `w`/`h`, when set, fix that axis to an exact pixel size (null keeps
-/// the label-fitting behavior); `pad_tb`/`pad_lr` are the top-bottom /
-/// left-right padding preserved from the original axes(8, 16).
-/// `min_w`/`min_h`/`max_w`/`max_h` clamp the fit axes (null = no
-/// constraint; forwarded to Clay fitMinMax). Fixed `w`/`h` ignore min/max.
-/// `radius` rounds the rect (a.k.a. `rounded`). `border_width` (uniform,
-/// 0 = none) + `border_color` emit a Clay BORDER command.
-/// `disabled` dims to `disabled_bg`/`disabled_fg`, suppresses hover chrome
-/// and skips click registration (declare never fires; owner dispatch via
-/// stored props must also check `disabled`).
-/// `on_click`/`ctx` are stored verbatim for owner-side dispatch; the
-/// button declaration itself is unchanged (hover chrome only).
+/// Toolkit-style button props.
 pub const ButtonProps = struct {
     id: []const u8,
     label: []const u8,
@@ -64,21 +45,8 @@ fn sizingAxisFixedOrFit(fixed: ?u32, min: ?u32, max: ?u32) cl.SizingAxis {
 }
 
 /// Declare a button: rounded rect sized to its label + centered text.
-/// Hover: uses `cl.hovered()` (Clay_Hovered — true when the pointer is
-/// over the currently open element) to switch the rect bg to `hover_bg`.
-/// Callers must feed pointer state via `cl.setPointerState()` each frame
-/// (same as Shell.frame); without it the button renders the resting `bg`.
-/// Selection/click handling stays caller-side (like the current hitTest
-/// pattern): after layout, query
-/// `cl.pointerOver(cl.getElementId(props.id))`.
 pub fn button(props: ButtonProps) void {
-    // NOTE: cl.hovered() must be evaluated INSIDE the UI() config literal
-    // (after Clay__OpenElement runs, while this element is open) so it
-    // queries this button — calling it here beforehand would query the
-    // parent/root instead and hover_bg would never (or spuriously) trigger.
-    // Disabled buttons never take hover chrome and never register clicks.
-    // NOTE: cl.hovered() stays INSIDE the UI() literal below (while this
-    // element is open) — hoisting it here would query the parent/root.
+    // NOTE: cl.hovered() must be evaluated INSIDE the UI() config literal (after Clay__OpenElement runs, while this element is open) so it queries this.
     const fg: Color = if (props.disabled) props.disabled_fg else props.fg;
     cl.UI()(.{
         .id = .ID(props.id),
@@ -102,15 +70,7 @@ pub fn button(props: ButtonProps) void {
             .color = fg.toClay(),
         });
     });
-    // Semantics: registered for EVERY button, not only the ones with a click
-    // callback. The calculator example passes `on_click = null` and registers
-    // its 20 keys externally with `registerZCursor`, so keying off `on_click`
-    // would make every keypad key invisible to `onNodeWithText("7")`.
-    //
-    // `actions.click` is deliberately NOT set here: `semantics.resolve` folds
-    // it in from click_registry, the one authoritative record of what dispatch
-    // will actually fire. That is what lets an externally-registered button
-    // report `hasClickAction` correctly.
+    // Semantics: registered for EVERY button, not only the ones with a click callback.
     semantics.register(.{
         .id = cl.getElementId(props.id),
         .tag = props.id,
@@ -120,8 +80,7 @@ pub fn button(props: ButtonProps) void {
     });
     if (!props.disabled) {
         if (props.on_click) |cb| {
-            // Pointer cursor: clickable button. Disabled skips
-            // registration so hover stays .default.
+            // Pointer cursor: clickable button.
             registry.registerClickCursor(cl.getElementId(props.id), cb, props.ctx, .pointer);
         }
     }
@@ -139,19 +98,15 @@ fn declareButton() void {
     button(.{ .id = "test-button", .label = "OK" });
 }
 
-/// Run one headless Clay frame around `declare_fn`, counting rectangle
-/// and text render commands.
+/// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
 fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !void {
     const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed). Clay keeps
-    // a global currentContext pointer inside this arena, so freeing it
-    // would dangle the *next* test's minMemorySize/initialize (segfault).
+    // NOTE: intentionally leaked (page_allocator, never freed).
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
     cl.setMeasureTextFunction(void, {}, stubMeasure);
-    // Park the pointer far outside the layout so hovered() is false and
-    // the test observes the resting bg path deterministically.
+    // Park the pointer far outside the layout so hovered() is false and the test observes the resting bg path deterministically.
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     declare_fn();
@@ -247,9 +202,6 @@ test "button hover switches bg to hover_bg when pointer is over" {
     try std.testing.expectEqual(rest_c, bg1.?);
 
     // Frame 2: pointer over the button center (frame-1 box) — hover bg.
-    // setPointerState hit-tests against frame-1 boxes, so pointerOverIds
-    // is populated before beginLayout; hovered() inside the UI() literal
-    // then observes the open button element.
     const box = cl.getElementData(cl.getElementId(props.id)).bounding_box;
     cl.setPointerState(.{ .x = box.x + box.width * 0.5, .y = box.y + box.height * 0.5 }, false);
     cl.beginLayout();
@@ -261,9 +213,6 @@ test "button hover switches bg to hover_bg when pointer is over" {
     try std.testing.expectEqual(hover_c, bg2.?);
 
     // Frame 3: pointer inside the window but OFF the button — resting bg.
-    // (Catches the ordering bug from the other side: hovered() evaluated
-    // before UI() queries the parent/root, whose box contains the point,
-    // so buggy code paints hover_bg even though the button isn't hovered.)
     try std.testing.expect(box.x + box.width < 700 or box.y + box.height < 460);
     cl.setPointerState(.{ .x = 700, .y = 460 }, false);
     cl.beginLayout();
@@ -326,8 +275,7 @@ fn fitWidth(declare_fn: *const fn () void, id: []const u8) !f32 {
 }
 
 test "button padding props grow the fit box" {
-    // "OK" at 14px: stub text w = 2*14*0.6 = 16.8. Default padding
-    // axes(tb 8, lr 16) adds 32 horizontally; zero padding adds none.
+    // "OK" at 14px: stub text w = 2*14*0.6 = 16.8.
     const wide = try fitWidth(declarePaddedButton, "test-padded-button");
     const narrow = try fitWidth(declareUnpaddedButton, "test-unpadded-button");
     try std.testing.expectEqual(@as(f32, 32), wide - narrow);

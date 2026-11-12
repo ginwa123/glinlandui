@@ -1,31 +1,4 @@
 //! Real glyph rasterization for the software renderer (stb_truetype).
-//!
-//! ## Why this module exists
-//!
-//! `Surface.drawTextRun` used to be deliberately glyph-free: it drew one
-//! anti-aliased box per UTF-8 *byte*. That is portable, needs no font, and is
-//! what the shared pixel suite verifies — but it means the software backend
-//! shows text as vertical bars instead of characters, so macOS did not look
-//! like the Linux/GLES3 build. This module is the glyph path, using the
-//! already-vendored stb_truetype and an already-resolved system font, so both
-//! backends draw the same characters.
-//!
-//! ## Why it is its own module
-//!
-//! The GLES3 backend already has a stb_truetype atlas, but it is built around
-//! uploading a texture and is therefore GL-specific. Rewriting or sharing that
-//! would put the Linux native path at risk for a macOS problem, so this is a
-//! separate, small, self-contained implementation for the CPU surface. It
-//! blends straight into the RGBA8 surface using the same source-over equation
-//! `Surface.blend` already uses for boxes, so glyphs composite over the
-//! keypad exactly like everything else.
-//!
-//! ## Font selection
-//!
-//! Fonts come from the shared `text.resolveFont()`, which already lists macOS
-//! system faces (Menlo, SFNSMono, Monaco) and Linux ones (DejaVuSansMono). No
-//! font is bundled, so a host with neither simply falls back to the
-//! glyph-free bars — `Surface.drawTextRun` degrades rather than failing.
 
 const std = @import("std");
 const stb = @cImport({
@@ -39,76 +12,35 @@ pub const bytes_per_pixel: usize = 4;
 /// A loaded font: the file bytes plus the stb face built over them.
 pub const Font = struct {
     /// The file bytes must outlive the face, so they are owned here.
-    /// page_allocator hands back page-aligned memory, which also satisfies
-    /// stb_truetype's alignment wish for mmap-style font access.
     bytes: []u8,
     info: stb.stbtt_fontinfo,
     /// Baseline offset from the top of a line, in pixels, at scale 1.
     ascent: f32 = 0,
     descent: f32 = 0,
 
-    /// Load the platform's default UI font, trying each candidate until one
-    /// actually PARSES.
-    ///
-    /// Walking the list matters: `text.resolveFont()` only checks that a path
-    /// exists, and the first existing candidate on macOS is Menlo.ttc — a
-    /// TrueType *collection*, which stbtt_InitFont rejects. Trusting
-    /// `resolveFont` alone therefore meant "no font" even on a machine with
-    /// perfectly good ones installed, and the UI silently fell back to bars.
+    /// Load the platform's default UI font, trying each candidate until one actually PARSES.
     pub fn loadDefault() ?Font {
         for (text_backend.fontCandidates()) |path| {
             if (load(path)) |font| {
                 return font;
             } else |_| {
-                // Not parseable (wrong format, truncated, permissions). Try
-                // the next candidate rather than giving up.
+                // Not parseable (wrong format, truncated, permissions).
             }
         }
         return null;
     }
 
     /// Load one specific font file.
-    ///
-    /// The READING is fs-bound and is delegated to the platform text module
-    /// (`text_backend.readFontBytes`); the PARSING is not, and lives in
-    /// `fromBytes`. That split is what lets a backend with no filesystem build
-    /// the same `Font` from bytes it obtained some other way — see this
-    /// module's header for the whole reason.
     pub fn load(path: [:0]const u8) !Font {
         const buf = try text_backend.readFontBytes(path, std.heap.page_allocator);
         errdefer std.heap.page_allocator.free(buf);
         return fromBytes(buf);
     }
 
-    /// Build a `Font` over bytes the CALLER owns. No filesystem, no process
-    /// allocator, nothing to resolve: this is the constructor a backend uses
-    /// when the font arrives as memory rather than as a path — the browser,
-    /// where `web/shim.js` fetches the font and hands the bytes to wasm.
-    ///
-    /// Ownership: the returned `Font` owns `bytes`, and `deinit` frees them
-    /// with `std.heap.page_allocator` — the allocator `load` above always used.
-    /// A caller that allocated the bytes differently must therefore NOT call
-    /// `deinit` on the result. The web backend leans on exactly that: it
-    /// installs its font for process lifetime and never frees it.
-    ///
-    /// Alignment: stb_truetype reads the font in place and prefers aligned
-    /// data. Both `std.heap.page_allocator` and `std.heap.wasm_allocator`
-    /// return 16-byte-aligned memory, which is what the wasm path relies on.
+    /// Build a `Font` over bytes the CALLER owns.
     pub fn fromBytes(bytes: []u8) !Font {
         if (bytes.len == 0) return error.FontNotFound;
-        // THE GUARD IS LOAD-BEARING, not defensive politeness. Measured: hand
-        // `stbtt_InitFont` the bytes 00 01 02 03 04 05 06 07 … and it does not
-        // politely return 0 — it reads a nonsense `numTables` out of the header
-        // and walks off the end of the buffer, tripping STBTT_assert (SIGABRT
-        // natively, a wasm trap in a browser). So we validate the signature
-        // OURSELVES, and only then let stb parse something that looks like a
-        // font. `Font.loadDefault`'s candidate walk depends on this too: it
-        // keeps going precisely because a non-font answers "no" here.
-        //
-        // `ttcf` is deliberately NOT accepted: it is a TrueType *collection*,
-        // which `stbtt_InitFont` with offset 0 cannot load (see the note on
-        // `fontCandidates`), so rejecting it up front is both correct and one
-        // fewer malformed header handed to stb.
+        // THE GUARD IS LOAD-BEARING, not defensive politeness.
         if (!sfntSignatureRecognized(bytes)) return error.FontInitFailed;
 
         var info: stb.stbtt_fontinfo = undefined;
@@ -134,18 +66,12 @@ pub const Font = struct {
     }
 
     /// The font's line box height at `font_size`, in pixels: ascent + |descent|.
-    ///
-    /// `stbtt_ScaleForPixelHeight` is defined so that this comes out exactly
-    /// `font_size` — which is why a caller can centre a run by centring this
-    /// box, and why the layout-side estimator's `1.2 * font_size` box is
-    /// slightly taller than the line it holds.
     pub fn lineHeight(self: *const Font, font_size: u16) f32 {
         const scale = self.scaleFor(font_size);
         return (self.ascent - self.descent) * scale;
     }
 
-    /// Horizontal advance of one codepoint in pixels, and where its bitmap
-    /// starts relative to the pen.
+    /// Horizontal advance of one codepoint in pixels, and where its bitmap starts relative to the pen.
     pub fn glyphMetrics(self: *const Font, cp: u21, font_size: u16) Metrics {
         const scale = self.scaleFor(font_size);
         var adv: c_int = 0;
@@ -157,9 +83,7 @@ pub const Font = struct {
         };
     }
 
-    /// Rasterize one codepoint's coverage mask, or null when the font has no
-    /// glyph for it (a space, typically). `w`/`h` are the mask dimensions and
-    /// must be freed with `freeMask`.
+    /// Rasterize one codepoint's coverage mask, or null when the font has no glyph for it (a space, typically).
     pub fn glyphBitmap(self: *const Font, cp: u21, font_size: u16) ?Mask {
         const scale = self.scaleFor(font_size);
         var w: c_int = 0;
@@ -188,19 +112,6 @@ pub const Font = struct {
 };
 
 /// The four sfnt signatures `stbtt_InitFont` is happy to parse at offset 0.
-///
-/// This is a WHITELIST, not a blacklist, on purpose: the point is to never hand
-/// stb a header it will trust blindly. Its table directory is walked using a
-/// `numTables` read straight out of the bytes, so unrecognised input does not
-/// reliably produce a clean "0" — see the measured note in `Font.fromBytes`.
-///
-/// Rejected deliberately:
-///   - `ttcf` — a TrueType collection. `stbtt_InitFont(…, 0)` cannot load one
-///     (that is why `text_portable.fontCandidates` lists a `.ttc` second and
-///     `Font.loadDefault` keeps walking).
-///   - anything else — including the `<!DOCTYPE html>` a failed font fetch
-///     returns, which is the exact case a browser hits when `assets/font.ttf`
-///     is missing.
 pub fn sfntSignatureRecognized(bytes: []const u8) bool {
     if (bytes.len < 4) return false;
     const tag = std.mem.readInt(u32, bytes[0..4], .big);
@@ -230,10 +141,7 @@ pub fn freeMask(m: *Mask) void {
     m.* = undefined;
 }
 
-/// Decode the next UTF-8 codepoint. The keymap and labels are ASCII, so this
-/// is deliberately minimal: it handles 1-4 byte sequences and treats anything
-/// malformed as a single byte rather than erroring, so a stray byte in a label
-/// cannot take down a frame.
+/// Decode the next UTF-8 codepoint.
 pub fn nextCodepoint(text: []const u8, index: *usize) u21 {
     const i = index.*;
     if (i >= text.len) return 0;
@@ -265,8 +173,7 @@ pub fn nextCodepoint(text: []const u8, index: *usize) u21 {
     return @intCast(cp);
 }
 
-/// Total advance width of `text` in pixels, and the pixel ascent used to place
-/// the baseline. Used by callers that need to centre or right-align a run.
+/// Total advance width of `text` in pixels, and the pixel ascent used to place the baseline.
 pub fn measure(font: *const Font, text: []const u8, font_size: u16) struct { width: f32, ascent: f32 } {
     var total: f32 = 0;
     var i: usize = 0;
@@ -280,60 +187,29 @@ pub fn measure(font: *const Font, text: []const u8, font_size: u16) struct { wid
 
 // ---- a font supplied by the backend, for hosts that have no font paths ----
 
-/// A process-wide font installed by a platform backend, preferred over walking
-/// `text_backend.fontCandidates()`.
-///
-/// ## Why this exists
-///
-/// `Font.loadDefault()` resolves a font from PATHS, and paths are the only way
-/// a native host has ever obtained one. A browser has no paths at all: its font
-/// arrives as bytes — fetched over the network, or embedded in the module — so
-/// `src/web/window.zig` calls `installFont` once, when the bytes land, and every
-/// later `drawTextRun` finds it here.
-///
-/// ## Why a global rather than a parameter
-///
-/// `render_software.Surface` resolves its font lazily, from inside a draw call,
-/// with no way to thread an argument through Clay's render-command loop. That
-/// module already keeps its own process-global font slot for the same reason;
-/// this one is the *source* it consults first. Single-threaded UI only, no
-/// locking — matching every other global in the render path.
+/// A process-wide font installed by a platform backend, preferred over walking `text_backend.fontCandidates()`.
 var installed_font: ?Font = null;
 
 /// Install `f` as the process-wide font.
-///
-/// The caller keeps ownership of the bytes: see `fromBytes` on why the web
-/// backend allocates for process lifetime and never frees. Nothing here calls
-/// `deinit`, so installing a font whose bytes the caller still frees is safe as
-/// long as the caller also calls `clearInstalledFont` first.
 pub fn installFont(f: Font) void {
     installed_font = f;
 }
 
-/// The installed font, if any. A pointer rather than a copy so a caller can
-/// measure and rasterize without duplicating the `stbtt_fontinfo` (whose
-/// internal offsets point into `bytes`).
+/// The installed font, if any.
 pub fn installedFont() ?*Font {
     if (installed_font) |*f| return f;
     return null;
 }
 
-/// Drop the installed font. For tests, and for a backend tearing down. The
-/// bytes are NOT freed — the installer owns them.
+/// Drop the installed font.
 pub fn clearInstalledFont() void {
     installed_font = null;
 }
 
-// ===================== tests (parity suite — every platform) =====================
-//
-// These assert on behaviour that only makes sense when the host actually has a
-// font, so they no-op where none is installed rather than failing. The test
-// COUNT is identical on every platform either way, which is what the parity
-// contract requires.
+// ===================== tests (parity suite — every platform) ===================== These assert on behaviour that only makes sense when the host.
 
 test "fromBytes rejects empty bytes instead of building a dead Font" {
-    // A zero-length slice would make stbtt_InitFont read off the end of a
-    // 0-byte allocation. Refusing is the only safe answer.
+    // A zero-length slice would make stbtt_InitFont read off the end of a 0-byte allocation.
     var empty: [0]u8 = .{};
     try std.testing.expectError(error.FontNotFound, Font.fromBytes(&empty));
 }
@@ -346,12 +222,9 @@ test "sfntSignatureRecognized accepts the four loadable sfnt tags" {
 }
 
 test "sfntSignatureRecognized rejects a TrueType collection and HTML" {
-    // `ttcf`: a collection, which stbtt_InitFont at offset 0 cannot load. This
-    // is why `fontCandidates` may list a `.ttc` and `loadDefault` still walks on.
+    // `ttcf`: a collection, which stbtt_InitFont at offset 0 cannot load.
     try std.testing.expect(!sfntSignatureRecognized("ttcf"));
-    // The bytes a browser gets when the font fetch 404s. Without this guard
-    // they reach stbtt_InitFont, which reads numTables out of "<!DO" and walks
-    // off the end of the buffer — a SIGABRT natively and a wasm TRAP in a tab.
+    // The bytes a browser gets when the font fetch 404s.
     try std.testing.expect(!sfntSignatureRecognized("<!DOCTYPE html>"));
     try std.testing.expect(!sfntSignatureRecognized("wOFF"));
 }
@@ -363,10 +236,7 @@ test "sfntSignatureRecognized rejects a short buffer instead of reading past it"
 }
 
 test "fromBytes rejects bytes that are not a font, without aborting" {
-    // THE regression guard for the abort above. Before the signature check this
-    // test did not merely fail — it took the whole test binary down with
-    // SIGABRT, because stb asserts on a nonsense header. A harness that cannot
-    // survive bad input cannot be handed a font fetched over the network.
+    // THE regression guard for the abort above.
     var junk: [64]u8 = undefined;
     for (&junk, 0..) |*b, i| b.* = @intCast(i);
     try std.testing.expectError(error.FontInitFailed, Font.fromBytes(&junk));
@@ -376,8 +246,7 @@ test "fromBytes rejects bytes that are not a font, without aborting" {
 }
 
 test "installFont is visible to installedFont and clearInstalledFont drops it" {
-    // The web backend's whole font story in one test: install once, and every
-    // later resolution finds it without touching a filesystem.
+    // The web backend's whole font story in one test: install once, and every later resolution finds it without touching a filesystem.
     var font = requireFont() orelse return error.SkipZigTest;
     defer font.deinit();
     clearInstalledFont();
@@ -387,8 +256,7 @@ test "installFont is visible to installedFont and clearInstalledFont drops it" {
     const got = installedFont() orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(font.bytes.len, got.bytes.len);
     try std.testing.expectEqual(font.ascent, got.ascent);
-    // And it is the SAME face, not a copy that lost its offsets: an advance
-    // measured through the installed handle must match the original.
+    // And it is the SAME face, not a copy that lost its offsets: an advance measured through the installed handle must match the original.
     try std.testing.expectEqual(
         measure(&font, "8", 18).width,
         measure(got, "8", 18).width,
@@ -447,8 +315,7 @@ test "a font loads and reports a positive ascent when one is installed" {
 test "a space has no bitmap but still advances the pen" {
     var font = requireFont() orelse return error.SkipZigTest;
     defer font.deinit();
-    // This is why drawTextRun needs both: a blank glyph must still move the
-    // cursor, or every word would overlap.
+    // This is why drawTextRun needs both: a blank glyph must still move the cursor, or every word would overlap.
     try std.testing.expect(font.glyphMetrics(' ', 18).advance > 0);
     const m = font.glyphBitmap(' ', 18);
     if (m) |mask| {
@@ -533,8 +400,7 @@ test "measure of an empty string is zero width" {
 }
 
 test "a digits-only label is measured as a fixed number of advances" {
-    // The calculator's labels are ASCII, so this is the shape that matters:
-    // every character must contribute, and none may be silently dropped.
+    // The calculator's labels are ASCII, so this is the shape that matters: every character must contribute, and none may be silently dropped.
     var font = requireFont() orelse return error.SkipZigTest;
     defer font.deinit();
     const labels = [_][]const u8{ "C", "DEL", ".", "/", "+/-", "%", "=" };
@@ -547,8 +413,7 @@ test "a digits-only label is measured as a fixed number of advances" {
         }
         const one = measure(&font, "0", 18).width;
         const got = measure(&font, label, 18).width;
-        // Non-space labels must be at least as wide as a single digit; the
-        // catch is a label whose glyphs all come back as zero advance.
+        // Non-space labels must be at least as wide as a single digit; the catch is a label whose glyphs all come back as zero advance.
         try std.testing.expect(got > 0);
         try std.testing.expect(got >= one - 0.01 or n == 0);
     }

@@ -1,9 +1,4 @@
 // Agnostic reusable Clay dropdown (toolkit-style, library only).
-// Composes the input field (search) + generic list (matches) from the
-// sibling components: one search box over a filtered string list with
-// owner-side selection dispatch (same stored-props pattern as list).
-// Imports: std + zclay + core/color + core/render_common + sibling components ONLY.
-// Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
@@ -13,28 +8,19 @@ const input = @import("input.zig");
 const semantics = @import("../semantics.zig");
 
 /// Selection callback: plain fn pointer + opaque ctx (no closures).
-/// Stored in DropdownProps (declare-only dropdown never fires it); the
-/// owner reads the built props back and fires
-/// `props.on_select(props.ctx, i)` with the DISPLAY index on pointer
-/// dispatch (see the app views). Re-exported shape mirrors ListSelectFn.
 pub const DropdownSelectFn = ?*const fn (?*anyopaque, usize) void;
 
-/// Caret + keyboard-selection passthrough for the search field
-/// (owner-held input.EditState; null = legacy caret-at-end render).
-/// Pages use this alias so they never import input.zig directly.
+/// Caret + keyboard-selection passthrough for the search field (owner-held input.EditState; null = legacy caret-at-end render).
 pub const QueryEdit = ?input.EditState;
 
-/// Dropdown row kinds: info rows are display-only (search results
-/// headers, previews), action rows fire on_select, back rows are
-/// rendered without the drill-in chevron (the owner maps them back).
+/// Dropdown row kinds: info rows are display-only (search results headers, previews), action rows fire on_select, back rows are rendered without the.
 pub const RowKind = enum {
     info,
     action,
     back,
 };
 
-/// Case-insensitive substring match for the search filter. Empty
-/// query matches everything.
+/// Case-insensitive substring match for the search filter.
 pub fn matches(query: []const u8, item: []const u8) bool {
     if (query.len == 0) return true;
     if (query.len > item.len) return false;
@@ -45,9 +31,7 @@ pub fn matches(query: []const u8, item: []const u8) bool {
     return false;
 }
 
-/// Filter `items` by query into `out` (caller-owned scratch, must fit
-/// items.len). Returns the matched count; out[0..n] holds ORIGINAL
-/// indices so selection maps back to the source slice.
+/// Filter `items` by query into `out` (caller-owned scratch, must fit items.len).
 pub fn filter(query: []const u8, items: []const []const u8, out: []usize) usize {
     var n: usize = 0;
     for (items, 0..) |item, i| {
@@ -60,12 +44,7 @@ pub fn filter(query: []const u8, items: []const []const u8, out: []usize) usize 
     return n;
 }
 
-/// Toolkit-style dropdown props. All styling via props with neutral
-/// dark defaults — no theme/app imports. `field_id` / `list_id` become
-/// the Clay element IDs (stable across frames for hit-testing).
-/// `query` is caller-owned (Shell draft buffers), read synchronously
-/// during declare. `on_select`/`ctx` are stored verbatim for
-/// owner-side dispatch; the dropdown itself never fires callbacks.
+/// Toolkit-style dropdown props.
 pub const DropdownProps = struct {
     field_id: []const u8,
     list_id: []const u8,
@@ -101,65 +80,32 @@ pub const DropdownProps = struct {
     /// Overlay card border (defaults to border_* when 0-width + default color).
     overlay_border_width: u16 = 0,
     overlay_border_color: Color = Color.rgb(0x00, 0x00, 0x00),
-    /// Caret + keyboard selection for the search field (owner-held, one
-    /// per draft). Null keeps the legacy caret-at-end render.
+    /// Caret + keyboard selection for the search field (owner-held, one per draft).
     query_edit: ?input.EditState = null,
     on_select: DropdownSelectFn = null,
     ctx: ?*anyopaque = null,
-    /// Per-row clicks passthrough (Stage B): forwarded verbatim to the
-    /// inner list. When non-null, the inner list registers clicks[i]
-    /// per row; when null, the legacy on_select path is unchanged.
+    /// Per-row clicks passthrough (Stage B): forwarded verbatim to the inner list.
     clicks: ?[]const registry.RowClick = null,
-    /// Dispatch priority for inline declares (forwarded to the inner
-    /// list). Overlay declares ignore this and register at z_index
-    /// instead, so the float always wins over covered in-flow rows
-    /// without callers passing anything.
+    /// Dispatch priority for inline declares (forwarded to the inner list).
     click_z: i16 = 0,
-    /// Overlay mode: when true + anchor_id set, the field + list (+
-    /// footer) render in a floating container anchored under
-    /// IDI(anchor_id, anchor_index + 1) so opening never pushes siblings
-    /// down. Inline (false) keeps the legacy in-flow declare.
+    /// Overlay mode: when true + anchor_id set, the field + list (+ footer) render in a floating container anchored under IDI(anchor_id, anchor_index + 1).
     overlay: bool = false,
-    /// Anchor row list base id (e.g. "defaults-row-0"); the float attaches
-    /// to IDI(anchor_id, anchor_index + 1) (same +1 scheme as list rows).
+    /// Anchor row list base id (e.g.
     anchor_id: ?[]const u8 = null,
     /// Item index inside the anchor list (0 for single-row header lists).
     anchor_index: usize = 0,
-    /// Floating container id (one open at a time per page, so a single id
-    /// is safe; override per page to avoid cross-page collisions).
+    /// Floating container id (one open at a time per page, so a single id is safe; override per page to avoid cross-page collisions).
     overlay_id: []const u8 = "dropdown-float",
-    /// Opaque bg for the floating card so rows underneath don't show
-    /// through the gaps. Agnostic default (callers pass theme bg).
+    /// Opaque bg for the floating card so rows underneath don't show through the gaps.
     overlay_bg: Color = Color.rgb(0x22, 0x22, 0x22),
     overlay_pad: u16 = 8,
     overlay_radius: u32 = 4,
     z_index: i16 = 10,
-    /// Optional footer hint rendered inside the dropdown (inside the float
-    /// when overlay, inline otherwise) so it never takes layout room alone.
+    /// Optional footer hint rendered inside the dropdown (inside the float when overlay, inline otherwise) so it never takes layout room alone.
     footer: ?[]const u8 = null,
 };
 
-/// Declare a dropdown: search field (unless show_search is false) +
-/// one row per item under the list id namespace
-/// (IDI(list_id, index + 1), same +1 scheme as list — row 0 never
-/// collides with the container). Row content comes from the caller's
-/// comptime `renderItem(item_ctx, rows[i], i)`; the kind-driven chrome
-/// (chevron vs plain) is the render callback's job via item_ctx, same
-/// split as list (chrome bg in the component, fg in the callback).
-///
-/// Overlay (props.overlay + anchor_id): field + list + footer render in a
-/// floating card anchored under IDI(anchor_id, anchor_index + 1) — no
-/// sibling shift. Inline otherwise (legacy).
-///
-/// `rows`/`query` must outlive declare only (synchronous) — Shell-owned
-/// buffers or statics; props never retain items.
-///
-/// Cursor note: dropdown builds no registry entries of its own — the
-/// search field registers a hover-only .text entry via input.field /
-/// fieldEdit (.ID(field_id)) and each row registers .pointer via
-/// list.registerCell (IDI(list_id, i+1)). The overlay card
-/// (.ID(overlay_id)) is a layout container like box (no entry, .default).
-/// Disabled forwards to both children so hover stays .default.
+/// Declare a dropdown: search field (unless show_search is false) + one row per item under the list id namespace (IDI(list_id, index + 1), same +1.
 pub fn dropdown(
     props: DropdownProps,
     query: []const u8,
@@ -167,8 +113,7 @@ pub fn dropdown(
     item_ctx: anytype,
     comptime renderItem: fn (@TypeOf(item_ctx), []const u8, usize) void,
 ) void {
-    // Semantics: the closed field is the dropdown's identity; the expanded
-    // rows come from list.zig and register themselves as list items.
+    // Semantics: the closed field is the dropdown's identity; the expanded rows come from list.zig and register themselves as list items.
     semantics.register(.{
         .id = cl.getElementId(props.field_id),
         .tag = props.field_id,
@@ -262,8 +207,7 @@ fn dropdownInner(
         .on_select = props.on_select,
         .ctx = props.ctx,
         .clicks = props.clicks,
-        // Overlay floats above in-flow rows: dispatch at the float's
-        // z so covered headers can never fire through.
+        // Overlay floats above in-flow rows: dispatch at the float's z so covered headers can never fire through.
         .click_z = if (props.overlay) props.z_index else props.click_z,
     }, rows, item_ctx, renderItem);
     if (props.footer) |f| {
@@ -284,9 +228,7 @@ fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions
 
 fn layoutCommands(declare_fn: *const fn () void) ![]cl.RenderCommand {
     const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed). Clay keeps
-    // a global currentContext pointer inside this arena, so freeing it
-    // would dangle the *next* test's minMemorySize/initialize (segfault).
+    // NOTE: intentionally leaked (page_allocator, never freed).
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});

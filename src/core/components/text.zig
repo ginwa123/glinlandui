@@ -1,23 +1,12 @@
 // Agnostic reusable Clay label widget (toolkit-style, library only).
-// NOTE: this `text.zig` is the label widget — NOT font utils. Font
-// measurement/rendering lives in wayland.text (glinlandui); the name
-// overlap is coincidental. This file never imports wayland.text.
-// Imports: std + zclay + core/color + core/render_common ONLY.
-// Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
-/// Stored in TextProps for future ID-lookup dispatch; label() itself
-/// stays declare-only (never fires it) — the owner (views/host) may fire it
-/// via element-ID lookup later.
 pub const ClickFn = ?*const fn (?*anyopaque) void;
 
-/// Label props. All styling via props with neutral defaults.
-/// `on_click`/`ctx` are stored verbatim and documented; label() ignores
-/// them (declare-only leaf: no hover, no selection — those stay
-/// caller-side).
+/// Label props.
 pub const TextProps = struct {
     str: []const u8,
     font_size: u16 = 14,
@@ -29,9 +18,7 @@ pub const TextProps = struct {
     ctx: ?*anyopaque = null,
 };
 
-/// Declare a single text element. `wrap` maps to the Clay wrap_mode
-/// (.words when true, .none when false). Declare-only leaf: no hover,
-/// no selection — those stay caller-side.
+/// Declare a single text element.
 pub fn label(props: TextProps) void {
     cl.text(props.str, .{
         .font_size = props.font_size,
@@ -52,13 +39,10 @@ fn declareLabel() void {
     label(.{ .str = "Hello" });
 }
 
-/// Run one headless Clay frame around `declare_fn`, counting rectangle
-/// and text render commands.
+/// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
 fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !void {
     const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed). Clay keeps
-    // a global currentContext pointer inside this arena, so freeing it
-    // would dangle the *next* test's minMemorySize/initialize (segfault).
+    // NOTE: intentionally leaked (page_allocator, never freed).
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});

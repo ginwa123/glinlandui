@@ -1,9 +1,4 @@
 // Agnostic reusable Clay text field (toolkit-style, library only).
-// Single-line ASCII input: prompt + query + block cursor, on a distinct
-// background so it reads as a field; optional Clay BORDER chrome
-// (border_width/color) is drawn by the GLES3 renderer — see renderer.zig.
-// Imports: std + zclay + core/color + core/render_common ONLY.
-// Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
@@ -11,10 +6,6 @@ const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
 
 /// Raw evdev keycode → printable ASCII under the US layout.
-/// Returns null for non-printables (Escape/Backspace/Enter/Shift are
-/// handled by the owner, not here). Covers letters, digits + shifted
-/// symbols, space and the punctuation in timezones/formats (/, -, _,
-/// :, ., ,, ;).
 pub fn keyChar(evdev: u32, shift: bool) ?u8 {
     // Letters: Q..P, A..L, Z..M rows.
     const lower = "qwertyuiopasdfghjklzxcvbnm";
@@ -53,9 +44,7 @@ pub fn keyChar(evdev: u32, shift: bool) ?u8 {
     return null;
 }
 
-/// Append a char to a caller-owned draft buffer. Returns false when
-/// full (input ignored). Buffers stay owner-side (Shell state); this
-/// never allocates.
+/// Append a char to a caller-owned draft buffer.
 pub fn insert(buf: []u8, len: *usize, c: u8) bool {
     if (len.* >= buf.len) return false;
     buf[len.*] = c;
@@ -68,15 +57,7 @@ pub fn backspace(len: *usize) void {
     if (len.* > 0) len.* -= 1;
 }
 
-// ---- HTML-like caret + keyboard selection (single-line, ASCII) ----
-//
-// The field used to be append-only (caret pinned at end). EditState adds
-// an owner-held caret + Shift anchor per draft buffer so arrows move,
-// Shift+arrows select, Home/End jump, Ctrl+arrows jump words, typing
-// replaces the selection and Backspace/Delete remove it — like an HTML
-// <input>. All ops are pure over caller buffers (never allocate) and
-// clamp defensively, so Shell can hold one state per draft and pass it
-// to fieldEdit() for rendering.
+// ---- HTML-like caret + keyboard selection (single-line, ASCII) ---- The field used to be append-only (caret pinned at end).
 
 /// Raw evdev codes for navigation (observed live: no +8 offset).
 pub const KEY_LEFT: u32 = 105;
@@ -89,8 +70,6 @@ pub const KEY_DELETE: u32 = 111;
 pub const KEY_BACKSPACE: u32 = 14;
 
 /// Caret + keyboard-selection state (owner-held, one per draft buffer).
-/// `caret` is the active end (byte offset, 0..len); `anchor` is the
-/// fixed end while Shift is held (null = caret only, no selection).
 pub const EditState = struct {
     caret: usize = 0,
     anchor: ?usize = null,
@@ -131,8 +110,7 @@ fn moveCaret(st: *EditState, len: usize, new_caret: usize, shift: bool) void {
     }
 }
 
-/// Arrow left: with an active selection and no Shift, collapses to the
-/// selection start (HTML); otherwise steps one byte left.
+/// Arrow left: with an active selection and no Shift, collapses to the selection start (HTML); otherwise steps one byte left.
 pub fn moveLeft(st: *EditState, len: usize, shift: bool) void {
     if (!shift) {
         if (selection(st.*)) |sp| {
@@ -185,8 +163,7 @@ pub fn wordLeftEnd(buf: []const u8, len: usize, caret: usize) usize {
     return c;
 }
 
-/// Ctrl+Right target: skip word bytes rightward, then non-word bytes
-/// (lands at the end of the current/next word, like browsers).
+/// Ctrl+Right target: skip word bytes rightward, then non-word bytes (lands at the end of the current/next word, like browsers).
 pub fn wordRightEnd(buf: []const u8, len: usize, caret: usize) usize {
     var c = @min(caret, len);
     while (c < len and isWordChar(buf[c])) : (c += 1) {}
@@ -211,9 +188,7 @@ fn deleteSpan(buf: []u8, len: usize, start: usize, end: usize) usize {
     return len - (end - start);
 }
 
-/// Type a char: replaces the selection when present, else inserts at
-/// the caret. Returns false when the buffer is full (state untouched
-/// apart from a cleared selection — same as browsers dropping the key).
+/// Type a char: replaces the selection when present, else inserts at the caret.
 pub fn insertAt(buf: []u8, len: *usize, st: *EditState, c: u8) bool {
     if (selection(st.*)) |sp| {
         len.* = deleteSpan(buf, len.*, sp.start, sp.end);
@@ -229,8 +204,7 @@ pub fn insertAt(buf: []u8, len: *usize, st: *EditState, c: u8) bool {
     return true;
 }
 
-/// Backspace: deletes the selection when present, else the byte before
-/// the caret (no-op at 0).
+/// Backspace: deletes the selection when present, else the byte before the caret (no-op at 0).
 pub fn backspaceAt(buf: []u8, len: *usize, st: *EditState) void {
     if (selection(st.*)) |sp| {
         len.* = deleteSpan(buf, len.*, sp.start, sp.end);
@@ -244,8 +218,7 @@ pub fn backspaceAt(buf: []u8, len: *usize, st: *EditState) void {
     st.caret -= 1;
 }
 
-/// Forward Delete: deletes the selection when present, else the byte at
-/// the caret (no-op at end).
+/// Forward Delete: deletes the selection when present, else the byte at the caret (no-op at end).
 pub fn deleteAt(buf: []u8, len: *usize, st: *EditState) void {
     if (selection(st.*)) |sp| {
         len.* = deleteSpan(buf, len.*, sp.start, sp.end);
@@ -259,7 +232,6 @@ pub fn deleteAt(buf: []u8, len: *usize, st: *EditState) void {
 }
 
 /// Arrow/Home/End dispatch for a single-line field (Up/Down ignored).
-/// `ctrl` makes Left/Right word-wise. Returns true when consumed.
 pub fn handleNavKey(st: *EditState, buf: []const u8, len: usize, evdev: u32, shift: bool, ctrl: bool) bool {
     switch (evdev) {
         KEY_LEFT => {
@@ -282,18 +254,9 @@ pub fn handleNavKey(st: *EditState, buf: []const u8, len: usize, evdev: u32, shi
     }
 }
 
-// ---- Key-event state machine (component owns interpretation) ----
-//
-// Why this lives here instead of views.zig: the Wayland loop delivers
-// raw evdev to the Host delegate (only ui knows drafts/views), but
-// *interpreting* the event — mod latch, nav vs edit vs confirm — needs
-// no AppState, so it belongs to the component. The owner feeds every
-// key event to Mods.track first, then to handleKey per active draft,
-// and switches on the Action for business logic only (Enter = apply or
-// pick-first). Views keep routing + meaning, never keycode tables.
+// ---- Key-event state machine (component owns interpretation) ---- Why this lives here instead of views.zig: the Wayland loop delivers raw evdev to.
 
-/// Modifier latch: one per window (a single keyboard). Consumes
-/// Shift (42/54) and Ctrl (29/97) press + release.
+/// Modifier latch: one per window (a single keyboard).
 pub const Mods = struct {
     shift: bool = false,
     ctrl: bool = false,
@@ -313,18 +276,13 @@ pub const Mods = struct {
     }
 };
 
-/// What a key event means for the draft. `.confirm` (Enter) is the only
-/// action with business meaning; `.edited` needs nothing (declare reads
-/// the draft); `.ignored` falls through to the owner.
+/// What a key event means for the draft.
 pub const Action = enum { ignored, edited, confirm };
 
 pub const KEY_ENTER: u32 = 28;
 pub const KEY_A: u32 = 30;
 
-/// Full key handling for one draft buffer: arrows/Home/End (via
-/// handleNavKey), Backspace/Delete-at-caret, Ctrl+A select-all, Enter,
-/// printables. Releases are ignored (the owner must route them to
-/// Mods.track first). Never allocates; clamps defensively.
+/// Full key handling for one draft buffer: arrows/Home/End (via handleNavKey), Backspace/Delete-at-caret, Ctrl+A select-all, Enter, printables.
 pub fn handleKey(buf: []u8, len: *usize, st: *EditState, mods: Mods, evdev: u32, pressed: bool) Action {
     if (!pressed) return .ignored;
     if (handleNavKey(st, buf, len.*, evdev, mods.shift, mods.ctrl)) return .edited;
@@ -340,8 +298,7 @@ pub fn handleKey(buf: []u8, len: *usize, st: *EditState, mods: Mods, evdev: u32,
         KEY_ENTER => return .confirm,
         else => {},
     }
-    // Ctrl held: only Ctrl+A selects; every other Ctrl combo inserts
-    // nothing (no clipboard in this environment — never garbage-type).
+    // Ctrl held: only Ctrl+A selects; every other Ctrl combo inserts nothing (no clipboard in this environment — never garbage-type).
     if (mods.ctrl) {
         if (keyChar(evdev, false)) |c| {
             if (c == 'a') {
@@ -357,22 +314,18 @@ pub fn handleKey(buf: []u8, len: *usize, st: *EditState, mods: Mods, evdev: u32,
     return .ignored;
 }
 
-/// Toolkit-style field props. All styling via props with neutral dark
-/// defaults — no theme/app imports. `id` becomes the Clay element ID
-/// (stable across frames for hit-testing).
+/// Toolkit-style field props.
 pub const FieldProps = struct {
     id: []const u8,
     font_size: u16 = 14,
     fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
     bg: Color = Color.rgb(0x26, 0x26, 0x26),
-    /// Selected-run text color for fieldEdit (text runs carry color only,
-    /// no per-run bg at this renderer's fidelity).
+    /// Selected-run text color for fieldEdit (text runs carry color only, no per-run bg at this renderer's fidelity).
     sel_fg: Color = Color.rgb(0x7a, 0xb8, 0xff),
     radius: u32 = 4,
     pad_tb: u16 = 8,
     pad_lr: u16 = 12,
     /// Fixed size overrides (null = grow width / fit height defaults).
-    /// `w` fixes the width axis, `h` fixes the height axis.
     w: ?f32 = null,
     h: ?f32 = null,
     /// Min/max clamps for the grow/fit axes (0 = no constraint).
@@ -405,11 +358,6 @@ fn fieldBorder(props: FieldProps) cl.BorderElementConfig {
 }
 
 /// Declare a text field: prompt + query + block cursor on the field bg.
-/// The query slice is caller-owned (Shell draft buffers) and read
-/// synchronously during declare — no lifetime beyond the frame.
-/// Hover cursor: registers a hover-only entry for the field bg id
-/// (.ID(props.id), the outer container) with .text. Disabled skips so
-/// hover stays .default; empty id skips (headless-safe).
 pub fn field(props: FieldProps, query: []const u8) void {
     const bg: Color = if (props.disabled) props.disabled_bg else props.bg;
     const fg: Color = if (props.disabled) props.disabled_fg else props.fg;
@@ -446,9 +394,7 @@ pub fn field(props: FieldProps, query: []const u8) void {
             .color = fg_c,
         });
     });
-    // Semantics: an editable field declares `set_text`, so
-    // `Interaction.performTextInput` can refuse to type into a non-editable
-    // node and `assertValueEquals` can read the committed query.
+    // Semantics: an editable field declares `set_text`, so `Interaction.performTextInput` can refuse to type into a non-editable node and.
     if (!props.disabled and props.id.len > 0) {
         semantics.register(.{
             .id = cl.getElementId(props.id),
@@ -462,12 +408,7 @@ pub fn field(props: FieldProps, query: []const u8) void {
     }
 }
 
-/// Declare a text field with HTML-like caret + selection: prompt, then
-/// the query split around the caret (before / "|" / after), with the
-/// selected span in `sel_fg` when present. The caret sits at the active
-/// end (selection start when selecting leftward, end when rightward).
-/// Empty runs are skipped (Clay text takes non-empty slices only).
-/// Hover cursor: same hover-only .text entry on .ID(props.id) as field().
+/// Declare a text field with HTML-like caret + selection: prompt, then the query split around the caret (before / "|" / after), with the selected span.
 pub fn fieldEdit(props: FieldProps, query: []const u8, st: EditState) void {
     var s = st;
     clampEdit(&s, query.len);
@@ -536,9 +477,7 @@ fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions
 
 fn layoutCommands(declare_fn: *const fn () void) ![]cl.RenderCommand {
     const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed). Clay keeps
-    // a global currentContext pointer inside this arena, so freeing it
-    // would dangle the *next* test's minMemorySize/initialize (segfault).
+    // NOTE: intentionally leaked (page_allocator, never freed).
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});

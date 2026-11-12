@@ -1,20 +1,10 @@
 // Engine-owned per-frame click registry (no alloc, fixed cap).
-// Components self-register at declare time; the owner dispatches one
-// pointer point per frame. Highest-z match wins (floating overlays float
-// above in-flow rows regardless of declare order); ties keep
-// last-registered-first (legacy topmost-wins).
-// Imports: std + zclay ONLY.
-// Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
 
 pub const cap: usize = 256;
 
 /// Cursor kind for Wayland wl_pointer cursor shape.
-/// Stored per registry entry; the Wayland crew maps this to
-/// wl_cursor themes (default/pointer/text/ew-resize). Components set
-/// it beside their own register call (no central switch); disabled or
-/// non-registered boxes report .default (skip behavior — no entry).
 pub const Cursor = enum { default, pointer, text, ew_resize };
 
 /// Click callback shapes (same as button.ClickFn / list row fn).
@@ -22,8 +12,6 @@ pub const ClickFn = *const fn (?*anyopaque) void;
 pub const RowFn = *const fn (?*anyopaque, usize) void;
 
 /// Per-row click target: distinct fn+ctx per row (Stage B).
-/// Stored in ListProps.clicks / DropdownProps.clicks; list() registers
-/// clicks[i] for row i (rows beyond clicks.len get no entry).
 pub const RowClick = struct {
     on_click: *const fn (?*anyopaque, usize) void,
     ctx: ?*anyopaque,
@@ -35,11 +23,9 @@ const Entry = struct {
     cb_click: ?*const fn (?*anyopaque) void = null,
     ctx: ?*anyopaque = null,
     index: usize = 0,
-    /// Dispatch priority: highest-z containing match wins (overlay cards
-    /// register above in-flow rows). Default 0.
+    /// Dispatch priority: highest-z containing match wins (overlay cards register above in-flow rows).
     z: i16 = 0,
-    /// Hover cursor for this entry (Wayland cursor shape). Default
-    /// .default for existing entries.
+    /// Hover cursor for this entry (Wayland cursor shape).
     cursor: Cursor = .default,
 };
 
@@ -56,9 +42,7 @@ pub fn register(id: cl.ElementId, cb: *const fn (?*anyopaque, usize) void, ctx: 
     registerZ(id, cb, ctx, index, 0);
 }
 
-/// Register a row hit-target with dispatch priority (overlay rows pass
-/// their float z so they win over covered in-flow rows at shared points).
-/// Thin wrapper storing .default cursor (existing callers keep compiling).
+/// Register a row hit-target with dispatch priority (overlay rows pass their float z so they win over covered in-flow rows at shared points).
 pub fn registerZ(id: cl.ElementId, cb: *const fn (?*anyopaque, usize) void, ctx: ?*anyopaque, index: usize, z: i16) void {
     registerZCursor(id, cb, ctx, index, z, .default);
 }
@@ -71,28 +55,23 @@ pub fn registerZCursor(id: cl.ElementId, cb: *const fn (?*anyopaque, usize) void
 }
 
 /// Register a button hit-target (index-free click).
-/// Thin wrapper passing .default (existing callers keep compiling).
 pub fn registerClick(id: cl.ElementId, cb: ClickFn, ctx: ?*anyopaque) void {
     registerClickCursor(id, cb, ctx, .default);
 }
 
-/// Full click version storing cursor (button/toggle/checkbox/radio pass
-/// .pointer, slider passes .ew_resize, image on_click passes .pointer).
+/// Full click version storing cursor (button/toggle/checkbox/radio pass .pointer, slider passes .ew_resize, image on_click passes .pointer).
 pub fn registerClickCursor(id: cl.ElementId, cb: ClickFn, ctx: ?*anyopaque, cursor: Cursor) void {
     if (count >= cap) return;
     entries[count] = .{ .id = id, .cb_click = cb, .ctx = ctx, .cursor = cursor };
     count += 1;
 }
 
-/// Register a hover-only entry (no click callback): dispatchClick skips
-/// it but hoverCursorAt sees it. Used by the text field bg (.text).
-/// Empty-id callers must skip before calling (headless-safe).
+/// Register a hover-only entry (no click callback): dispatchClick skips it but hoverCursorAt sees it.
 pub fn registerHover(id: cl.ElementId, cursor: Cursor) void {
     registerHoverZ(id, cursor, 0);
 }
 
-/// Hover-only with explicit z (overlay floats pass their z so the float
-/// wins over covered in-flow rows, mirroring dispatchClick's rule).
+/// Hover-only with explicit z (overlay floats pass their z so the float wins over covered in-flow rows, mirroring dispatchClick's rule).
 pub fn registerHoverZ(id: cl.ElementId, cursor: Cursor, z: i16) void {
     if (count >= cap) return;
     entries[count] = .{ .id = id, .z = z, .cursor = cursor };
@@ -103,10 +82,7 @@ fn contains(bb: cl.BoundingBox, x: f32, y: f32) bool {
     return x >= bb.x and x < bb.x + bb.width and y >= bb.y and y < bb.y + bb.height;
 }
 
-/// Dispatch a click point: the highest-z containing match fires once
-/// (ties keep last-registered-first). Returns true when a target fired.
-/// Hover-only entries (no callback) are skipped so a .text field bg can
-/// never swallow a click meant for a lower-z target.
+/// Dispatch a click point: the highest-z containing match fires once (ties keep last-registered-first).
 pub fn dispatchClick(x: f32, y: f32) bool {
     var best: ?Entry = null;
     var i: usize = 0;
@@ -132,11 +108,7 @@ pub fn dispatchClick(x: f32, y: f32) bool {
     return false;
 }
 
-/// Hover cursor at a point: topmost (highest-z, ties last-registered
-/// wins — mirrors dispatchClick's rule) CONTAINING entry's cursor, or
-/// .default when none contains the point. Hover-only entries count;
-/// disabled / never-registered boxes have no entry so report .default.
-/// Reuses the same contains/bounding-box logic as dispatchClick.
+/// Hover cursor at a point: topmost (highest-z, ties last-registered wins — mirrors dispatchClick's rule) CONTAINING entry's cursor, or .default when.
 pub fn hoverCursorAt(x: f32, y: f32) Cursor {
     var best: ?Entry = null;
     var i: usize = 0;
@@ -150,12 +122,9 @@ pub fn hoverCursorAt(x: f32, y: f32) Cursor {
     return if (best) |hit| hit.cursor else .default;
 }
 
-// ---- Read-only view for consumers that need "what is clickable this frame"
-// without owning the dispatch logic (the semantics layer).
+// ---- Read-only view for consumers that need "what is clickable this frame" without owning the dispatch logic (the semantics layer).
 
-/// One hit-target entry, stripped of its callback pointers. `clickable` is
-/// false for hover-only entries (those carry a cursor but never fire), so
-/// consumers cannot mistake "has a cursor" for "has an action".
+/// One hit-target entry, stripped of its callback pointers.
 pub const Hit = struct {
     id: cl.ElementId,
     z: i16,
@@ -206,9 +175,7 @@ fn declareThree() void {
 
 fn layoutThree() !void {
     const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed). Clay keeps
-    // a global currentContext pointer inside this arena, so freeing it
-    // would dangle the *next* test's minMemorySize/initialize (segfault).
+    // NOTE: intentionally leaked (page_allocator, never freed).
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
@@ -271,8 +238,7 @@ test "overlap: higher-z wins even when registered first (overlay over rows)" {
     beginFrame();
     var under = Rec{};
     var over = Rec{};
-    // Overlay registers first (declared mid-loop), covered row after —
-    // visual stacking (z), not declare order, decides.
+    // Overlay registers first (declared mid-loop), covered row after — visual stacking (z), not declare order, decides.
     registerZ(rowId("cr-list", 1), onRow, &over, 111, 10);
     register(rowId("cr-list", 1), onRow, &under, 222);
     const bb = cl.getElementData(rowId("cr-list", 1)).bounding_box;
@@ -284,10 +250,7 @@ test "overlap: higher-z wins even when registered first (overlay over rows)" {
 }
 
 test "registry caps entries without crashing; last-within-cap wins" {
-    // No count accessor on the registry API, so the cap is asserted via
-    // dispatch behavior: cap + 6 registrations against one valid box must
-    // fire exactly once with the last within-cap index; entries past cap
-    // are dropped.
+    // No count accessor on the registry API, so the cap is asserted via dispatch behavior: cap + 6 registrations against one valid box must fire exactly.
     try layoutThree();
     beginFrame();
     var c = Rec{};
@@ -317,8 +280,7 @@ test "hoverCursorAt outside any box reports default" {
 }
 
 test "hoverCursorAt not-registered box reports default (disabled parity)" {
-    // Disabled components skip registration entirely, so a declared but
-    // never-registered box must report .default on hover.
+    // Disabled components skip registration entirely, so a declared but never-registered box must report .default on hover.
     try layoutThree();
     beginFrame();
     const bb = cl.getElementData(rowId("cr-list", 1)).bounding_box;

@@ -1,14 +1,4 @@
 // Generic Clay app Host: the engine-side owner ui views plugs into.
-// Owns the allocator, lazy GLES3 renderer slots, Clay arena, window dims,
-// pointer state, quit intent, a Views table and a KeyChain. App chrome
-// (root container, close props, page routing) lives in ui and plugs in
-// via `root_fn` (registered at init) — Host only owns beginFrame +
-// clayFrame plumbing + delegate events. Imports: std + siblings ONLY
-// (render + frame + dispatch + click_registry + window_contract for Delegate).
-// Never: ui/*, theme, or a platform backend — Host is core logic and must
-// compile identically on every OS. The Delegate it hands out is the neutral
-// one from the window contract, which is also what every backend re-exports,
-// so the type identity is shared rather than merely equivalent.
 const std = @import("std");
 const contract = @import("window_contract.zig");
 const render = @import("render.zig");
@@ -21,7 +11,6 @@ const scroll_mod = @import("components/scroll.zig");
 const semantics = @import("semantics.zig");
 
 /// App declare callback: builds the Clay tree for a w x h window.
-/// ctx is the app owner (e.g. *Shell); Host supplies dims + plumbing.
 pub const RootFn = *const fn (?*anyopaque, u32, u32) void;
 
 pub const Host = struct {
@@ -30,14 +19,11 @@ pub const Host = struct {
     renderer_attempted: bool = false,
     clay_mem: []u8 = &.{},
     clay_ready: bool = false,
-    /// Theme-independent default (720x480 literal); caller may override
-    /// win_w/h after init (same values as ui/theme.zig, the source of
-    /// truth — no theme import by design).
+    /// Theme-independent default (720x480 literal); caller may override win_w/h after init (same values as ui/theme.zig, the source of truth — no theme.
     win_w: u32 = 720,
     win_h: u32 = 480,
     ptr: dispatch.PtrState = .{},
-    /// Pending wheel scroll delta (px, accumulated by onScrollEvent,
-    /// consumed once per frame by frame() into Clay's scroll containers).
+    /// Pending wheel scroll delta (px, accumulated by onScrollEvent, consumed once per frame by frame() into Clay's scroll containers).
     scroll_dx: f32 = 0,
     scroll_dy: f32 = 0,
     quit_requested: bool = false,
@@ -61,17 +47,9 @@ pub const Host = struct {
         self.clay_ready = false;
     }
 
-    /// The per-frame declare phase: reset the per-frame registries, then run
-    /// the app's root callback.
-    ///
-    /// PUBLIC on purpose. The headless test Driver must drive THIS, not
-    /// `root_fn` directly: the resets are what stop click_registry entries and
-    /// semantics nodes from accumulating across frames. Bypassing them makes a
-    /// tag lookup ambiguous ("TooManyNodes") after the second frame, which is
-    /// exactly the bug this indirection exists to prevent.
+    /// The per-frame declare phase: reset the per-frame registries, then run the app's root callback.
     pub fn declareFrame(self: *Host, w: u32, h: u32) void {
-        // Fresh registries per frame (components self-register during
-        // declare; stale boxes must never ghost-fire).
+        // Fresh registries per frame (components self-register during declare; stale boxes must never ghost-fire).
         registry.beginFrame();
         scroll_mod.beginScrollFrame();
         image_widgets.beginFrame();
@@ -88,24 +66,17 @@ pub const Host = struct {
         _ = self.frameWithOptions(w, h, null);
     }
 
-    /// Frame variant used by the reusable headless test driver. A null
-    /// options pointer preserves the production Pango/GLES path exactly;
-    /// a non-null pointer only adds measurement/probe seams for tests.
+    /// Frame variant used by the reusable headless test driver.
     pub fn frameWithOptions(self: *Host, w: u32, h: u32, options: ?*const frame_mod.FrameOptions) u32 {
         if (!self.clay_ready) return frame_mod.shape_default;
         self.win_w = w;
         self.win_h = h;
-        // Consume the pending wheel delta exactly once per frame (Clay
-        // routes it to the hovered scroll container; zero = no-op).
+        // Consume the pending wheel delta exactly once per frame (Clay routes it to the hovered scroll container; zero = no-op).
         const dx = self.scroll_dx;
         const dy = self.scroll_dy;
         self.scroll_dx = 0;
         self.scroll_dy = 0;
-        // clayFrame resolves the cursor shape AFTER endLayout into
-        // frame_mod.currentShape() (it also returns it; void here keeps
-        // Delegate.on_frame and all Host.frame callers signature-stable).
-        // Window.run reads frame_mod.currentShape() after on_frame
-        // returns and set_shapes change-only — no ui/* churn.
+        // clayFrame resolves the cursor shape AFTER endLayout into frame_mod.currentShape() (it also returns it; void here keeps Delegate.on_frame and all.
         if (options) |opts| {
             return frame_mod.clayFrameWithOptions(
                 self.alloc,
@@ -143,10 +114,7 @@ pub const Host = struct {
         const last_x = self.ptr.x;
         const last_y = self.ptr.y;
         dispatch.pointerEvent(&self.ptr, x, y, pressed, button, self.win_w, self.win_h);
-        // Slider-style drag: while a press-drag is in flight, nudge the
-        // scroll container under the pointer 1:1 (pointer down = scroll
-        // down). dispatch only marks dragging; the scroll happens here so
-        // dispatch never imports scroll (no cycle: host owns both).
+        // Slider-style drag: while a press-drag is in flight, nudge the scroll container under the pointer 1:1 (pointer down = scroll down).
         if (self.ptr.down and self.ptr.dragging and (x != last_x or y != last_y)) {
             scroll_mod.dragScroll(x, y, x - last_x, y - last_y);
         }
@@ -241,13 +209,7 @@ fn recRoot(ctx: ?*anyopaque, w: u32, h: u32) void {
     r.h = h;
 }
 
-// ARENA DISCIPLINE (mirrors ui views_test.zig): testHost() intentionally
-// never deinits — Clay keeps a global currentContext pointer inside the
-// init arena, so freeing it would dangle the NEXT test's
-// minMemorySize/initialize (ABRT in clay.h Clay_MinMemorySize). Arenas
-// come from page_allocator (no leak detector). deinit's flag/free
-// transitions are covered separately on a stack Host with no Clay arena
-// involved (see the init/deinit test).
+// ARENA DISCIPLINE (mirrors ui views_test.zig): testHost() intentionally never deinits — Clay keeps a global currentContext pointer inside the init.
 fn testHost(h: *Host, ctx: ?*anyopaque, root_fn: RootFn) !void {
     h.* = try Host.init(std.heap.page_allocator, ctx, root_fn);
 }
@@ -259,8 +221,7 @@ test "host: init defaults headless (Clay only, renderer stays null)" {
     try std.testing.expect(h.renderer == null);
     try std.testing.expectEqual(@as(u32, 720), h.win_w);
     try std.testing.expectEqual(@as(u32, 480), h.win_h);
-    // deinit flag/free transitions on a stack Host (no Clay arena — safe;
-    // testing.allocator fails on leak, so a live free is proven).
+    // deinit flag/free transitions on a stack Host (no Clay arena — safe; testing.allocator fails on leak, so a live free is proven).
     var d = Host{ .alloc = std.testing.allocator, .root_fn = noopRoot, .clay_ready = true };
     d.clay_mem = try std.testing.allocator.alloc(u8, 8);
     d.deinit();

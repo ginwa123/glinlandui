@@ -1,17 +1,9 @@
 // Agnostic reusable Clay icon widget (toolkit-style, library only).
-// Nerd Font glyphs rendered as text: Pango + fontconfig fallback resolve
-// the private-use codepoints (FiraCode Nerd Font preferred — see
-// wayland.text.resolveFont), so no renderer image support is needed.
-// The GLES3 renderer draws icons like any label (textured quad via the
-// Pango cache); the stb fallback (ASCII-only atlas) degrades to rects.
-// Imports: std + zclay + core/color + core/render_common ONLY.
-// Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
 
-// ---- Glyph table (Font Awesome codepoints, present in Nerd Fonts) ----
-// Drill-in / expand affordances (replace the ASCII ">" chevron).
+// ---- Glyph table (Font Awesome codepoints, present in Nerd Fonts) ---- Drill-in / expand affordances (replace the ASCII ">" chevron).
 pub const chevron_right: []const u8 = "\u{F054}";
 pub const chevron_down: []const u8 = "\u{F078}";
 // Sidebar navigation (one per Page, same order as sidebar_items).
@@ -28,9 +20,7 @@ pub const search: []const u8 = "\u{F002}";
 pub const check: []const u8 = "\u{F00C}";
 pub const lock: []const u8 = "\u{F023}";
 
-/// Icon props. All styling via props with neutral defaults.
-/// `glyph` is a UTF-8 slice (one of the table entries above); `icon()`
-/// is a declare-only leaf like label() — no hover, no selection.
+/// Icon props.
 pub const IconProps = struct {
     glyph: []const u8,
     font_size: u16 = 14,
@@ -39,8 +29,7 @@ pub const IconProps = struct {
     disabled_color: Color = Color.rgb(0x77, 0x77, 0x77),
 };
 
-/// Declare a single icon element. Declare-only leaf: no hover, no
-/// selection — those stay caller-side.
+/// Declare a single icon element.
 pub fn icon(props: IconProps) void {
     cl.text(props.glyph, .{
         .font_size = props.font_size,
@@ -60,13 +49,10 @@ fn declareIcon() void {
     icon(.{ .glyph = chevron_right });
 }
 
-/// Run one headless Clay frame around `declare_fn`, counting rectangle
-/// and text render commands.
+/// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
 fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !void {
     const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed). Clay keeps
-    // a global currentContext pointer inside this arena, so freeing it
-    // would dangle the *next* test's minMemorySize/initialize (segfault).
+    // NOTE: intentionally leaked (page_allocator, never freed).
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});

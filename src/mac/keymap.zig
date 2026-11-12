@@ -1,33 +1,14 @@
 //! macOS virtual keycode -> Linux evdev code translation.
-//!
-//! The Delegate contract carries *evdev* keycodes: `components.input.keyChar`
-//! is a pure evdev -> ASCII table and `keyToClose` accepts evdev 1. macOS
-//! hands us `NSEvent.keyCode`, a completely different numbering (macOS `q`
-//! is 12, evdev `q` is 16), so the backend MUST translate before handing a key
-//! to the delegate. Doing it here — rather than making `components.input`
-//! platform-aware — is what keeps the whole widget layer and the Delegate
-//! contract identical on both operating systems.
-//!
-//! Everything in this module is a pure table lookup: no Cocoa, no runtime
-//! state, so it is unit-tested in the cross-platform parity suite and runs on
-//! Linux too. Only the Cocoa shell is untestable.
-//!
-//! `mac` values are macOS `NSEvent.keyCode` (ANSI / Carbon virtual codes).
-//! The keypad's arithmetic keys are deliberately NOT translated: the
-//! calculator example maps those evdev codes explicitly, so they must keep
-//! their evdev identity and be passed through untouched.
 
 const std = @import("std");
 
-/// Returned for a keycode with no evdev equivalent. Zero is evdev KEY_RESERVED,
-/// so 0 is a safe "not ours" sentinel — no real key maps to it.
+/// Returned for a keycode with no evdev equivalent.
 pub const KEY_NONE: u32 = 0;
 
 /// One row of a translation table.
 const Row = struct { mac: u16, ev: u32 };
 
-// macOS scatters the home row: 6 (22) sits before 5 (23), and 9 (25) sits
-// before 7 (26)/8 (28). These tables follow the real numbers, not a guess.
+// macOS scatters the home row: 6 (22) sits before 5 (23), and 9 (25) sits before 7 (26)/8 (28).
 const LETTERS = [_]Row{
     .{ .mac = 0, .ev = 30 }, // a
     .{ .mac = 1, .ev = 31 }, // s
@@ -70,9 +51,7 @@ const DIGITS = [_]Row{
     .{ .mac = 29, .ev = 11 }, // 0
 };
 
-/// Punctuation maps to the UNSHIFTED key's evdev code. The shifted character
-/// is `keyChar`'s job, not ours: evdev 13 is the only code `keyChar` knows
-/// that yields '+', so '=' must land on 13 and let shift do the rest.
+/// Punctuation maps to the UNSHIFTED key's evdev code.
 const PUNCT = [_]Row{
     .{ .mac = 27, .ev = 12 }, // -   (shift -> _)
     .{ .mac = 24, .ev = 13 }, // =   (shift -> +)
@@ -104,14 +83,7 @@ const NAMED = [_]Row{
     .{ .mac = 119, .ev = 107 }, // end
 };
 
-/// Modifier keys. These are delivered as ordinary key events so the Host's
-/// `Mods.track` updates itself exactly as it does on Wayland — that is what
-/// makes `keyChar(code, shift)` produce '+' for Shift+'=' with no change to
-/// the widget layer. Left and right of the same modifier share one evdev code
-/// on purpose: `Mods.track` treats 42/54 and 29/97 as the same logical state,
-/// so splitting them would be indistinguishable anyway.
-/// Option (58/61) and Command (55/54) are listed so they are *recognised*
-/// (reported as real keys) instead of falling through to KEY_NONE.
+/// Modifier keys.
 const MODIFIERS = [_]Row{
     .{ .mac = 56, .ev = 42 }, // left shift
     .{ .mac = 60, .ev = 42 }, // right shift
@@ -163,9 +135,7 @@ test "letters translate to their evdev codes" {
 }
 
 test "h/g and j/k/l are not transposed" {
-    // The macOS home row is a different shape from evdev's, so these three
-    // pairs are the easiest thing in this table to get wrong. Named
-    // explicitly so a regression cannot hide inside a round-trip test.
+    // The macOS home row is a different shape from evdev's, so these three pairs are the easiest thing in this table to get wrong.
     try std.testing.expectEqual(@as(u32, 35), toEvdev(4)); // h
     try std.testing.expectEqual(@as(u32, 34), toEvdev(5)); // g
     try std.testing.expectEqual(@as(u32, 36), toEvdev(38)); // j
@@ -183,10 +153,7 @@ test "digit row translates, including the out-of-order 5 and 6" {
 }
 
 test "every translated key round-trips through keyChar to the right ASCII" {
-    // The contract that actually matters: the Delegate hands evdev to
-    // `components.input.keyChar`, so a wrong translation surfaces as the wrong
-    // character. This is the test that would have caught the h/g and j/k/l
-    // transpositions.
+    // The contract that actually matters: the Delegate hands evdev to `components.input.keyChar`, so a wrong translation surfaces as the wrong character.
     const cases = [_]struct { mac: u16, want: u8 }{
         .{ .mac = 0, .want = 'a' }, // a
         .{ .mac = 1, .want = 's' },
@@ -227,9 +194,7 @@ test "every translated key round-trips through keyChar to the right ASCII" {
 }
 
 test "shifted punctuation keeps the unshifted evdev code" {
-    // '=' (mac 24) must map to evdev 13, and `keyChar` turns THAT into '+'
-    // when shift is held. Mapping '=' to some dedicated "plus" code would be
-    // wrong: evdev 13 is the only code `keyChar` knows that yields '+'.
+    // '=' (mac 24) must map to evdev 13, and `keyChar` turns THAT into '+' when shift is held.
     try std.testing.expectEqual(@as(u32, 13), toEvdev(24));
     try std.testing.expectEqual(@as(?u8, '='), input.keyChar(toEvdev(24), false));
     try std.testing.expectEqual(@as(?u8, '+'), input.keyChar(toEvdev(24), true));
@@ -250,8 +215,7 @@ test "escape maps to evdev 1 so keyToClose quits a macOS window" {
 }
 
 test "return maps to KEY_ENTER, not the keypad's code" {
-    // The calculator routes KEY_ENTER to '=' and the keypad's 96 separately,
-    // so these two must stay distinct.
+    // The calculator routes KEY_ENTER to '=' and the keypad's 96 separately, so these two must stay distinct.
     try std.testing.expectEqual(input.KEY_ENTER, toEvdev(36));
     try std.testing.expectEqual(@as(u32, 96), toEvdev(76));
     try std.testing.expect(input.KEY_ENTER != toEvdev(76));
@@ -273,9 +237,7 @@ test "arrow keys map to the navigation codes input.zig documents" {
 }
 
 test "shift and control reach the evdev codes Mods.track watches" {
-    // The Host's KeyChain calls `Mods.track(evdev, pressed)`, which watches
-    // 42/54 for shift and 29/97 for control. Both macOS shift keys and both
-    // control keys must land on one of those, or Shift+'=' would type '='.
+    // The Host's KeyChain calls `Mods.track(evdev, pressed)`, which watches 42/54 for shift and 29/97 for control.
     var mods = input.Mods{};
     for ([_]u16{ 56, 60 }) |mac_key| {
         const ev = toEvdev(mac_key);
@@ -294,8 +256,7 @@ test "shift and control reach the evdev codes Mods.track watches" {
 }
 
 test "option and command are recognised keys, not KEY_NONE" {
-    // They are not tracked by `Mods`, but reporting them as unmapped would be
-    // wrong: an app cannot tell "user pressed Option" from "unknown key".
+    // They are not tracked by `Mods`, but reporting them as unmapped would be wrong: an app cannot tell "user pressed Option" from "unknown key".
     try std.testing.expect(toEvdev(58) != KEY_NONE); // left option
     try std.testing.expect(toEvdev(61) != KEY_NONE); // right option
     try std.testing.expect(toEvdev(55) != KEY_NONE); // left command
@@ -312,8 +273,7 @@ test "a modifier press followed by '=' produces '+' through the chain" {
 }
 
 test "no keycode in the mapped set is itself the source of another row" {
-    // A duplicate `mac` would make translation order-dependent: the first
-    // row wins, so the table would silently depend on its own order.
+    // A duplicate `mac` would make translation order-dependent: the first row wins, so the table would silently depend on its own order.
     var seen = [_]u16{255} ** (LETTERS.len + DIGITS.len + PUNCT.len + NAMED.len + MODIFIERS.len);
     var n: usize = 0;
     for ([_][]const Row{ &LETTERS, &DIGITS, &PUNCT, &NAMED, &MODIFIERS }) |table| {
@@ -329,16 +289,14 @@ test "no keycode in the mapped set is itself the source of another row" {
 }
 
 test "an unmapped keycode reports KEY_NONE rather than a plausible wrong key" {
-    // Guessing is worse than silence: a wrong mapping types the wrong
-    // character, which is far more confusing than typing nothing.
+    // Guessing is worse than silence: a wrong mapping types the wrong character, which is far more confusing than typing nothing.
     try std.testing.expectEqual(KEY_NONE, toEvdev(10)); // gap in the ANSI map
     try std.testing.expectEqual(KEY_NONE, toEvdev(255));
     try std.testing.expectEqual(KEY_NONE, toEvdev(1000));
 }
 
 test "no mapped keycode collides with the KEY_NONE sentinel" {
-    // If a real key mapped to 0 it would be indistinguishable from "unmapped"
-    // and the keystroke would vanish.
+    // If a real key mapped to 0 it would be indistinguishable from "unmapped" and the keystroke would vanish.
     for (0..1200) |k| {
         const kc: u16 = @intCast(k);
         const ev = toEvdev(kc);

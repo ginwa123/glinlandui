@@ -1,11 +1,4 @@
 // Agnostic reusable Clay image widget (toolkit-style, library only).
-// Declares a fixed-size Clay IMAGE element whose image_data points at a
-// per-frame static ImageRef slot (path + fit + max_dim, synchronous
-// lifetime like all declare props). The GLES3 renderer decodes (stb),
-// caches, and draws it, falling back to a placeholder rect while
-// loading. Headless tests observe the IMAGE command (no GL).
-// Imports: std + zclay + core/color + core/render_common + click_registry ONLY.
-// Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
 const render = @import("../render_common.zig");
@@ -15,21 +8,10 @@ const semantics = @import("../semantics.zig");
 /// Image fit re-export (renderer owns the enum + math).
 pub const Fit = render.ImageFit;
 
-/// Click callback: plain fn pointer + opaque ctx (no closures), same
-/// shape as button.ClickFn. Stored + self-registered like button().
+/// Click callback: plain fn pointer + opaque ctx (no closures), same shape as button.ClickFn.
 pub const ClickFn = ?*const fn (?*anyopaque) void;
 
-/// Toolkit-style image props. All styling via props with neutral
-/// defaults — no theme/app imports. `id` becomes the Clay element ID
-/// (stable across frames for hit-testing). `path` is read
-/// synchronously during declare (the renderer hashes + decodes during
-/// the same frame's drawCommands) — the slice must outlive the frame,
-/// which AppState-owned file paths do.
-/// `w`/`h` fix the box in px (this Clay version has no
-/// source-dimensions, so images never auto-size). `max_dim` caps the
-/// decode (thumbnails small, preview larger). `radius` rounds the box
-/// corners (passed through to the IMAGE command). `on_click`/`ctx`
-/// self-register a click target like button() (null = display-only).
+/// Toolkit-style image props.
 pub const ImageProps = struct {
     id: []const u8,
     path: []const u8,
@@ -42,27 +24,21 @@ pub const ImageProps = struct {
     ctx: ?*anyopaque = null,
 };
 
-/// Per-frame ImageRef slots (synchronous-declare lifetime, mirroring
-/// the builders' scratch buffers). Reset by beginFrame() every frame
-/// from the host declare thunk (next to registry.beginFrame()).
-/// 64 slots cover full unpaged galleries (registry cap scales with it).
+/// Per-frame ImageRef slots (synchronous-declare lifetime, mirroring the builders' scratch buffers).
 pub const slot_cap: usize = 64;
 var ref_slots: [slot_cap]render.ImageRef = undefined;
 var slot_next: usize = 0;
 
-/// Reset the slot cursor for a new frame. Called by the host declare
-/// thunk; tests call it directly before declaring.
+/// Reset the slot cursor for a new frame.
 pub fn beginFrame() void {
     slot_next = 0;
 }
 
 const empty_path: [1]u8 = .{0};
 
-/// Declare an image element. Declare-only leaf besides the optional
-/// click registration (same contract as button()).
+/// Declare an image element.
 pub fn image(props: ImageProps) void {
-    // Cap guard: with more images than slots in one frame, the last
-    // slot is reused (same image drawn twice beats an OOB write).
+    // Cap guard: with more images than slots in one frame, the last slot is reused (same image drawn twice beats an OOB write).
     const idx = if (slot_next < slot_cap) slot_next else slot_cap - 1;
     slot_next += 1;
     const slot = &ref_slots[idx];
@@ -90,8 +66,7 @@ pub fn image(props: ImageProps) void {
         .role = .image,
     });
     if (props.on_click) |cb| {
-        // Pointer cursor: clickable image. Display-only images (null
-        // on_click) register nothing so hover stays .default.
+        // Pointer cursor: clickable image.
         registry.registerClickCursor(cl.getElementId(props.id), cb, props.ctx, .pointer);
     }
 }
@@ -111,9 +86,7 @@ fn declareImage() void {
 
 fn countImageCommands(declare_fn: *const fn () void, images: *usize, rects: *usize) !void {
     const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed). Clay keeps
-    // a global currentContext pointer inside this arena, so freeing it
-    // would dangle the *next* test's minMemorySize/initialize (segfault).
+    // NOTE: intentionally leaked (page_allocator, never freed).
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});

@@ -1,8 +1,4 @@
-// Generic agnostic dispatch tables: views / keys / pointer (no alloc,
-// fixed caps). The owner (engine Host, wired by ui views) holds a
-// Views table + KeyChain + PtrState; per-frame input routes here instead
-// of app switch statements. Imports: std + zclay + siblings ONLY.
-// Never: app/theme/layout/views/content/sidebar.
+// Generic agnostic dispatch tables: views / keys / pointer (no alloc, fixed caps).
 const std = @import("std");
 const cl = @import("zclay");
 const button = @import("button.zig");
@@ -16,8 +12,7 @@ pub const BTN_LEFT: u32 = 272;
 
 pub const view_cap: usize = 8;
 
-/// One renderable sub-view: `active` gates, `show` declares (receives the
-/// owner's close-box props so headers stay uniform).
+/// One renderable sub-view: `active` gates, `show` declares (receives the owner's close-box props so headers stay uniform).
 pub const ViewEntry = struct {
     active: *const fn (?*anyopaque) bool,
     show: *const fn (?*anyopaque, button.ButtonProps) void,
@@ -79,8 +74,7 @@ pub const KeyChain = struct {
     }
 };
 
-/// Mods.track first (consumed -> false), releases ignored, else first
-/// handler returning true wins (false when none does).
+/// Mods.track first (consumed -> false), releases ignored, else first handler returning true wins (false when none does).
 pub fn handleKey(chain: *KeyChain, keycode: u32, pressed: bool) bool {
     if (chain.mods.track(keycode, pressed)) return false;
     if (!pressed) return false;
@@ -92,9 +86,7 @@ pub fn handleKey(chain: *KeyChain, keycode: u32, pressed: bool) bool {
 
 // ---- Pointer ----
 
-/// Drag threshold: press + release with less than this much motion is a
-/// click; more marks dragging (scroll drag, release fires nothing). 6px
-/// absorbs touchpad jitter without dulling real drags.
+/// Drag threshold: press + release with less than this much motion is a click; more marks dragging (scroll drag, release fires nothing).
 pub const drag_threshold_px: f32 = 6;
 
 /// Owner-held pointer state (mirrors Shell's pointer_x/y/down).
@@ -111,20 +103,11 @@ pub const PtrState = struct {
     dragging: bool = false,
 };
 
-/// Always stores x/y. BTN_LEFT press: records the origin (down=true,
-/// dragging=false) but fires NOTHING — clicks dispatch on release so a
-/// press-drag-release scrolls instead of clicking (e.g. dragging the
-/// wallpaper gallery must not apply the thumbnail under the press).
-/// Motion (any non-BTN_LEFT event) while down marks dragging past the
-/// threshold. BTN_LEFT release: down=false; fires the registry click at
-/// the PRESS origin iff pressed in-bounds and never dragged. Other
-/// buttons ignored.
+/// Always stores x/y.
 pub fn pointerEvent(s: *PtrState, x: f32, y: f32, pressed: bool, button_code: u32, w: u32, h: u32) void {
     s.x = x;
     s.y = y;
-    // BTN_LEFT == 0x110 (272). Clicks dispatch through the engine
-    // registry (components self-register at declare time,
-    // last-registered-first).
+    // BTN_LEFT == 0x110 (272).
     if (button_code == BTN_LEFT and pressed) {
         s.down = true;
         s.dragging = false;
@@ -198,9 +181,7 @@ fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions
 
 fn layoutOne() !void {
     const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed). Clay keeps
-    // a global currentContext pointer inside this arena, so freeing it
-    // would dangle the *next* test's minMemorySize/initialize (segfault).
+    // NOTE: intentionally leaked (page_allocator, never freed).
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
@@ -321,9 +302,7 @@ test "keys: Escape-like code routes to the handler" {
     try std.testing.expect(!handleKey(&c, 30, true));
 }
 
-// ---- Press/release disambiguation (drag support): press records, motion
-// past the threshold marks dragging, release fires only when not dragged.
-// New-contract tests (fail until pointerEvent defers clicks to release).
+// ---- Press/release disambiguation (drag support): press records, motion past the threshold marks dragging, release fires only when not dragged.
 
 test "pointer: press alone fires nothing (click deferred to release)" {
     try layoutOne();
@@ -428,8 +407,7 @@ test "pointer: out-of-bounds press stores pos and down, never fires" {
     try std.testing.expectEqual(@as(usize, 0), rec.calls);
     try std.testing.expect(s.down);
     try std.testing.expectEqual(@as(f32, 800), s.x);
-    // Release (even back in-bounds) still fires nothing: the press began
-    // out-of-window.
+    // Release (even back in-bounds) still fires nothing: the press began out-of-window.
     pointerEvent(&s, 100, 100, false, 272, 720, 480);
     try std.testing.expectEqual(@as(usize, 0), rec.calls);
     try std.testing.expect(!s.down);

@@ -1,14 +1,4 @@
-//! Matchers for the semantics tree — the `onNodeWithText` / `hasClickAction`
-//! half of the E2E API.
-//!
-//! Shape note: Compose composes matchers (`hasText("x") and hasClickAction()`)
-//! over an object graph. Here a matcher is a DECLARATIVE query struct: unset
-//! fields do not constrain, so the common case reads as one literal and needs
-//! no allocation, no vtable and no allocator in the test path:
-//!
-//!     driver.onNode(.{ .label = "Save", .has_click_action = true })
-//!
-//! Imports: std + the sibling semantics module ONLY (layering R1-R3, R6).
+//! Matchers for the semantics tree — the `onNodeWithText` / `hasClickAction` half of the E2E API.
 const std = @import("std");
 const cl = @import("zclay");
 const sm = @import("../semantics.zig");
@@ -26,11 +16,9 @@ pub const Query = struct {
     checked: ?bool = null,
     selected: ?bool = null,
     hidden: ?bool = null,
-    /// true  -> only nodes with visible_fraction > 0
-    /// false -> only nodes fully clipped out of view
+    /// true -> only nodes with visible_fraction > 0 false -> only nodes fully clipped out of view
     displayed: ?bool = null,
-    /// Which match to select when several match. When unset, `findSole`
-    /// enforces Compose's onNode() contract: exactly one match or an error.
+    /// Which match to select when several match.
     index: ?usize = null,
 
     pub fn matches(q: Query, n: *const sm.Node) bool {
@@ -55,9 +43,7 @@ pub const FindError = error{
     NoNodeFound,
     /// `index` pointed past the last match (there WERE matches).
     NoNodeAtIndex,
-    /// More than one node matched and no `index` was given. Compose raises the
-    /// same way: `onNode` is a single-node handle, and silently picking the
-    /// first match hides a genuine test bug.
+    /// More than one node matched and no `index` was given.
     TooManyNodes,
 };
 
@@ -70,8 +56,7 @@ pub fn findOne(q: Query) FindError!sm.Node {
         if (seen == want) return n.*;
         seen += 1;
     }
-    // "Nothing matched" and "index past the last match" are different test
-    // bugs (a missing widget vs. a wrong index), so they get different errors.
+    // "Nothing matched" and "index past the last match" are different test bugs (a missing widget vs.
     return if (seen == 0) error.NoNodeFound else error.NoNodeAtIndex;
 }
 
@@ -96,10 +81,7 @@ pub fn count(q: Query) usize {
     return c;
 }
 
-// ---- Test doubles ----
-//
-// The matcher layer is pure over the registry, so its tests need no Clay
-// context at all: register nodes directly and query them.
+// ---- Test doubles ---- The matcher layer is pure over the registry, so its tests need no Clay context at all: register nodes directly and query them.
 
 fn seed() void {
     sm.beginFrame();

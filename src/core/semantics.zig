@@ -1,41 +1,12 @@
-//! Per-frame semantics model: the queryable node tree behind the E2E test
-//! API (`glinlandui.testing`) and, in time, accessibility and the debug
-//! inspector. One consumer today.
-//!
-//! IMMEDIATE MODE, so the tree is REBUILT every frame exactly like the widget
-//! tree. Three phases, in this order, per frame:
-//!
-//!   1. `beginFrame()`      — clear (called from Host.declareThunk, beside
-//!                            click_registry.beginFrame).
-//!   2. `register(...)`     — components declare their node DURING declare.
-//!                            The Clay `id` is known here; geometry is NOT.
-//!   3. `resolve(w, h)`     — AFTER `cl.endLayout()`, when Clay has computed
-//!                            every bounding box. Fills bounds/clip/visibility
-//!                            and folds in clickability from click_registry.
-//!
-//! The split exists because `cl.getElementData` returns nothing useful before
-//! layout runs. Getting this order wrong yields nodes with zero-size boxes and
-//! a `visible_fraction` of 0 — which reads as "not displayed" rather than as a
-//! bug, so it is worth being explicit about.
-//!
-//! Deliberate constraints, mirroring components/click_registry.zig:
-//!   * fixed capacity, zero allocation, `register` never fails
-//!   * Imports: std + zclay + the sibling registry ONLY
-//!     (layering rules R1-R3, parity purity R6)
-//!
-//! LIFETIME: `tag`, `label` and `value` are borrowed slices, exactly like
-//! `ButtonProps.label` today — they must outlive the frame they are declared
-//! in. Every caller in this repo passes a string literal or app-owned state.
+//! Per-frame semantics model: the queryable node tree behind the E2E test API (`glinlandui.testing`) and, in time, accessibility and the debug inspector.
 const std = @import("std");
 const cl = @import("zclay");
 const registry = @import("components/click_registry.zig");
 
-/// Node capacity. Matches click_registry.cap: the semantics layer must be able
-/// to hold every hit target plus the labels/containers around them.
+/// Node capacity.
 pub const cap: usize = 256;
 
-/// Ancestor chain depth kept per node. Clipping deeper than this is not a
-/// layout anyone can reason about; the innermost entries are kept.
+/// Ancestor chain depth kept per node.
 pub const ancestor_cap: usize = 8;
 
 pub const Role = enum {
@@ -56,28 +27,17 @@ pub const Role = enum {
     container,
 };
 
-/// What this node can DO. Compose's SemanticsActions, reduced to the four
-/// gestures this engine can actually perform.
-///
-/// `click` is NOT set by components: it is folded in during `resolve` from
-/// click_registry, which is the one authoritative record of "is this id
-/// clickable this frame". That matters because widgets are registered in more
-/// than one way — `button()` self-registers when `on_click` is set, while the
-/// calculator example passes `on_click = null` and registers all 20 keys
-/// externally with `registerZCursor`. Deriving from the registry captures both
-/// and cannot drift from what dispatch will actually do.
+/// What this node can DO.
 pub const Actions = packed struct(u8) {
     click: bool = false,
     scroll: bool = false,
     set_text: bool = false,
     drag: bool = false,
-    /// Explicit padding so the backing integer is a full byte, which keeps
-    /// `@bitCast` (in `fingerprint`) a plain u8 <-> struct cast.
+    /// Explicit padding so the backing integer is a full byte, which keeps `@bitCast` (in `fingerprint`) a plain u8 <-> struct cast.
     pad: u4 = 0,
 };
 
-/// State a test reads. `hidden` is intent (a collapsed panel); "clipped out of
-/// view" is DERIVED from geometry in `resolve`, never stored here.
+/// State a test reads.
 pub const Flags = packed struct(u8) {
     enabled: bool = true,
     checked: bool = false,
@@ -90,11 +50,7 @@ pub const Flags = packed struct(u8) {
 
 const EMPTY = cl.BoundingBox{ .x = 0, .y = 0, .width = 0, .height = 0 };
 
-/// One ancestor snapshot. `clips` matters: a plain container's box contains its
-/// children anyway, so intersecting with it is a no-op at best and wrong at
-/// worst — floating overlays and absolutely-positioned children legitimately
-/// paint outside their parent. ONLY clip/scroll containers may narrow the
-/// visible rect.
+/// One ancestor snapshot.
 const Ancestor = struct {
     id: cl.ElementId,
     clips: bool,
@@ -131,9 +87,7 @@ pub const Node = struct {
         return self.found and !self.flags.hidden and self.visible_fraction > 0;
     }
 
-    /// Where a click should land: the centre of the VISIBLE region, so a
-    /// half-clipped row still receives a hit inside its scroll viewport rather
-    /// than at its geometric centre (which may be clipped away entirely).
+    /// Where a click should land: the centre of the VISIBLE region, so a half-clipped row still receives a hit inside its scroll viewport rather than at its.
     pub fn visibleCenter(self: Node) cl.Vector2 {
         const x0 = @max(self.bounds.x, self.clip.x);
         const y0 = @max(self.bounds.y, self.clip.y);
@@ -150,15 +104,13 @@ var count: usize = 0;
 var stack: [ancestor_cap]Ancestor = undefined;
 var stack_len: usize = 0;
 
-/// Reset for a new frame. Called from Host.declareThunk, beside
-/// click_registry.beginFrame() and scroll.beginScrollFrame().
+/// Reset for a new frame.
 pub fn beginFrame() void {
     count = 0;
     stack_len = 0;
 }
 
 /// Containers call these for the span of their children's declaration.
-/// `clips` = this element scrolls/clips its content (scroll.zig passes true).
 pub fn pushAncestor(id: cl.ElementId, clips: bool) void {
     if (stack_len < stack.len) stack[stack_len] = .{ .id = id, .clips = clips };
     stack_len += 1;
@@ -168,8 +120,7 @@ pub fn popAncestor() void {
     if (stack_len > 0) stack_len -= 1;
 }
 
-/// Register a node during declare. Never fails; drops silently past `cap`
-/// (the same contract as click_registry.register).
+/// Register a node during declare.
 pub fn register(node: Node) void {
     if (count >= cap) return;
     var n = node;
@@ -182,7 +133,6 @@ pub fn register(node: Node) void {
 }
 
 /// Fill geometry for every registered node, then fold in clickability.
-/// MUST run after `cl.endLayout()`. A no-op for an empty registry.
 pub fn resolve(viewport_w: f32, viewport_h: f32) void {
     const viewport = cl.BoundingBox{ .x = 0, .y = 0, .width = viewport_w, .height = viewport_h };
     for (nodes[0..count]) |*n| {
@@ -210,9 +160,7 @@ pub fn resolve(viewport_w: f32, viewport_h: f32) void {
     mergeClickable();
 }
 
-/// Fold clickability in from click_registry — the authoritative record of what
-/// dispatch will actually fire on this frame. Nodes already marked clickable
-/// (components that self-register) skip the scan.
+/// Fold clickability in from click_registry — the authoritative record of what dispatch will actually fire on this frame.
 fn mergeClickable() void {
     const hits = registry.hitCount();
     for (nodes[0..count]) |*n| {
@@ -254,9 +202,7 @@ fn intersectionArea(a: cl.BoundingBox, b: cl.BoundingBox) f32 {
     return i.width * i.height;
 }
 
-/// FNV-1a over the observable semantics of this frame. This is what makes
-/// `Driver.waitForIdle` a FIXED-POINT test instead of a sleep: two consecutive
-/// frames with the same fingerprint have nothing left to settle.
+/// FNV-1a over the observable semantics of this frame.
 pub fn fingerprint() u64 {
     var h: u64 = 0xcbf29ce484222325;
     h = mix(h, count);
@@ -287,10 +233,6 @@ fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions
 }
 
 /// One headless Clay layout of a single fixed-size box.
-/// NOTE: the arena is intentionally leaked (page_allocator, never freed).
-/// Clay keeps a process-global currentContext pointer inside it, so freeing it
-/// would dangle the NEXT test's minMemorySize/initialize (segfault) — the same
-/// convention every component test follows.
 fn layoutBox(id: []const u8, w: f32, h: f32) !void {
     const mem_size = cl.minMemorySize();
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
@@ -306,8 +248,7 @@ fn layoutBox(id: []const u8, w: f32, h: f32) !void {
     _ = cl.endLayout();
 }
 
-/// One headless Clay layout of an id'd clip container holding one child that
-/// overflows it on the vertical axis (100px viewport, 400px child).
+/// One headless Clay layout of an id'd clip container holding one child that overflows it on the vertical axis (100px viewport, 400px child).
 fn layoutClipped() !void {
     const mem_size = cl.minMemorySize();
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
@@ -402,8 +343,7 @@ test "resolve reports not-found for an id Clay never laid out" {
 test "a clipping ancestor narrows the clip and lowers visible_fraction" {
     try layoutClipped();
     beginFrame();
-    // The scroll container declares itself, then pushes its clip around the
-    // child — the order scroll.zig uses.
+    // The scroll container declares itself, then pushes its clip around the child — the order scroll.zig uses.
     register(.{
         .id = cl.getElementId("sem-clip"),
         .tag = "sem-clip",
@@ -430,24 +370,20 @@ test "a clipping ancestor narrows the clip and lowers visible_fraction" {
 test "a non-clipping ancestor does not narrow the visible region" {
     try layoutClipped();
     beginFrame();
-    // Same shape, but the ancestor is NOT marked as clipping: a floating
-    // overlay legitimately paints outside its parent, so its box must not
-    // clip the child.
+    // Same shape, but the ancestor is NOT marked as clipping: a floating overlay legitimately paints outside its parent, so its box must not clip the child.
     pushAncestor(cl.getElementId("sem-clip"), false);
     register(.{ .id = cl.getElementId("sem-child"), .tag = "sem-child" });
     popAncestor();
     resolve(720, 480);
 
     const child = byId(cl.getElementId("sem-child")).?;
-    // The clip falls back to the VIEWPORT (480 tall), not to the ancestor's
-    // 100px box: a non-clipping ancestor contributes nothing.
+    // The clip falls back to the VIEWPORT (480 tall), not to the ancestor's 100px box: a non-clipping ancestor contributes nothing.
     try std.testing.expectApproxEqAbs(@as(f32, 480), child.clip.height, 0.5);
     try std.testing.expectApproxEqAbs(@as(f32, 1), child.visible_fraction, 0.001);
 }
 
 test "visibleCenter clamps to the clip rect, not the geometric centre" {
-    // Half the node is clipped away: the geometric centre would fall outside
-    // the visible strip, so the click point must come from the intersection.
+    // Half the node is clipped away: the geometric centre would fall outside the visible strip, so the click point must come from the intersection.
     const n = Node{
         .id = cl.getElementId("half"),
         .tag = "half",
@@ -474,8 +410,7 @@ test "fingerprint is stable for identical frames and moves with geometry" {
     register(moved);
     try std.testing.expect(fingerprint() != h1);
 
-    // The node COUNT is part of the fingerprint: a node appearing or
-    // disappearing is a UI change even when the survivors are identical.
+    // The node COUNT is part of the fingerprint: a node appearing or disappearing is a UI change even when the survivors are identical.
     beginFrame();
     register(.{ .id = cl.getElementId("fp"), .tag = "fp" });
     register(.{ .id = cl.getElementId("fp2"), .tag = "fp2" });

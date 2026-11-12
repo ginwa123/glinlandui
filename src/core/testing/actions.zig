@@ -1,20 +1,9 @@
-//! Pure action PLANNING for the E2E API — the geometry and gesture math behind
-//! `performScrollTo`, `performTouchInput` and the wheel helpers.
-//!
-//! Nothing here touches the Host: the event injection lives in
-//! `testing/root.zig` (which owns the Driver), so this module stays a leaf that
-//! is unit-testable with no Clay context and no allocator. That split also
-//! avoids a root.zig -> actions.zig -> root.zig import cycle.
-//!
-//! Imports: std + zclay + the sibling semantics module ONLY (R1-R3, R6).
+//! Pure action PLANNING for the E2E API — the geometry and gesture math behind `performScrollTo`, `performTouchInput` and the wheel helpers.
 const std = @import("std");
 const cl = @import("zclay");
 const sm = @import("../semantics.zig");
 
-/// A scroll nudge in `scroll.scrollBy`'s units: positive `dy` scrolls DOWN
-/// (content moves up), positive `dx` scrolls RIGHT. This is the same sign
-/// convention the wheel path lands on after `frame.zig` negates Wayland's
-/// axis values, so a delta computed here can be handed to either path.
+/// A scroll nudge in `scroll.scrollBy`'s units: positive `dy` scrolls DOWN (content moves up), positive `dx` scrolls RIGHT.
 pub const ScrollIntent = struct {
     dx: f32 = 0,
     dy: f32 = 0,
@@ -24,25 +13,15 @@ pub const ScrollIntent = struct {
     }
 };
 
-/// Clay multiplies a wheel delta by this factor (see scroll.zig's wheel test:
-/// a delta of 5 travels 50px), so a test that wants N pixels of travel must
-/// emit N / wheel_factor wheel units.
+/// Clay multiplies a wheel delta by this factor (see scroll.zig's wheel test: a delta of 5 travels 50px), so a test that wants N pixels of travel must.
 pub const wheel_factor: f32 = 10;
 
 /// Convert a desired pixel travel into the wheel delta that produces it.
-/// `Driver.scroll(0, wheelUnitsForPixels(px))` scrolls content up by `px`.
 pub fn wheelUnitsForPixels(px: f32) f32 {
     return px / wheel_factor;
 }
 
-/// How far to scroll to bring `n` fully inside its clip rect. Zero when it
-/// already fits. Vertical and horizontal are computed independently, so a
-/// `.both` container converges too.
-///
-/// The node-taller-than-viewport case aligns the node's leading edge rather
-/// than trying to fit it (which would be impossible and would oscillate):
-/// `performScrollTo` on an oversized node still terminates, it just parks the
-/// top of it at the top of the viewport.
+/// How far to scroll to bring `n` fully inside its clip rect.
 pub fn revealDelta(n: sm.Node) ScrollIntent {
     if (!n.found) return .{};
     return .{
@@ -60,23 +39,13 @@ fn revealAxis(node_pos: f32, node_len: f32, clip_pos: f32, clip_len: f32) f32 {
     return 0;
 }
 
-/// A pointer gesture plan: press at the start, `steps` interpolated motions,
-/// then release at the end. This is what `performTouchInput { swipeUp() }` is
-/// built from.
-///
-/// The plan deliberately does NOT know about `dispatch.drag_threshold_px`. That
-/// is the point: whether a gesture registers as a drag or as a click is the
-/// engine's decision to make, and routing the test through real motions is what
-/// exercises it. A swipe shorter than the threshold correctly degrades to a
-/// click — a test that wants to catch the "press-drag-release must scroll, not
-/// click" regression should use a long swipe.
+/// A pointer gesture plan: press at the start, `steps` interpolated motions, then release at the end.
 pub const Swipe = struct {
     from_x: f32,
     from_y: f32,
     to_x: f32,
     to_y: f32,
-    /// Intermediate motion events. More steps = a more realistic gesture, and
-    /// a smoother `scroll.dragScroll` accumulation.
+    /// Intermediate motion events.
     steps: u8 = 4,
 
     pub fn stepCount(self: Swipe) usize {
@@ -93,8 +62,7 @@ pub const Swipe = struct {
         return .{ .x = self.to_x, .y = self.to_y };
     }
 
-    /// Interpolated motion point `i` of `stepCount()`. `i == stepCount()`
-    /// lands exactly on the end point, so the final motion never overshoots.
+    /// Interpolated motion point `i` of `stepCount()`.
     pub fn pointAt(self: Swipe, i: usize) cl.Vector2 {
         const n = self.stepCount();
         const k: f32 = @floatFromInt(@min(i, n));
@@ -171,8 +139,7 @@ test "revealDelta scrolls up for a node above the viewport" {
 
 test "revealDelta aligns the leading edge of an oversized node" {
     var n = sample();
-    // Taller than the 100px viewport: fitting is impossible, so the top of the
-    // node is parked at the top of the viewport instead of oscillating.
+    // Taller than the 100px viewport: fitting is impossible, so the top of the node is parked at the top of the viewport instead of oscillating.
     n.bounds.height = 400;
     n.bounds.y = 250;
     n.visible_fraction = 0.25;

@@ -1,6 +1,4 @@
 // Agnostic reusable Clay radio button (toolkit-style, library only).
-// Imports: std + zclay + core/color + core/render_common + sibling components ONLY.
-// Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
@@ -8,25 +6,9 @@ const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
-/// Same shape as button.ClickFn. Stored in RadioProps (declare-only radio
-/// never fires it); the owner reads the built props back and fires
-/// `props.on_click(props.ctx)` on pointer dispatch.
 pub const ClickFn = ?*const fn (?*anyopaque) void;
 
-/// Toolkit-style radio button props. All styling via props with neutral
-/// defaults — no theme/app imports. `id` becomes the Clay element ID
-/// (stable across frames for hover/selection queries).
-/// `selected` selects `selected_border` vs `border_color` for the outer
-/// ring and draws the inner dot when true.
-/// `size` fixes the outer circle to an exact pixel size (w == h == size,
-/// radius = size / 2). The inner dot is a circle of diameter `size / 2`
-/// (radius = size / 4) painted `dot_color`.
-/// `hover_bg` (null = no hover tint) overrides the outer bg while hovered.
-/// `disabled` paints `disabled_bg`, suppresses hover chrome and skips click
-/// registration (declare never fires; owner dispatch via stored props must
-/// also check `disabled`).
-/// `on_click`/`ctx` are stored verbatim for owner-side dispatch; the
-/// radio declaration itself is unchanged (hover chrome only).
+/// Toolkit-style radio button props.
 pub const RadioProps = struct {
     id: []const u8,
     selected: bool = false,
@@ -43,22 +25,9 @@ pub const RadioProps = struct {
     ctx: ?*anyopaque = null,
 };
 
-/// Declare a radio button: outer circle (fixed size x size) + optional
-/// inner dot circle when `selected`.
-/// Hover: uses `cl.hovered()` (Clay_Hovered — true when the pointer is
-/// over the currently open element) to switch the outer bg to `hover_bg`
-/// when set. Callers must feed pointer state via `cl.setPointerState()`
-/// each frame (same as Shell.frame); without it the radio renders the
-/// resting bg.
-/// Selection/click handling stays caller-side (like the button hitTest
-/// pattern): after layout, query
-/// `cl.pointerOver(cl.getElementId(props.id))`.
+/// Declare a radio button: outer circle (fixed size x size) + optional inner dot circle when `selected`.
 pub fn radio(props: RadioProps) void {
-    // NOTE: cl.hovered() must be evaluated INSIDE the UI() config literal
-    // (after Clay__OpenElement runs, while this element is open) so it
-    // queries this radio — calling it here beforehand would query the
-    // parent/root instead and hover_bg would never (or spuriously) trigger.
-    // Disabled radios never take hover chrome and never register clicks.
+    // NOTE: cl.hovered() must be evaluated INSIDE the UI() config literal (after Clay__OpenElement runs, while this element is open) so it queries this.
     cl.UI()(.{
         .id = .ID(props.id),
         .layout = .{
@@ -97,8 +66,7 @@ pub fn radio(props: RadioProps) void {
     });
     if (!props.disabled) {
         if (props.on_click) |cb| {
-            // Pointer cursor: clickable radio. Disabled skips
-            // registration so hover stays .default.
+            // Pointer cursor: clickable radio.
             registry.registerClickCursor(cl.getElementId(props.id), cb, props.ctx, .pointer);
         }
     }
@@ -120,19 +88,15 @@ fn declareSelectedRadio() void {
     radio(.{ .id = "test-radio-sel", .selected = true });
 }
 
-/// Run one headless Clay frame around `declare_fn`, counting rectangle
-/// and text render commands.
+/// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
 fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !void {
     const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed). Clay keeps
-    // a global currentContext pointer inside this arena, so freeing it
-    // would dangle the *next* test's minMemorySize/initialize (segfault).
+    // NOTE: intentionally leaked (page_allocator, never freed).
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
     cl.setMeasureTextFunction(void, {}, stubMeasure);
-    // Park the pointer far outside the layout so hovered() is false and
-    // the test observes the resting bg path deterministically.
+    // Park the pointer far outside the layout so hovered() is false and the test observes the resting bg path deterministically.
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     declare_fn();
@@ -185,8 +149,7 @@ fn borderColorForSelected(selected: bool) !cl.Color {
     cl.beginLayout();
     radio(.{ .id = "test-radio-border", .selected = selected });
     const cmds = cl.endLayout();
-    // NOTE: Clay tags border commands with a derived id (not the element
-    // id), so match the first border command by type, not by id.
+    // NOTE: Clay tags border commands with a derived id (not the element id), so match the first border command by type, not by id.
     for (cmds) |c| {
         if (c.command_type == .border) return c.render_data.border.color;
     }

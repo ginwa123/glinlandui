@@ -1,6 +1,4 @@
 // Agnostic reusable Clay toggle switch (toolkit-style, library only).
-// Imports: std + zclay + core/color + core/render_common + sibling components ONLY.
-// Never: app/theme/layout/views/content/sidebar.
 const std = @import("std");
 const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
@@ -8,25 +6,9 @@ const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
-/// Same shape as button.ClickFn. Stored in ToggleProps (declare-only toggle
-/// never fires it); the owner reads the built props back and fires
-/// `props.on_click(props.ctx)` on pointer dispatch.
 pub const ClickFn = ?*const fn (?*anyopaque) void;
 
-/// Toolkit-style toggle switch props. All styling via props with neutral
-/// defaults — no theme/app imports. `id` becomes the Clay element ID
-/// (stable across frames for hover/selection queries).
-/// `on` selects `on_bg` vs `off_bg` and parks the knob right vs left
-/// (via the outer pill's child_alignment x).
-/// `w`/`h` fix the pill to an exact pixel size. `radius` rounds the pill
-/// (default 12 = half of h 24, i.e. a capsule). The knob is a circle of
-/// diameter `h - 4` (2px inset padding) painted `knob_color`.
-/// `hover_bg` (null = no hover tint) overrides the pill bg while hovered.
-/// `disabled` paints `disabled_bg`, suppresses hover chrome and skips click
-/// registration (declare never fires; owner dispatch via stored props must
-/// also check `disabled`).
-/// `on_click`/`ctx` are stored verbatim for owner-side dispatch; the
-/// toggle declaration itself is unchanged (hover chrome only).
+/// Toolkit-style toggle switch props.
 pub const ToggleProps = struct {
     id: []const u8,
     on: bool = false,
@@ -43,22 +25,9 @@ pub const ToggleProps = struct {
     ctx: ?*anyopaque = null,
 };
 
-/// Declare a toggle switch: outer pill (fixed w/h, on/off bg) + inner
-/// knob circle parked left (off) or right (on).
-/// Hover: uses `cl.hovered()` (Clay_Hovered — true when the pointer is
-/// over the currently open element) to switch the pill bg to `hover_bg`
-/// when set. Callers must feed pointer state via `cl.setPointerState()`
-/// each frame (same as Shell.frame); without it the toggle renders the
-/// resting bg.
-/// Selection/click handling stays caller-side (like the button hitTest
-/// pattern): after layout, query
-/// `cl.pointerOver(cl.getElementId(props.id))`.
+/// Declare a toggle switch: outer pill (fixed w/h, on/off bg) + inner knob circle parked left (off) or right (on).
 pub fn toggle(props: ToggleProps) void {
-    // NOTE: cl.hovered() must be evaluated INSIDE the UI() config literal
-    // (after Clay__OpenElement runs, while this element is open) so it
-    // queries this toggle — calling it here beforehand would query the
-    // parent/root instead and hover_bg would never (or spuriously) trigger.
-    // Disabled toggles never take hover chrome and never register clicks.
+    // NOTE: cl.hovered() must be evaluated INSIDE the UI() config literal (after Clay__OpenElement runs, while this element is open) so it queries this.
     const knob_d: u32 = props.h -| 4;
     cl.UI()(.{
         .id = .ID(props.id),
@@ -94,8 +63,7 @@ pub fn toggle(props: ToggleProps) void {
     });
     if (!props.disabled) {
         if (props.on_click) |cb| {
-            // Pointer cursor: clickable toggle. Disabled skips
-            // registration so hover stays .default.
+            // Pointer cursor: clickable toggle.
             registry.registerClickCursor(cl.getElementId(props.id), cb, props.ctx, .pointer);
         }
     }
@@ -113,19 +81,15 @@ fn declareToggle() void {
     toggle(.{ .id = "test-toggle" });
 }
 
-/// Run one headless Clay frame around `declare_fn`, counting rectangle
-/// and text render commands.
+/// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
 fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !void {
     const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed). Clay keeps
-    // a global currentContext pointer inside this arena, so freeing it
-    // would dangle the *next* test's minMemorySize/initialize (segfault).
+    // NOTE: intentionally leaked (page_allocator, never freed).
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
     cl.setMeasureTextFunction(void, {}, stubMeasure);
-    // Park the pointer far outside the layout so hovered() is false and
-    // the test observes the resting bg path deterministically.
+    // Park the pointer far outside the layout so hovered() is false and the test observes the resting bg path deterministically.
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     declare_fn();

@@ -1,36 +1,4 @@
 //! The demo application tree, shared by BOTH entry points.
-//!
-//! ## Why it is shared rather than duplicated
-//!
-//! `src/main.zig` is the native demo and `src/web_main.zig` is the browser one.
-//! Both are meant to prove the same thing — that Clay layout, the widget set, the
-//! rasterizer and the present path produce a real frame on their host — and the
-//! only way that claim is worth anything is if they drive the *same* tree. Two
-//! copies would drift, and the drift would be invisible until someone compared
-//! screenshots.
-//!
-//! ## Why it lives in `src/`
-//!
-//! Zig rejects an `@import` that escapes the importing module's root DIRECTORY
-//! (src/README.md, "Traps" §1). `src/main.zig` is the root of the native
-//! executable's module, so its root directory is `src/` and it cannot reach
-//! `examples/`. This file therefore sits beside both roots.
-//!
-//! ## Why it imports `glinlandui` BY MODULE NAME
-//!
-//! `@import("glinlandui")` — never `@import("root.zig")`. A relative import of the
-//! library root would compile the whole library a second time *inside the
-//! executable's module*, and then `glinlandui.zclay` would no longer be the same
-//! module identity as the library's own `zclay` (invariant I5). The failure mode
-//! is a baffling type mismatch rather than a missing import, so the name is used
-//! deliberately.
-//!
-//! ## The counters are the point
-//!
-//! `clicks`, `toggled` and `slider_frac` are mutated by the widgets and rendered
-//! back into the tree, so the pixels visibly reflect interaction. A demo whose
-//! callbacks fired but whose state never reached the screen would look identical
-//! to one whose callbacks never fired; these make the difference observable.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
 
@@ -42,27 +10,10 @@ pub const App = struct {
     toggled: bool = false,
     slider_frac: f32 = 0.4,
     status_buf: [96]u8 = undefined,
-    /// What the last file dialog returned, or why it did not. The file dialog
-    /// is the one feature here whose result is not a number the user can see
-    /// from the widgets, so it gets its own line rather than a corner of the
-    /// shared status.
-    ///
-    /// ZEROED, not `undefined`, because it is read on the very first frame —
-    /// before any dialog has run — and a label drawn from uninitialised memory
-    /// is not an empty string, it is whatever was on the stack. Pango says so
-    /// loudly ("Invalid UTF-8 string passed to pango_layout_set_text"), which
-    /// is how this was found.
+    /// What the last file dialog returned, or why it did not.
     pick_buf: [192]u8 = [_]u8{0} ** 192,
 
     /// The webapp's embedded font, read by `web/exports.zig` from `glin_web_init`.
-    ///
-    /// It lives on the APP TYPE rather than in the entry-point file because the
-    /// export surface is generic over the app: `Exports(App, App.root)` can only
-    /// see declarations that belong to `App`. A declaration in `main.zig` would
-    /// be invisible to it, and the font would silently never install — which is
-    /// exactly what happened, and why the browser showed bars.
-    ///
-    /// Empty on native, where the backends resolve a font from the filesystem.
     pub const embedded_font: []const u8 = if (@import("builtin").cpu.arch.isWasm())
         @import("font_data").bytes
     else
@@ -126,11 +77,7 @@ pub const App = struct {
             .color = Color.rgb(0x7a, 0xb8, 0xff),
         });
 
-        // The file dialog, on the platforms that have one. Gated on
-        // `available()` rather than drawn and disabled: a button that cannot
-        // do anything is worse than no button, and `available()` is a
-        // compile-time constant per platform, so the whole block disappears on
-        // a host with no dialog backend instead of failing at runtime.
+        // The file dialog, on the platforms that have one.
         if (glinlandui.file_dialog.available()) {
             components.text.label(.{
                 .str = "XDG portal file dialog",
@@ -186,11 +133,6 @@ pub const App = struct {
     }
 
     /// Open a file, and report what came back.
-    ///
-    /// The three cases this separates are the whole point of the API: the
-    /// user picked something, the user dismissed the window on purpose, and
-    /// there is no portal here at all. An app that collapsed the last two into
-    /// "it failed" would pop an error box every time somebody pressed Escape.
     fn onOpenFile(ctx: ?*anyopaque) void {
         const self: *App = @ptrCast(@alignCast(ctx.?));
         const alloc = glinlandui.platform.allocator;
@@ -223,9 +165,7 @@ pub const App = struct {
         }
     }
 
-    /// Where the dialog opens. Null means "the portal's own idea of home",
-    /// which is the right default: there is no portable way to ask for a home
-    /// directory, and guessing one is how a file dialog opens in `/`.
+    /// Where the dialog opens.
     fn homeDir(self: *App) ?[]const u8 {
         _ = self;
         return null;
@@ -242,14 +182,11 @@ pub const App = struct {
         return std.fmt.bufPrint(&pick_scratch, fmt, args) catch "pick failed";
     }
 
-    /// One buffer for the formatting above, because the text is copied into
-    /// `pick_buf` immediately and two dialogs in a row would otherwise each
-    /// need their own.
+    /// One buffer for the formatting above, because the text is copied into `pick_buf` immediately and two dialogs in a row would otherwise each need their.
     var pick_scratch: [192]u8 = undefined;
 
     fn onSlider(ctx: ?*anyopaque) void {
-        // The slider stores its fraction; advance it so the fill visibly moves
-        // and the status line updates.
+        // The slider stores its fraction; advance it so the fill visibly moves and the status line updates.
         const self: *App = @ptrCast(@alignCast(ctx.?));
         self.slider_frac = if (self.slider_frac >= 0.95) 0.05 else self.slider_frac + 0.1;
     }

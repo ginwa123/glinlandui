@@ -1,14 +1,4 @@
 //! Shared pixel-assertion suite — runs identically on Linux and macOS.
-//!
-//! Every test here inspects REAL BYTES in a software framebuffer produced by
-//! `render_software.zig`. This is the suite that proves the renderer draws
-//! the pixels the design intends, on both platforms, with the same expected
-//! values. It is the reason the test counts can be equal across OSes: the
-//! rendering being tested has no platform-specific code path.
-//!
-//! Convention: integer-aligned geometry + radius 0 => bit-exact 8-bit results
-//! (the 1px coverage band yields cov=1.0 inside and 0.0 outside). Fractional
-//! geometry lands mid-ramp and is asserted with a tolerance.
 const std = @import("std");
 const cl = @import("zclay");
 const soft = @import("render_software.zig");
@@ -180,9 +170,7 @@ test "pixel: corner radius clamps to half the smallest side (pill, not ellipse)"
     s.renderCommands(&cmds);
     // The top-left extreme corner is cut away (radius clamped to 4).
     try expectPx(s, 2, 4, .{ 0, 0, 0, 255 });
-    // A solidly-interior pixel is fully opaque. (The single pixel at the exact
-    // vertical centre of the left edge is a partial-coverage arc pixel, so we
-    // assert well inside the shape rather than on its 1px antialiased rim.)
+    // A solidly-interior pixel is fully opaque.
     try expectPx(s, 12, 8, .{ 0, 0, 255, 255 });
     try expectPx(s, 8, 8, .{ 0, 0, 255, 255 });
 }
@@ -228,8 +216,7 @@ test "pixel: 1px border is crisp (the regression the 1px coverage band exists fo
 test "pixel: border with mixed widths draws the top bar only when sides collapse" {
     var s = try surface(16, 16);
     defer s.deinit();
-    // top=2, bottom=0, left=0, right=0 — not uniform, so the square-quad path
-    // is used and only the top bar is drawn.
+    // top=2, bottom=0, left=0, right=0 — not uniform, so the square-quad path is used and only the top bar is drawn.
     var cmds = [_]cl.RenderCommand{
         borderCmd(2, 2, 12, 12, .{ .top = 2, .bottom = 0, .left = 0, .right = 0 }, .{ 255, 0, 255, 255 }),
     };
@@ -283,21 +270,12 @@ test "pixel: a second scissor_start replaces (does not intersect) the region" {
     try expectPx(s, 5, 10, .{ 0, 0, 0, 255 });
 }
 
-// ---- text ----
-//
-// `drawTextRun` draws REAL glyphs when the host has a font it can parse, and
-// falls back to one box per byte when it does not. Both paths are covered
-// here: the fallback is deterministic and font-independent, so its pixel
-// expectations are exact; the glyph path can only be asserted where a font
-// exists, so it checks shape (ink present, above the baseline, none below) and
-// lets the glyph unit tests in glyphs.zig pin the exact metrics.
+// ---- text ---- `drawTextRun` draws REAL glyphs when the host has a font it can parse, and falls back to one box per byte when it does not.
 
 test "pixel: the fallback path draws one deterministic box per byte" {
     var s = try surface(64, 32);
     defer s.deinit();
-    // Calls the fallback DIRECTLY so these exact expectations hold whether or
-    // not this host has a font — that is what keeps the pixel suite portable.
-    // "OK" is 2 bytes => 2 boxes. font_size 18 => adv 10.8, box 7.56 wide.
+    // Calls the fallback DIRECTLY so these exact expectations hold whether or not this host has a font — that is what keeps the pixel suite portable.
     s.drawTextRunFallback(10, 10, "OK", 18, .{ 255, 255, 255, 255 });
     // First box spans x in [10, 17.56) and y in [10, 28) (height min(18,24)).
     try expectPx(s, 12, 15, .{ 255, 255, 255, 255 });
@@ -311,8 +289,7 @@ test "pixel: the fallback path draws one deterministic box per byte" {
 test "pixel: the fallback caps box height at 24 even for large font sizes" {
     var s = try surface(64, 64);
     defer s.deinit();
-    // font_size 40 => box height min(40,24) = 24, so the box occupies y in
-    // [10, 34) and nothing below it is painted.
+    // font_size 40 => box height min(40,24) = 24, so the box occupies y in [10, 34) and nothing below it is painted.
     s.drawTextRunFallback(4, 10, "I", 40, .{ 255, 255, 255, 255 });
     try expectPx(s, 6, 20, .{ 255, 255, 255, 255 });
     try expectPx(s, 6, 40, .{ 0, 0, 0, 255 });
@@ -331,15 +308,12 @@ test "pixel: the real glyph path paints ink above the baseline and none below" {
             const p = s.px(@intCast(x), @intCast(y));
             if (p[0] == 255 and p[1] == 255 and p[2] == 255) {
                 inked += 1;
-                // The run is vertically centred in the 40px box it was
-                // given, so ink must not spill past the box's lower edge
-                // (4 + 40 = 44).
+                // The run is vertically centred in the 40px box it was given, so ink must not spill past the box's lower edge (4 + 40 = 44).
                 if (y >= 44) below_baseline += 1;
             }
         }
     }
-    // A glyph-free bar is a solid block; a real glyph has holes and a much
-    // lower ink ratio, so require a plausible amount rather than "any".
+    // A glyph-free bar is a solid block; a real glyph has holes and a much lower ink ratio, so require a plausible amount rather than "any".
     try std.testing.expect(inked > 0);
     try std.testing.expect(inked < 96 * 24);
     // And it must stay inside the vertical band the layout reserved.
@@ -385,16 +359,11 @@ test "pixel: a longer run paints more ink than a single glyph" {
             return n;
         }
     }.count;
-    // Proves the pen actually advances per codepoint: if every glyph drew at
-    // the same x, both counts would be equal and labels would overlap.
+    // Proves the pen actually advances per codepoint: if every glyph drew at the same x, both counts would be equal and labels would overlap.
     try std.testing.expect(ink(&two) > ink(&one));
 }
 
-/// The ink's vertical span: the first and last row holding a pixel that is at
-/// least 40% of the way from the black background to the white text. A
-/// threshold rather than exact white because a single glyph's stroke at UI
-/// sizes never fills a whole pixel, so its peak coverage is below 1.0 — the
-/// span is still within a pixel of the true ink box.
+/// The ink's vertical span: the first and last row holding a pixel that is at least 40% of the way from the black background to the white text.
 fn inkRows(s: *const Surface) struct { first: i64, last: i64 } {
     const ink_level: u8 = 100;
     var first: i64 = std.math.maxInt(i64);
@@ -414,16 +383,7 @@ fn inkRows(s: *const Surface) struct { first: i64, last: i64 } {
 }
 
 test "pixel: a glyph run is centred in the box the layout gave it" {
-    // THE regression guard for the macOS "font is not in centre like Linux"
-    // report. The renderer used to ignore the box height the layout handed it
-    // and place the baseline from a guessed box plus a misread stb `yoff`,
-    // which lifted every run by a full ascent: on the calculator's keycaps the
-    // ink sat against the TOP edge (top gap 5px, bottom gap 36px) instead of in
-    // the middle.
-    //
-    // This is asserted on the INK, not on the code path, and runs on both
-    // platforms: the box is what the layout reserved, so the ink's centre must
-    // land on the box's centre wherever the font's own metrics put it.
+    // THE regression guard for the macOS "font is not in centre like Linux" report.
     if (!soft.hasGlyphFont()) return error.SkipZigTest;
     var s = try surface(64, 96);
     defer s.deinit();
@@ -435,8 +395,7 @@ test "pixel: a glyph run is centred in the box the layout gave it" {
     const ink = inkRows(&s);
     try std.testing.expect(ink.last >= ink.first); // something was painted
     const mid = (@as(f32, @floatFromInt(ink.first)) + @as(f32, @floatFromInt(ink.last))) * 0.5;
-    // Centred: the cap-height box of a digit sits slightly above the true
-    // vertical centre of the line box, so allow 2px of optical slack.
+    // Centred: the cap-height box of a digit sits slightly above the true vertical centre of the line box, so allow 2px of optical slack.
     try std.testing.expectApproxEqAbs(box_y + box_h * 0.5, mid, 2.0);
     // And confined: no ink outside the box the layout reserved.
     try std.testing.expect(@as(f32, @floatFromInt(ink.first)) >= box_y - 1);
@@ -444,8 +403,7 @@ test "pixel: a glyph run is centred in the box the layout gave it" {
 }
 
 test "pixel: a taller box moves the ink down, a shorter one up" {
-    // The same run in two boxes of different heights must follow the box: this
-    // is what makes `bbox_h` load-bearing rather than decorative.
+    // The same run in two boxes of different heights must follow the box: this is what makes `bbox_h` load-bearing rather than decorative.
     if (!soft.hasGlyphFont()) return error.SkipZigTest;
     var tall = try surface(64, 128);
     defer tall.deinit();
@@ -476,8 +434,7 @@ test "pixel: a space paints nothing" {
     if (!soft.hasGlyphFont()) return error.SkipZigTest;
     var s = try surface(64, 48);
     defer s.deinit();
-    // A blank glyph must not draw ink even though it DOES advance the pen —
-    // conflating the two would put a black box where a space belongs.
+    // A blank glyph must not draw ink even though it DOES advance the pen — conflating the two would put a black box where a space belongs.
     s.drawTextRun(4, 4, 40, " ", 32, .{ 255, 255, 255, 255 });
     for (0..48) |y| {
         for (0..64) |x| {
