@@ -94,6 +94,9 @@ pub const components = struct {
     pub const slider = @import("core/components/slider.zig");
     pub const text = @import("core/components/text.zig");
     pub const toggle = @import("core/components/toggle.zig");
+    pub const tree = @import("core/components/tree.zig");
+    pub const tabs = @import("core/components/tabs.zig");
+    pub const badge = @import("core/components/badge.zig");
 };
 
 test {
@@ -178,4 +181,7 @@ test {
     _ = @import("core/components/slider.zig");
     _ = @import("core/components/text.zig");
     _ = @import("core/components/toggle.zig");
+    _ = @import("core/components/tree.zig");
+    _ = @import("core/components/tabs.zig");
+    _ = @import("core/components/badge.zig");
 }
