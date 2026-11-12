@@ -4,7 +4,7 @@ const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const frame_mod = @import("../frame.zig");
-const text_input = @import("../text_input.zig");
+const text_editor = @import("../text_editor.zig");
 const semantics = @import("../semantics.zig");
 
 /// Raw evdev keycode → printable ASCII under the US layout.
@@ -414,7 +414,7 @@ pub fn field(props: FieldProps, query: []const u8) void {
 
 /// Declare a text field with HTML-like caret + selection: prompt, then the query split around the caret (before / "|" / after), with the selected span.
 pub const FieldCtx = struct {
-    input: *text_input.TextInput,
+    input: *text_editor.Editor,
     id: []const u8,
     char_w: f32,
     /// Called after a click places the caret, so the app can take focus.
@@ -443,9 +443,10 @@ pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
         .corner_radius = .all(@floatFromInt(props.radius)),
         .border = fieldBorder(props),
     })({
-        if (input.hasSelection()) {
-            const s = input.selStart();
-            const e = input.selEnd();
+        if (input.caret.hasSelection()) {
+            const span = input.caret.selection().?;
+            const s = span.start;
+            const e = span.end;
             if (s > 0) cl.text(text[0..s], .{ .font_size = props.font_size, .color = fg });
             cl.UI()(.{
                 .id = .IDI(props.id, 1),
@@ -459,7 +460,7 @@ pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
             });
             if (e < text.len) cl.text(text[e..], .{ .font_size = props.font_size, .color = fg });
         } else {
-            const at = @min(input.caret, text.len);
+            const at = @min(input.caret.offset, text.len);
             if (at > 0) cl.text(text[0..at], .{ .font_size = props.font_size, .color = fg });
             if (blink_on) {
                 cl.UI()(.{

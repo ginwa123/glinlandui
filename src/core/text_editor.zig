@@ -54,6 +54,11 @@ pub const Editor = struct {
     len: usize = 0,
     caret: Caret = .{},
 
+    /// Seconds since the caret last moved, which is what a view blinks on.
+    idle: f32 = 0,
+    /// Horizontal scroll in pixels, for a line wider than the field.
+    scroll_x: f32 = 0,
+
     pub fn init(buf: []u8) Editor {
         return .{ .buf = buf };
     }
@@ -249,6 +254,67 @@ pub const Editor = struct {
     }
 
     /// Delete everything and reset the caret.
+    pub fn insert(self: *Editor, bytes: []const u8) void {
+        _ = self.insertSlice(bytes);
+        self.idle = 0;
+    }
+
+    /// Delete the selection, or the character after the caret.
+    pub fn delete(self: *Editor) void {
+        self.deleteForward();
+        self.idle = 0;
+    }
+
+    /// Move by word, which is what ctrl+arrow does in a single-line field.
+    pub fn moveWordLeft(self: *Editor, shift: bool) void {
+        var i = self.caret.offset;
+        while (i > 0 and !isWordByte(self.buf[i - 1])) i -= 1;
+        while (i > 0 and isWordByte(self.buf[i - 1])) i -= 1;
+        self.setCaret(i, shift);
+        self.idle = 0;
+    }
+
+    /// Move by word to the right.
+    pub fn moveWordRight(self: *Editor, shift: bool) void {
+        var i = self.caret.offset;
+        while (i < self.len and isWordByte(self.buf[i])) i += 1;
+        while (i < self.len and !isWordByte(self.buf[i])) i += 1;
+        self.setCaret(i, shift);
+        self.idle = 0;
+    }
+
+    /// The byte offset nearest to a horizontal position, given a fixed character width.
+    pub fn caretAtX(self: *const Editor, x: f32, char_w: f32) usize {
+        if (char_w <= 0) return self.caret.offset;
+        const col_f = @max(x, 0) / char_w;
+        const col: usize = @intFromFloat(@round(col_f));
+        return @min(col, self.len);
+    }
+
+    /// Place the caret from a click. `extend` keeps the anchor, which is what a shift-click does.
+    pub fn clickAt(self: *Editor, x: f32, char_w: f32, extend: bool) void {
+        self.setCaret(self.caretAtX(x, char_w), extend);
+        self.idle = 0;
+    }
+
+    /// Extend the selection to a drag position.
+    pub fn dragTo(self: *Editor, x: f32, char_w: f32) void {
+        self.setCaret(self.caretAtX(x, char_w), true);
+        self.idle = 0;
+    }
+
+    /// Select the word under a position, which is what a double-click does.
+    pub fn selectWordAt(self: *Editor, x: f32, char_w: f32) void {
+        const at = self.caretAtX(x, char_w);
+        var s = at;
+        var e = at;
+        while (s > 0 and isWordByte(self.buf[s - 1])) s -= 1;
+        while (e < self.len and isWordByte(self.buf[e])) e += 1;
+        self.caret.anchor = s;
+        self.caret.offset = e;
+        self.idle = 0;
+    }
+
     pub fn clear(self: *Editor) void {
         self.len = 0;
         self.caret = .{};
@@ -847,4 +913,8 @@ test "clampTo never writes past the buffer" {
     try testing.expectEqualStrings("abc", clampTo("abcdefgh", &buf));
     var one: [1]u8 = undefined;
     try testing.expectEqual(@as(usize, 0), clampTo("abc", &one).len);
+}
+
+fn isWordByte(b: u8) bool {
+    return (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z') or (b >= '0' and b <= '9') or b == '_';
 }

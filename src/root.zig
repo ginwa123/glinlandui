@@ -24,10 +24,7 @@ pub const testing = @import("core/testing/root.zig");
 /// Per-frame semantics model: the queryable node tree behind `testing.Driver.onNode*`, and the intended home for accessibility and the debug inspector.
 pub const semantics = @import("core/semantics.zig");
 
-/// A single-line text input: the buffer, the caret, the selection and every edit. The model behind `components.input.liveField`.
-pub const text_input = @import("core/text_input.zig");
-
-/// A multi-line text editor model: the buffer, the caret, and every edit and movement.
+/// The text model every field uses: buffer, caret, selection, and every edit and movement. A single-line field is this with the newline ignored.
 pub const text_editor = @import("core/text_editor.zig");
 
 /// Table virtualisation: which rows and columns to draw, given a scroll position.
@@ -113,7 +110,6 @@ test {
     _ = @import("core/testing/root.zig");
     // The semantics model and the E2E test surface built on it.
     _ = @import("core/semantics.zig");
-    _ = @import("core/text_input.zig");
     _ = @import("core/text_editor.zig");
     _ = @import("core/table.zig");
     _ = @import("core/testing/finders.zig");
