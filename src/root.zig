@@ -117,6 +117,12 @@ pub const file_dialog = struct {
     /// Whether this host can open a dialog at all — so a UI can hide the
     /// button rather than let the user click something that cannot work.
     pub const available = platform.file_dialog.available;
+
+    /// A scriptable dialog a test installs, so the outcomes past the call —
+    /// a selection, a cancellation, each backend error — are reachable
+    /// without a display server. Opt-in: with nothing installed it answers
+    /// exactly what the portable stub would.
+    pub const fake = @import("core/file_dialog_fake.zig");
 };
 
 /// The browser backend's modules, for the wasm entry point (`src/web_main.zig`).
@@ -237,6 +243,9 @@ test {
     // platform rather than only on the one that has a portal.
     _ = @import("core/file_dialog_contract.zig");
     _ = @import("core/file_dialog_portable.zig");
+    // The scriptable dialog a consumer's test installs. Pure Zig, so its own
+    // tests run on every platform like the rest of the parity suite.
+    _ = @import("core/file_dialog_fake.zig");
     // The Color type every color-bearing prop uses. Pure Zig and
     // platform-free, so it belongs in the parity suite like every other core
     // module: a hex-parsing bug is a bug on both OSes, not just CI's Linux
