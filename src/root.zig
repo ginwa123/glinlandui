@@ -27,6 +27,12 @@ pub const semantics = @import("core/semantics.zig");
 /// A single-line text input: the buffer, the caret, the selection and every edit. The model behind `components.input.liveField`.
 pub const text_input = @import("core/text_input.zig");
 
+/// A multi-line text editor model: the buffer, the caret, and every edit and movement.
+pub const text_editor = @import("core/text_editor.zig");
+
+/// Table virtualisation: which rows and columns to draw, given a scroll position.
+pub const table = @import("core/table.zig");
+
 // Pure utils (geometry / input / EGL / test-frames + legacy helpers).
 pub const Placement = platform.Placement;
 pub const computePlacement = platform.computePlacement;
@@ -108,6 +114,8 @@ test {
     // The semantics model and the E2E test surface built on it.
     _ = @import("core/semantics.zig");
     _ = @import("core/text_input.zig");
+    _ = @import("core/text_editor.zig");
+    _ = @import("core/table.zig");
     _ = @import("core/testing/finders.zig");
     _ = @import("core/testing/assertions.zig");
     _ = @import("core/testing/actions.zig");
