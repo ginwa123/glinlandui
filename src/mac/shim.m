@@ -242,7 +242,8 @@ enum {
             // The bitmap's row 0 is the host's bottom row (it flipped in
             // mac/present.zig), and a non-flipped context's origin is also
             // bottom-left, so this draws the right way up.
-            CGContextDrawImage(cg, CGRectMake(0, 0, o->buf_w, o->buf_h), img);
+            // Into the view's BOUNDS, in points: the bitmap is already at the backing scale, so this maps one image pixel to one device pixel.
+            CGContextDrawImage(cg, [(NSView *)o->view bounds], img);
             CGImageRelease(img);
         }
     }
@@ -624,5 +625,22 @@ int glin_cocoa_file_dialog(const GlinCocoaFileRequest *request,
             }
         }
         return (int)response;
+    }
+}
+
+double glin_cocoa_backing_scale(GlinCocoaWindow *win) {
+    if (!win || !win->window) return 1.0;
+    NSView *v = win->window.contentView;
+    if (!v) return 1.0;
+    CGFloat s = v.window.backingScaleFactor;
+    return (s > 0) ? (double)s : 1.0;
+}
+
+void glin_cocoa_set_cursor(int shape) {
+    switch (shape) {
+        case 4: [[NSCursor pointingHandCursor] set]; break;
+        case 9: [[NSCursor IBeamCursor] set]; break;
+        case 26: [[NSCursor resizeLeftRightCursor] set]; break;
+        default: [[NSCursor arrowCursor] set]; break;
     }
 }

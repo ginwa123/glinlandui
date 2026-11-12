@@ -290,43 +290,50 @@ pub const Surface = struct {
 
     /// Render a slice of Clay render commands into the surface, in order.
     pub fn renderCommands(self: *Surface, commands: []const cl.RenderCommand) void {
+        const k = render_scale;
         for (commands) |cmd| {
+            const bb = cl.BoundingBox{
+                .x = cmd.bounding_box.x * k,
+                .y = cmd.bounding_box.y * k,
+                .width = cmd.bounding_box.width * k,
+                .height = cmd.bounding_box.height * k,
+            };
             switch (cmd.command_type) {
                 .rectangle => {
                     const r = cmd.render_data.rectangle;
+                    const cr = cornerRadiusVec4(r.corner_radius);
                     self.drawBox(
-                        cmd.bounding_box.x,
-                        cmd.bounding_box.y,
-                        cmd.bounding_box.width,
-                        cmd.bounding_box.height,
-                        cornerRadiusVec4(r.corner_radius),
+                        bb.x,
+                        bb.y,
+                        bb.width,
+                        bb.height,
+                        .{ cr[0] * k, cr[1] * k, cr[2] * k, cr[3] * k },
                         0,
                         0,
                         r.background_color,
                     );
                 },
-                .border => self.drawBorder(cmd.render_data.border, cmd.bounding_box),
+                .border => self.drawBorder(cmd.render_data.border, bb),
                 .text => {
                     const td = cmd.render_data.text;
                     const bytes = td.string_contents.chars[0..@intCast(td.string_contents.length)];
                     // The box's HEIGHT matters: it is the box the layout reserved for this run, and the run is centred in it.
                     self.drawTextRun(
-                        cmd.bounding_box.x,
-                        cmd.bounding_box.y,
-                        cmd.bounding_box.height,
+                        bb.x,
+                        bb.y,
+                        bb.height,
                         bytes,
-                        td.font_size,
+                        @intFromFloat(@as(f32, @floatFromInt(td.font_size)) * k),
                         td.text_color,
                     );
                 },
                 .image => {
                     if (cmd.render_data.image.image_data) |ptr| {
                         const ref: *const ImageRef = @ptrCast(@alignCast(ptr));
-                        self.drawImageCmd(cmd.bounding_box, ref);
+                        self.drawImageCmd(bb, ref);
                     }
                 },
                 .scissor_start => {
-                    const bb = cmd.bounding_box;
                     const sx: i64 = @intFromFloat(@max(bb.x, 0));
                     const sw: i64 = @intFromFloat(@max(bb.width, 0));
                     const sy: i64 = @intFromFloat(@max(bb.y, 0));
@@ -404,9 +411,7 @@ pub const Surface = struct {
         while (i < text_bytes.len) {
             const cp = glyphs.nextCodepoint(text_bytes, &i);
             const gm = font.glyphMetrics(cp, fs);
-            if (font.glyphBitmap(cp, fs)) |mask_g| {
-                var mask = mask_g;
-                defer glyphs.freeMask(&mask);
+            if (glyphs.cachedGlyph(&font, cp, fs)) |mask| {
                 const gx: isize = @intFromFloat(@floor(pen + mask.xoff));
                 // stb's yoff is measured from the BASELINE, positive downward (stbtt_GetGlyphBitmapBoxSubpixel negates the font-space y1), so the mask's top row sits.
                 const top = baseline + mask.yoff;
@@ -536,7 +541,9 @@ pub const Renderer = struct {
         if (win_w <= 0 or win_h <= 0) return;
         // `self` is stable here (the renderer lives inside the owning Host), so exposing &self.surface for a window backend to blit is safe.
         current_surface = &self.surface;
-        self.surface.resize(@intCast(win_w), @intCast(win_h)) catch return;
+        const pw: u32 = @intFromFloat(@as(f32, @floatFromInt(win_w)) * render_scale);
+        const ph: u32 = @intFromFloat(@as(f32, @floatFromInt(win_h)) * render_scale);
+        self.surface.resize(pw, ph) catch return;
         self.surface.clear();
         self.surface.renderCommands(commands);
     }
@@ -553,6 +560,19 @@ pub fn hasGlyphFont() bool {
     }
     if (textBytes == null) textBytes = glyphs.Font.loadDefault();
     return textBytes != null;
+}
+
+/// The device-pixel scale the surface is rendered at: 2.0 on a Retina display, 1.0 elsewhere.
+var render_scale: f32 = 1.0;
+
+/// Set the device scale. Values at or below zero are ignored.
+pub fn setRenderScale(s: f32) void {
+    render_scale = if (s > 0) s else 1.0;
+}
+
+/// The current device scale.
+pub fn renderScale() f32 {
+    return render_scale;
 }
 
 /// The surface the most recent `drawCommands` wrote to.

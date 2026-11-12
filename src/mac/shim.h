@@ -104,6 +104,16 @@ void glin_cocoa_quit(GlinCocoaWindow *win);
 /// The window's current content size in points (0 if the window is gone).
 void glin_cocoa_content_size(GlinCocoaWindow *win, int *out_w, int *out_h);
 
+/// Set the mouse cursor from a Wayland cursor-shape code (1 default, 4 pointer, 9 text, 26 ew-resize).
+///
+/// The toolkit resolves the shape from the click registry each frame; this is the one place it reaches AppKit.
+void glin_cocoa_set_cursor(int shape);
+
+/// The display's backing scale for this window: 2.0 on a Retina screen, 1.0 otherwise.
+///
+/// The host renders at this multiple so text is rasterized at device resolution instead of being upscaled by CoreGraphics, which is what made the window look soft.
+double glin_cocoa_backing_scale(GlinCocoaWindow *win);
+
 // ---------------------------------------------------------------------------
 // The file dialog.
 //

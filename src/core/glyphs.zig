@@ -141,6 +141,59 @@ pub fn freeMask(m: *Mask) void {
     m.* = undefined;
 }
 
+// ---- glyph cache ----
+
+/// A rasterized glyph, owned by the cache. Never freed by a caller.
+pub const CachedGlyph = struct {
+    data: []u8,
+    w: usize,
+    h: usize,
+    xoff: f32,
+    yoff: f32,
+};
+
+const CacheKey = struct { cp: u21, size: u16 };
+
+var cache: std.AutoHashMapUnmanaged(CacheKey, CachedGlyph) = .empty;
+
+/// Rasterize `cp` at `font_size` once and reuse it for every later frame.
+pub fn cachedGlyph(font: *const Font, cp: u21, font_size: u16) ?*const CachedGlyph {
+    const key = CacheKey{ .cp = cp, .size = font_size };
+    if (cache.getPtr(key)) |g| return g;
+
+    const mask = font.glyphBitmap(cp, font_size) orelse return null;
+    var m = mask;
+    defer freeMask(&m);
+
+    const n = m.w * m.h;
+    const data = std.heap.page_allocator.alloc(u8, n) catch return null;
+    @memcpy(data, m.data[0..n]);
+    cache.put(std.heap.page_allocator, key, .{
+        .data = data,
+        .w = m.w,
+        .h = m.h,
+        .xoff = m.xoff,
+        .yoff = m.yoff,
+    }) catch {
+        std.heap.page_allocator.free(data);
+        return null;
+    };
+    return cache.getPtr(key);
+}
+
+/// Drop every cached glyph. Call when the font changes.
+pub fn clearGlyphCache() void {
+    var it = cache.iterator();
+    while (it.next()) |e| std.heap.page_allocator.free(e.value_ptr.data);
+    cache.deinit(std.heap.page_allocator);
+    cache = .empty;
+}
+
+/// How many glyphs are cached, for tests.
+pub fn cachedGlyphCount() usize {
+    return cache.count();
+}
+
 /// Decode the next UTF-8 codepoint.
 pub fn nextCodepoint(text: []const u8, index: *usize) u21 {
     const i = index.*;
@@ -192,6 +245,7 @@ var installed_font: ?Font = null;
 
 /// Install `f` as the process-wide font.
 pub fn installFont(f: Font) void {
+    clearGlyphCache();
     installed_font = f;
 }
 
@@ -203,6 +257,7 @@ pub fn installedFont() ?*Font {
 
 /// Drop the installed font.
 pub fn clearInstalledFont() void {
+    clearGlyphCache();
     installed_font = null;
 }
 

@@ -9,6 +9,7 @@ const adapter = @import("adapter.zig");
 const input_macos = @import("input.zig");
 const present = @import("present.zig");
 const soft = @import("../core/render_software.zig");
+const frame_mod = @import("../core/frame.zig");
 
 // The shim header is plain C by design (see mac/shim.h), so @cImport never has to survive Objective-C macros or CoreGraphics typedefs.
 const c = @cImport({
@@ -51,6 +52,8 @@ pub const Window = struct {
     handle: ?*c.GlinCocoaWindow = null,
     /// The blit destination, allocated on first use and reused every frame.
     blit_buf: []u8 = &.{},
+    /// The cursor shape last handed to AppKit, so a frame that did not change it costs nothing.
+    last_shape: u32 = 0,
     /// Is the primary button currently held?
     left_held: bool = false,
     /// Frames composited so far.
@@ -141,9 +144,22 @@ pub const Window = struct {
         }
         if (adapter.resolveQuit(&self.state)) return;
 
+        // Render at the display's backing scale, so text is rasterized at device resolution rather than upscaled.
+        if (self.handle) |win_handle| soft.setRenderScale(@floatCast(c.glin_cocoa_backing_scale(win_handle)));
+
         const d = self.delegate orelse return;
         d.on_frame(d.ptr, w, h);
+        self.applyCursor();
         self.presentFrame();
+    }
+
+    /// Apply the cursor shape the frame resolved, when it changed.
+    fn applyCursor(self: *Window) void {
+        if (self.handle == null) return;
+        const shape = frame_mod.currentShape();
+        if (shape == self.last_shape) return;
+        self.last_shape = shape;
+        c.glin_cocoa_set_cursor(@intCast(shape));
     }
 
     /// Copy the surface the delegate just drew into the shim's bitmap.
