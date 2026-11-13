@@ -45,7 +45,8 @@ pub fn clampScroll(d: f32) f32 {
 
 /// AppKit's `NSScrollingDeltaY` is positive for content moving UP (scrolling down the list), the opposite of the toolkit's convention, where positive dy.
 pub fn scrollDelta(raw_dx: f32, raw_dy: f32) struct { dx: f32, dy: f32 } {
-    return .{ .dx = clampScroll(raw_dx), .dy = -clampScroll(raw_dy) };
+    // BOTH axes are negated: AppKit reports a natural-scrolling delta in the opposite sense to Clay's scroll offset, and treating the axes differently made horizontal scroll run backwards on a trackpad.
+    return .{ .dx = -clampScroll(raw_dx), .dy = -clampScroll(raw_dy) };
 }
 
 // ============================== resizing ==============================
@@ -200,7 +201,8 @@ test "scrollDelta negates dy to match the toolkit's convention" {
 
 test "scrollDelta clamps and negates together" {
     const d = scrollDelta(9999, 9999);
-    try std.testing.expectEqual(max_scroll_step, d.dx);
+    // Both axes take the same sign: AppKit's natural-scrolling delta and Clay's scroll offset run opposite ways on each axis alike.
+    try std.testing.expectEqual(-max_scroll_step, d.dx);
     try std.testing.expectEqual(-max_scroll_step, d.dy);
 }
 
