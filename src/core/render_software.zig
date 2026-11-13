@@ -464,6 +464,10 @@ pub const Surface = struct {
                         if (x < 0 or y < 0) continue;
                         if (x >= @as(isize, @intCast(self.width)) or
                             y >= @as(isize, @intCast(self.height))) continue;
+                        // The scissor clips TEXT too. Without this a scrolled table's glyphs drew over the sidebar while its row backgrounds were correctly clipped.
+                        if (self.scissor) |sc| {
+                            if (x < sc.x0 or x >= sc.x1 or y < sc.y0 or y >= sc.y1) continue;
+                        }
                         // Glyph coverage multiplies the colour's alpha, so a dim label stays dim.
                         self.blend(
                             @intCast(x),
