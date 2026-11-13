@@ -135,6 +135,11 @@ pub const Host = struct {
         return dispatch.handleKey(&self.keys, keycode, pressed);
     }
 
+    /// Composed text from a backend that has a keyboard layout; typing never goes through the key chain.
+    pub fn onTextEvent(self: *Host, text: []const u8) bool {
+        return dispatch.handleText(&self.keys, text);
+    }
+
     pub fn onResizeEvent(self: *Host, w: u32, h: u32) void {
         self.win_w = w;
         self.win_h = h;
@@ -168,6 +173,11 @@ pub const Host = struct {
         return self.onKeyEvent(keycode, pressed);
     }
 
+    fn onText(ptr: *anyopaque, text: []const u8) void {
+        const self: *Host = @ptrCast(@alignCast(ptr));
+        _ = self.onTextEvent(text);
+    }
+
     fn onResize(ptr: *anyopaque, w: u32, h: u32) void {
         const self: *Host = @ptrCast(@alignCast(ptr));
         self.onResizeEvent(w, h);
@@ -191,6 +201,7 @@ pub const Host = struct {
             .on_pointer = onPointer,
             .on_scroll = onScroll,
             .on_key = onKey,
+            .on_text = onText,
             .on_resize = onResize,
             .on_close = onClose,
             .is_quit = isQuitFn,
@@ -277,6 +288,19 @@ test "host: empty keychain returns false (press + release)" {
     try testHost(&h, null, noopRoot);
     try std.testing.expect(!h.onKeyEvent(30, true));
     try std.testing.expect(!h.onKeyEvent(30, false));
+}
+
+test "host: delegate on_text reaches the registered text handler" {
+    var h: Host = undefined;
+    try testHost(&h, null, noopRoot);
+    var r = dispatch.TextRec{ .ret = true };
+    h.keys.registerText(dispatch.textRec, &r);
+    const d = h.delegate();
+    d.on_text.?(d.ptr, "A");
+    try std.testing.expectEqual(@as(usize, 1), r.calls);
+    try std.testing.expectEqualStrings("A", r.last[0..r.last_len]);
+    try std.testing.expect(h.onTextEvent("*"));
+    try std.testing.expectEqual(@as(usize, 2), r.calls);
 }
 
 test "host: frame runs the declare thunk with current dims" {

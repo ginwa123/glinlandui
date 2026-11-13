@@ -99,6 +99,8 @@ pub const Delegate = struct {
     on_pointer: *const fn (*anyopaque, x: f32, y: f32, pressed: bool, button: u32) void,
     on_scroll: ?*const fn (*anyopaque, dx: f32, dy: f32) void = null,
     on_key: *const fn (*anyopaque, keycode: u32, pressed: bool) bool,
+    /// Text a printable key produced, already composed by the platform (Caps Lock, Shift, layout).
+    on_text: ?*const fn (*anyopaque, text: []const u8) void = null,
     on_resize: *const fn (*anyopaque, w: u32, h: u32) void,
     on_close: *const fn (*anyopaque) void,
     is_quit: *const fn (*anyopaque) bool,

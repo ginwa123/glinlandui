@@ -32,7 +32,7 @@ theme import and no global palette — the caller passes `bg`, `fg`, `hover_bg` 
 | `box.zig` | the container: direction, sizing, padding, gap, radius, border, background. Also `row`, `column` and `spacer` helpers |
 | `text.zig` | a single text run: size, colour, wrap |
 | `button.zig` | a clickable label with hover, disabled and border states |
-| `input.zig` | a text field (`fieldEdit`) that draws a caret and a selection from an `EditState` |
+| `input.zig` | a text field (`fieldEdit`) that draws a caret and a selection from an `EditState`, plus `handleKey`/`handleText` for editing it |
 | `list.zig` | rows, cells or a grid, with selection, hover and per-row click targets |
 | `tree.zig` | hierarchical rows: depth indent, caret, expansion state, selection, right-aligned meta |
 | `tabs.zig` | a tab bar: active state, optional accent dot, optional close button |
@@ -43,6 +43,21 @@ theme import and no global palette — the caller passes `bg`, `fg`, `hover_bg` 
 | `icon.zig`, `image.zig` | a glyph and a bitmap |
 | `click_registry.zig` | the per-frame hit-target table (not visual) |
 | `dispatch.zig` | routes a pointer event to the registered target (not visual) |
+
+## Text arrives two ways
+
+A printable key reaches a field by one of two routes, and both must be supported:
+
+- **`handleKey(buf, len, st, mods, evdev, pressed)`** — a raw evdev keycode, mapped to a glyph by the
+  US-layout table in `input.keyChar`. This is what Linux, Windows and the web send, and it is the
+  only route the headless tests can drive.
+- **`handleText(buf, len, st, text)`** — a UTF-8 run the platform already composed. macOS sends
+  `[event characters]`, so Caps Lock (`a` → `A`), Shift (`8` → `*`), dead keys (`e-acute`) and a
+  non-US layout all arrive correct. A keycode table can never reproduce those, so a backend that
+  has a layout should use this route and keep `handleKey` for navigation and shortcuts.
+
+Backspace, Delete and the arrows step over a whole codepoint (`text_editor.prevCodepoint` /
+`codepointLen`), so deleting `e-acute` removes both of its bytes instead of leaving invalid UTF-8.
 
 ## The shape of a component
 

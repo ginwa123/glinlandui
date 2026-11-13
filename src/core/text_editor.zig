@@ -48,6 +48,24 @@ pub const Span = struct {
     end: usize,
 };
 
+/// The byte that starts the codepoint ending at `offset`, so Backspace and Left step over a whole `\xc3\xa9` instead of one of its bytes.
+pub fn prevCodepoint(buf: []const u8, offset: usize) usize {
+    if (offset == 0) return 0;
+    var i = offset - 1;
+    // Continuation bytes are 0b10xxxxxx; a codepoint is at most four bytes, so three steps is the floor.
+    var steps: usize = 0;
+    while (i > 0 and (buf[i] & 0xC0) == 0x80 and steps < 3) : (steps += 1) i -= 1;
+    return i;
+}
+
+/// The byte length of the codepoint at `offset` (1 for ASCII, 2..4 for UTF-8), clamped to `buf`.
+pub fn codepointLen(buf: []const u8, offset: usize) usize {
+    if (offset >= buf.len) return 0;
+    const lead = buf[offset];
+    const n: usize = if (lead < 0x80) 1 else if (lead & 0xE0 == 0xC0) 2 else if (lead & 0xF0 == 0xE0) 3 else if (lead & 0xF8 == 0xF0) 4 else 1;
+    return @min(n, buf.len - offset);
+}
+
 /// Edit operations on a caller-owned buffer.
 pub const Editor = struct {
     buf: []u8,
@@ -120,15 +138,17 @@ pub const Editor = struct {
     pub fn backspace(self: *Editor) void {
         if (self.deleteSelection()) return;
         if (self.caret.offset == 0) return;
-        self.splice(self.caret.offset - 1, 1);
-        self.caret.offset -= 1;
+        // A whole codepoint, not a byte: deleting half of `\xc3\xa9` would leave invalid UTF-8 on screen.
+        const start = prevCodepoint(self.text(), self.caret.offset);
+        self.splice(start, self.caret.offset - start);
+        self.caret.offset = start;
     }
 
     /// Delete the byte at the caret (Delete).
     pub fn deleteForward(self: *Editor) void {
         if (self.deleteSelection()) return;
         if (self.caret.offset >= self.len) return;
-        self.splice(self.caret.offset, 1);
+        self.splice(self.caret.offset, codepointLen(self.text(), self.caret.offset));
     }
 
     /// Remove `count` bytes at `at`, closing the gap.
@@ -199,11 +219,11 @@ pub const Editor = struct {
     }
 
     pub fn moveLeft(self: *Editor, shift: bool) void {
-        self.setCaret(self.caret.offset -| 1, shift);
+        self.setCaret(prevCodepoint(self.text(), self.caret.offset), shift);
     }
 
     pub fn moveRight(self: *Editor, shift: bool) void {
-        self.setCaret(@min(self.caret.offset + 1, self.len), shift);
+        self.setCaret(self.caret.offset + codepointLen(self.text(), self.caret.offset), shift);
     }
 
     pub fn moveHome(self: *Editor, shift: bool) void {
@@ -417,6 +437,15 @@ pub fn handleKey(
         return .edited;
     }
     return .ignored;
+}
+
+/// Insert a run the platform already composed, which is how `A` (Caps Lock), `*`, `(` and `\xc3\xa9` arrive on macOS.
+pub fn handleText(editor: *Editor, text: []const u8) Action {
+    if (text.len == 0) return .ignored;
+    if (editor.insertSlice(text) == 0) return .ignored;
+    // A fresh edit restarts the blink, so the caret stays solid while the user is typing.
+    editor.idle = 0;
+    return .edited;
 }
 
 // Raw evdev key codes, matching glinlandui's `input` module so a key handler can be shared between the single-line and multi-line fields.
@@ -734,6 +763,49 @@ test "movement clamps at both ends" {
     e.moveRight(false);
     e.moveRight(false);
     try testing.expectEqual(@as(usize, 2), e.caret.offset);
+}
+
+test "backspace, delete and the arrows step over a whole multi-byte codepoint" {
+    var buf: [32]u8 = undefined;
+    var e = Editor.init(&buf);
+    _ = e.insertSlice("a\xc3\xa9b");
+    try testing.expectEqual(@as(usize, 4), e.len);
+    // Left from the end lands before `b`, then before `\xc3\xa9` -- one move, not two.
+    e.moveLeft(false);
+    try testing.expectEqual(@as(usize, 3), e.caret.offset);
+    e.moveLeft(false);
+    try testing.expectEqual(@as(usize, 1), e.caret.offset);
+    e.moveRight(false);
+    try testing.expectEqual(@as(usize, 3), e.caret.offset);
+    // Backspace removes the two bytes of `\xc3\xa9`, leaving valid UTF-8.
+    e.backspace();
+    try testing.expectEqualStrings("ab", e.text());
+    // Delete-forward removes a whole codepoint too.
+    e.setCaret(0, false);
+    e.deleteForward();
+    try testing.expectEqualStrings("b", e.text());
+}
+
+test "handleText inserts a composed run and restarts the blink" {
+    var buf: [32]u8 = undefined;
+    var e = Editor.init(&buf);
+    e.idle = 2.5;
+    try testing.expectEqual(Action.edited, handleText(&e, "A"));
+    try testing.expectEqualStrings("A", e.text());
+    try testing.expectEqual(@as(f32, 0), e.idle);
+    try testing.expectEqual(Action.edited, handleText(&e, "*("));
+    try testing.expectEqualStrings("A*(", e.text());
+    try testing.expectEqual(@as(usize, 3), e.caret.offset);
+}
+
+test "handleText inserts multi-byte UTF-8 whole and ignores an empty run" {
+    var buf: [32]u8 = undefined;
+    var e = Editor.init(&buf);
+    try testing.expectEqual(Action.edited, handleText(&e, "\xc3\xa9"));
+    try testing.expectEqualStrings("\xc3\xa9", e.text());
+    try testing.expectEqual(@as(usize, 2), e.caret.offset);
+    try testing.expectEqual(Action.ignored, handleText(&e, ""));
+    try testing.expectEqual(@as(usize, 2), e.len);
 }
 
 test "keyChar maps every letter to its real evdev code" {

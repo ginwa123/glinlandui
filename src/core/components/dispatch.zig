@@ -57,11 +57,21 @@ pub const KeyEntry = struct {
     ctx: ?*anyopaque,
 };
 
-/// Owner-held key chain: modifier latch + ordered handlers.
+pub const text_cap: usize = 4;
+
+/// One text handler: a UTF-8 run the platform already composed, so Caps Lock, Shift and the layout are the platform's job.
+pub const TextEntry = struct {
+    handle: *const fn (?*anyopaque, []const u8) bool,
+    ctx: ?*anyopaque,
+};
+
+/// Owner-held key chain: modifier latch + ordered handlers, plus the separate text chain typing goes through.
 pub const KeyChain = struct {
     mods: input.Mods = .{},
     handlers: [key_cap]KeyEntry = undefined,
     n: usize = 0,
+    text_handlers: [text_cap]TextEntry = undefined,
+    text_n: usize = 0,
 
     pub fn register(
         self: *KeyChain,
@@ -72,6 +82,17 @@ pub const KeyChain = struct {
         self.handlers[self.n] = .{ .handle = handle, .ctx = ctx };
         self.n += 1;
     }
+
+    /// Register a handler for composed text, which is how a printable key arrives when the backend has a layout.
+    pub fn registerText(
+        self: *KeyChain,
+        handle: *const fn (?*anyopaque, []const u8) bool,
+        ctx: ?*anyopaque,
+    ) void {
+        if (self.text_n >= text_cap) return;
+        self.text_handlers[self.text_n] = .{ .handle = handle, .ctx = ctx };
+        self.text_n += 1;
+    }
 };
 
 /// Mods.track first (consumed -> false), releases ignored, else first handler returning true wins (false when none does).
@@ -80,6 +101,15 @@ pub fn handleKey(chain: *KeyChain, keycode: u32, pressed: bool) bool {
     if (!pressed) return false;
     for (chain.handlers[0..chain.n]) |h| {
         if (h.handle(h.ctx, chain.mods, keycode)) return true;
+    }
+    return false;
+}
+
+/// First text handler returning true wins; false when none consumed the run or the run is empty.
+pub fn handleText(chain: *KeyChain, text: []const u8) bool {
+    if (text.len == 0) return false;
+    for (chain.text_handlers[0..chain.text_n]) |h| {
+        if (h.handle(h.ctx, text)) return true;
     }
     return false;
 }
@@ -300,6 +330,61 @@ test "keys: Escape-like code routes to the handler" {
     c.register(escLike, null);
     try std.testing.expect(handleKey(&c, 1, true));
     try std.testing.expect(!handleKey(&c, 30, true));
+}
+
+pub const TextRec = struct {
+    calls: usize = 0,
+    last: [16]u8 = [_]u8{0} ** 16,
+    last_len: usize = 0,
+    ret: bool = false,
+};
+
+pub fn textRec(ctx: ?*anyopaque, text: []const u8) bool {
+    const r: *TextRec = @ptrCast(@alignCast(ctx.?));
+    r.calls += 1;
+    const n = @min(text.len, r.last.len);
+    @memcpy(r.last[0..n], text[0..n]);
+    r.last_len = n;
+    return r.ret;
+}
+
+test "text: the run reaches the handler verbatim (Caps Lock A, star, e-acute)" {
+    var c = KeyChain{};
+    var r = TextRec{ .ret = true };
+    c.registerText(textRec, &r);
+    try std.testing.expect(handleText(&c, "A"));
+    try std.testing.expect(handleText(&c, "*"));
+    try std.testing.expect(handleText(&c, "\xc3\xa9"));
+    try std.testing.expectEqual(@as(usize, 3), r.calls);
+    try std.testing.expectEqualStrings("\xc3\xa9", r.last[0..r.last_len]);
+}
+
+test "text: an empty run is not dispatched" {
+    var c = KeyChain{};
+    var r = TextRec{ .ret = true };
+    c.registerText(textRec, &r);
+    try std.testing.expect(!handleText(&c, ""));
+    try std.testing.expectEqual(@as(usize, 0), r.calls);
+}
+
+test "text: false falls through to the next handler, true stops the chain" {
+    var c = KeyChain{};
+    var r1 = TextRec{ .ret = false };
+    var r2 = TextRec{ .ret = true };
+    var r3 = TextRec{ .ret = true };
+    c.registerText(textRec, &r1);
+    c.registerText(textRec, &r2);
+    c.registerText(textRec, &r3);
+    try std.testing.expect(handleText(&c, "("));
+    try std.testing.expectEqual(@as(usize, 1), r1.calls);
+    try std.testing.expectEqual(@as(usize, 1), r2.calls);
+    try std.testing.expectEqual(@as(usize, 0), r3.calls);
+}
+
+test "text: no handler means not consumed, key chain untouched" {
+    var c = KeyChain{};
+    try std.testing.expect(!handleText(&c, "x"));
+    try std.testing.expectEqual(@as(usize, 0), c.n);
 }
 
 // ---- Press/release disambiguation (drag support): press records, motion past the threshold marks dragging, release fires only when not dragged.

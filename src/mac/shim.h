@@ -58,8 +58,12 @@ void glin_cocoa_invalidate(GlinCocoaWindow *win);
 typedef void (*GlinCocoaOnScroll)(void *user, double dx, double dy);
 
 /// Key event carrying the macOS virtual keycode (NOT an evdev code — the host
-/// translates). Return 1 if the key was consumed.
-typedef int (*GlinCocoaOnKey)(void *user, int mac_keycode, int pressed);
+/// translates) plus the UTF-8 characters AppKit composed for it. Return 1 if the key was consumed.
+/// `text_utf8` is NULL on key-up and on every key that is not text (arrows, Return, Tab, shortcuts).
+/// It is only valid for the duration of the call, and it already has Caps Lock, Shift and the
+/// active keyboard layout applied — which is exactly why a keycode table can never replace it.
+typedef int (*GlinCocoaOnKey)(void *user, int mac_keycode, int pressed,
+                              const char *text_utf8);
 
 /// Proposed size after clamping. Not applied immediately: the host coalesces
 /// resizes and applies at most one per drawn frame.

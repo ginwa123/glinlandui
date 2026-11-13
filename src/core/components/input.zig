@@ -216,8 +216,10 @@ pub fn backspaceAt(buf: []u8, len: *usize, st: *EditState) void {
     }
     clampEdit(st, len.*);
     if (st.caret == 0) return;
-    len.* = deleteSpan(buf, len.*, st.caret - 1, st.caret);
-    st.caret -= 1;
+    // A whole codepoint, so Backspace over `\xc3\xa9` cannot leave half a character behind.
+    const start = text_editor.prevCodepoint(buf[0..len.*], st.caret);
+    len.* = deleteSpan(buf, len.*, start, st.caret);
+    st.caret = start;
 }
 
 /// Forward Delete: deletes the selection when present, else the byte at the caret (no-op at end).
@@ -230,7 +232,8 @@ pub fn deleteAt(buf: []u8, len: *usize, st: *EditState) void {
     }
     clampEdit(st, len.*);
     if (st.caret >= len.*) return;
-    len.* = deleteSpan(buf, len.*, st.caret, st.caret + 1);
+    const n = text_editor.codepointLen(buf[0..len.*], st.caret);
+    len.* = deleteSpan(buf, len.*, st.caret, st.caret + n);
 }
 
 /// Arrow/Home/End dispatch for a single-line field (Up/Down ignored).
@@ -314,6 +317,16 @@ pub fn handleKey(buf: []u8, len: *usize, st: *EditState, mods: Mods, evdev: u32,
         return if (insertAt(buf, len, st, c)) .edited else .ignored;
     }
     return .ignored;
+}
+
+/// Insert a run the platform already composed -- Caps Lock `A`, `*`, `(`, `\xc3\xa9` -- at the caret, replacing any selection.
+pub fn handleText(buf: []u8, len: *usize, st: *EditState, text: []const u8) Action {
+    if (text.len == 0) return .ignored;
+    var inserted = false;
+    for (text) |c| {
+        if (insertAt(buf, len, st, c)) inserted = true;
+    }
+    return if (inserted) .edited else .ignored;
 }
 
 /// Toolkit-style field props.
@@ -566,6 +579,19 @@ fn layoutCommands(declare_fn: *const fn () void) ![]cl.RenderCommand {
     cl.beginLayout();
     declare_fn();
     return cl.endLayout();
+}
+
+test "handleText inserts a composed run and Backspace removes a whole codepoint" {
+    var buf: [16]u8 = undefined;
+    var len: usize = 0;
+    var st = EditState{};
+    try std.testing.expectEqual(Action.edited, handleText(&buf, &len, &st, "A*("));
+    try std.testing.expectEqualStrings("A*(", buf[0..len]);
+    try std.testing.expectEqual(Action.edited, handleText(&buf, &len, &st, "\xc3\xa9"));
+    try std.testing.expectEqual(@as(usize, 5), len);
+    backspaceAt(&buf, &len, &st);
+    try std.testing.expectEqualStrings("A*(", buf[0..len]);
+    try std.testing.expectEqual(Action.ignored, handleText(&buf, &len, &st, ""));
 }
 
 test "keyChar maps evdev codes with and without shift" {

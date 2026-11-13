@@ -224,10 +224,25 @@ pub const Window = struct {
         c.glin_cocoa_invalidate(self.handle);
     }
 
-    fn onKey(p: ?*anyopaque, mac_keycode: c_int, pressed: c_int) callconv(.c) c_int {
+    fn onKey(p: ?*anyopaque, mac_keycode: c_int, pressed: c_int, text: ?[*:0]const u8) callconv(.c) c_int {
         const self = ctx(p);
         const d = self.delegate orelse return 0;
-        // Translate to the evdev code the Delegate contract promises, so the widget layer and `components.input` need no macOS awareness.
+        // Text first: AppKit already applied Caps Lock, Shift and the keyboard layout, so this path types `A`, `*`, `(` and `é`, which a keycode table cannot.
+        if (pressed != 0) {
+            if (d.on_text) |on_text| {
+                if (text) |t| {
+                    const composed = std.mem.span(t);
+                    if (composed.len != 0) {
+                        self.state.needs_draw = true;
+                        on_text(d.ptr, composed);
+                        // The glyph is in the buffer now, so the window must repaint.
+                        c.glin_cocoa_invalidate(self.handle);
+                        return 1;
+                    }
+                }
+            }
+        }
+        // Everything else is a key: translate to the evdev code the Delegate contract promises, so the widget layer needs no macOS awareness.
         const ev = keymap.evdevFor(@intCast(mac_keycode));
         if (ev == keymap.KEY_NONE) return 0;
         self.state.needs_draw = true;

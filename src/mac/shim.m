@@ -74,7 +74,34 @@ struct GlinCocoaWindow {
 
     int frames_drawn;
     int max_frames;
+
+    /// Latched modifier state, because macOS reports modifiers through flagsChanged: and never through keyDown:/keyUp:.
+    int shift_down;
+    int ctrl_down;
+    int alt_down;
 };
+
+/// The characters AppKit composed for this event, or NULL when the key is not text.
+///
+/// This is the only place that knows a keyboard layout exists: `[event characters]` already has
+/// Caps Lock, Shift, Option and the active layout applied, so `a` under Caps Lock is "A", Shift+8 is
+/// "*", Option+e then e is "\xc3\xa9" and a German layout gives "\xc3\xa4" from the same keycode.
+/// A keycode-to-glyph table in Zig cannot reproduce any of that, which is why the text is passed through.
+///
+/// NULL means "this is a key, not a character": key-up, Return, Tab, Escape, Backspace, the arrow
+/// keys (AppKit reports those as private-use scalars U+F700..U+F8FF) and every Cmd/Ctrl shortcut,
+/// which stay on the keycode path so Ctrl+A is still select-all rather than a literal control byte.
+static const char *glinEventText(NSEvent *event) {
+    NSEventModifierFlags mods = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+    if (mods & (NSEventModifierFlagCommand | NSEventModifierFlagControl)) return NULL;
+    NSString *chars = [event characters];
+    if (chars == nil || [chars length] == 0) return NULL;
+    unichar c = [chars characterAtIndex:0];
+    // Control characters (0x00-0x1F, DEL) and the function-key private range are keys, not text.
+    if (c < 0x20 || c == 0x7F) return NULL;
+    if (c >= 0xF700 && c <= 0xF8FF) return NULL;
+    return [chars UTF8String];
+}
 
 @interface GlinView : NSView {
     GlinCocoaWindow *_owner;
@@ -207,14 +234,39 @@ enum {
     o->on_scroll(o->user, event.scrollingDeltaX, event.scrollingDeltaY);
 }
 
+/// macOS sends modifier keys HERE, never through keyDown:/keyUp:, so without this the app can never
+/// latch Shift or Ctrl and Shift+Left, Ctrl+A and Ctrl+Enter are all dead on macOS.
+/// The left-hand keycodes are the ones forwarded because the host maps left and right to the same latch.
+- (void)flagsChanged:(NSEvent *)event {
+    GlinCocoaWindow *o = _owner;
+    if (!o || !o->on_key) return;
+    NSEventModifierFlags flags = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+    int shift = (flags & NSEventModifierFlagShift) ? 1 : 0;
+    int ctrl = (flags & NSEventModifierFlagControl) ? 1 : 0;
+    int alt = (flags & NSEventModifierFlagOption) ? 1 : 0;
+    if (shift != o->shift_down) {
+        o->shift_down = shift;
+        o->on_key(o->user, 56, shift, NULL);
+    }
+    if (ctrl != o->ctrl_down) {
+        o->ctrl_down = ctrl;
+        o->on_key(o->user, 59, ctrl, NULL);
+    }
+    if (alt != o->alt_down) {
+        o->alt_down = alt;
+        o->on_key(o->user, 58, alt, NULL);
+    }
+}
+
 - (void)keyDown:(NSEvent *)event {
     GlinCocoaWindow *o = _owner;
-    if (o && o->on_key) o->on_key(o->user, (int)event.keyCode, 1);
+    if (o && o->on_key) o->on_key(o->user, (int)event.keyCode, 1, glinEventText(event));
 }
 
 - (void)keyUp:(NSEvent *)event {
     GlinCocoaWindow *o = _owner;
-    if (o && o->on_key) o->on_key(o->user, (int)event.keyCode, 0);
+    // Key-up never carries text: the glyph was delivered on the way down.
+    if (o && o->on_key) o->on_key(o->user, (int)event.keyCode, 0, NULL);
 }
 
 - (void)drawRect:(NSRect)dirtyRect {
