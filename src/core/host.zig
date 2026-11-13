@@ -75,6 +75,8 @@ pub const Host = struct {
         self.win_h = h;
         // The pointer and the clock are frame state, so a component can place a caret from a click and blink it.
         frame_mod.setPointer(self.ptr.x, self.ptr.y);
+        // The press origin too, so a field can refuse a drag that began outside it.
+        frame_mod.setPointerButton(self.ptr.down, self.ptr.down_x, self.ptr.down_y);
         self.clock_s += 0.016;
         frame_mod.setTime(self.clock_s, 0.016);
         // Consume the pending wheel delta exactly once per frame (Clay routes it to the hovered scroll container; zero = no-op).
@@ -119,6 +121,8 @@ pub const Host = struct {
     pub fn onPointerEvent(self: *Host, x: f32, y: f32, pressed: bool, button: u32) void {
         const last_x = self.ptr.x;
         const last_y = self.ptr.y;
+        // Keep the frame-visible pointer current, so a click handler dispatched below places the caret where the release happened.
+        frame_mod.setPointer(x, y);
         dispatch.pointerEvent(&self.ptr, x, y, pressed, button, self.win_w, self.win_h);
         // Slider-style drag: while a press-drag is in flight, nudge the scroll container under the pointer 1:1 (pointer down = scroll down).
         if (self.ptr.down and self.ptr.dragging and (x != last_x or y != last_y)) {

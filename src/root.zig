@@ -47,6 +47,9 @@ pub const parseTestFrames = platform.parseTestFrames;
 pub const wayland_lib = platform;
 
 /// The file / folder / save-target dialog.
+/// The system clipboard: `read(buf)` and `write(text)`. A no-op on a platform with no backend.
+pub const clipboard = platform.clipboard;
+
 pub const file_dialog = struct {
     pub const Kind = platform.FileDialogKind;
     pub const Rule = platform.FileDialogRule;
@@ -127,6 +130,7 @@ test {
     // The file dialog's shared contract, and the portable backend every non-Linux (and every test) build selects.
     _ = @import("core/file_dialog_contract.zig");
     _ = @import("core/file_dialog_portable.zig");
+    _ = @import("core/clipboard_portable.zig");
     // The scriptable dialog a consumer's test installs.
     _ = @import("core/file_dialog_fake.zig");
     // The Color type every color-bearing prop uses.

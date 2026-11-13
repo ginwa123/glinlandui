@@ -46,10 +46,22 @@ pub var ptr_y: f32 = 0;
 pub var time_s: f32 = 0;
 pub var delta_s: f32 = 0;
 
+/// Whether the left button is held, and where that press began, so a field can tell a drag that started on it from one that wandered in.
+pub var ptr_down: bool = false;
+pub var ptr_press_x: f32 = 0;
+pub var ptr_press_y: f32 = 0;
+
 /// Record the pointer position for this frame.
 pub fn setPointer(x: f32, y: f32) void {
     ptr_x = x;
     ptr_y = y;
+}
+
+/// Record the button state and the press origin for this frame.
+pub fn setPointerButton(down: bool, press_x: f32, press_y: f32) void {
+    ptr_down = down;
+    ptr_press_x = press_x;
+    ptr_press_y = press_y;
 }
 
 /// Record the frame clock. `delta` is the time since the previous frame, in seconds.

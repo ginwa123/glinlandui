@@ -429,6 +429,32 @@ worth the length: two bugs in this feature — a wrong SASL identity and an
 object path announced as a string — produced no error at all. The bus simply
 closed the connection, and only talking to a real bus found them.
 
+## Clipboard
+
+`glinlandui.clipboard` is the system pasteboard, and it is deliberately tiny:
+
+```zig
+var buf: [64 * 1024]u8 = undefined;
+const text = glinlandui.clipboard.read(&buf);   // []const u8, empty when there is nothing
+glinlandui.clipboard.write("SELECT 1");         // replaces the pasteboard's text
+```
+
+There is no allocation across the boundary: the caller owns the buffer and the
+length comes back, so a clipboard larger than the buffer is truncated rather
+than leaked.
+
+- **macOS** (`mac/clipboard.zig`) uses `NSPasteboard` through the shim, so it is
+  the same pasteboard every other app on the machine reads and writes.
+- **Linux, Windows and the browser** (`core/clipboard_portable.zig`) are a
+  no-op: `read` returns empty and `write` drops the text. The port exists on
+  every target so a caller compiles everywhere; a UI that cares can gate on
+  `clipboard.max_bytes` or on the read coming back empty.
+
+The library does **not** bind Cmd+C to copy, because a text field is the app's
+model, not the library's: `text_editor.copySelection`, `cutSelection` and
+`paste` are the edits, and the app decides which keystroke calls them. See
+`Text arrives two ways` in `src/core/components/README.md` for the typing half.
+
 ## Architecture
 
 ```

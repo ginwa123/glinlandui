@@ -38,6 +38,15 @@ else switch (builtin.os.tag) {
     else => @import("core/file_dialog_portable.zig"),
 };
 
+/// The clipboard backend: read or replace the system pasteboard's text.
+pub const clipboard = if (builtin.is_test)
+    @import("core/clipboard_portable.zig")
+else switch (builtin.os.tag) {
+    .macos => @import("mac/clipboard.zig"),
+    // No backend yet on the other platforms: the port still exists, so an app compiles and its paste is a no-op.
+    else => @import("core/clipboard_portable.zig"),
+};
+
 /// The text backend.
 pub const text_impl = if (builtin.is_test)
     @import("core/text_portable.zig")

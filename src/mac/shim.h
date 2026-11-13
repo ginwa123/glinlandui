@@ -113,6 +113,15 @@ void glin_cocoa_content_size(GlinCocoaWindow *win, int *out_w, int *out_h);
 /// The toolkit resolves the shape from the click registry each frame; this is the one place it reaches AppKit.
 void glin_cocoa_set_cursor(int shape);
 
+/// Copy the general pasteboard's text into `buf` as UTF-8 and return the byte count (0 when empty or unreadable).
+///
+/// No allocation crosses this boundary: the host passes its own buffer and gets a length back, so a
+/// clipboard that is larger than the buffer is truncated rather than leaked.
+int glin_cocoa_clipboard_read(char *buf, int cap);
+
+/// Replace the general pasteboard's text with `len` bytes of UTF-8. An empty `len` clears it.
+void glin_cocoa_clipboard_write(const char *text_utf8, int len);
+
 /// The display's backing scale for this window: 2.0 on a Retina screen, 1.0 otherwise.
 ///
 /// The host renders at this multiple so text is rasterized at device resolution instead of being upscaled by CoreGraphics, which is what made the window look soft.

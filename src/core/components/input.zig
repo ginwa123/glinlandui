@@ -265,6 +265,8 @@ pub fn handleNavKey(st: *EditState, buf: []const u8, len: usize, evdev: u32, shi
 pub const Mods = struct {
     shift: bool = false,
     ctrl: bool = false,
+    /// Cmd on macOS, the Super/Windows key elsewhere. Its own flag, so an app can tell Cmd from Ctrl.
+    super: bool = false,
 
     pub fn track(m: *Mods, evdev: u32, pressed: bool) bool {
         switch (evdev) {
@@ -276,8 +278,18 @@ pub const Mods = struct {
                 m.ctrl = pressed;
                 return true;
             },
+            // KEY_LEFTMETA / KEY_RIGHTMETA: macOS maps Cmd here, so Cmd+C is no longer a plain `c`.
+            125, 126 => {
+                m.super = pressed;
+                return true;
+            },
             else => return false,
         }
+    }
+
+    /// True while either shortcut modifier is held: Cmd on macOS, Ctrl everywhere else.
+    pub fn shortcut(m: Mods) bool {
+        return m.ctrl or m.super;
     }
 };
 
@@ -433,11 +445,36 @@ pub const FieldCtx = struct {
     /// Called after a click places the caret, so the app can take focus.
     on_focus: ?*const fn (?*anyopaque) void = null,
     focus_ctx: ?*anyopaque = null,
+    /// True while this field owns a drag in flight; the field ticks it, so the app never has to.
+    dragging: bool = false,
 };
+
+/// Anchor the caret on the press, extend it while the button stays down, and release the drag when it comes up.
+fn dragSelect(ctx: *FieldCtx, id: []const u8) void {
+    if (!frame_mod.ptr_down) {
+        ctx.dragging = false;
+        return;
+    }
+    const data = cl.getElementData(cl.getElementId(id));
+    if (!data.found) return;
+    const bb = data.bounding_box;
+    // Only a press that BEGAN inside the field may take the caret, so a drag that wanders in from elsewhere does not steal it.
+    const began_here = frame_mod.ptr_press_x >= bb.x and frame_mod.ptr_press_x <= bb.x + bb.width and
+        frame_mod.ptr_press_y >= bb.y and frame_mod.ptr_press_y <= bb.y + bb.height;
+    if (!ctx.dragging and !began_here) return;
+    // `extend` is false on the anchoring frame (place the caret) and true after it (grow the selection from that anchor).
+    ctx.input.clickAt(frame_mod.ptr_x - bb.x - 8, ctx.char_w, ctx.dragging);
+    if (!ctx.dragging) {
+        ctx.dragging = true;
+        if (ctx.on_focus) |f| f(ctx.focus_ctx);
+    }
+}
 
 /// A live text field: selection highlight, a blinking caret, and a click that places the caret.
 pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
     const input = ctx.input;
+    // Drag-select first, so the caret and the selection this frame draws are the ones the pointer just asked for.
+    dragSelect(ctx, props.id);
     const text = input.text();
     // The field owns its own animation: advancing the blink here means an app never has to remember to tick a field it declared.
     input.idle += frame_mod.delta_s;

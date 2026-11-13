@@ -219,10 +219,22 @@ pub const Editor = struct {
     }
 
     pub fn moveLeft(self: *Editor, shift: bool) void {
+        // A bare arrow collapses a selection to the caret instead of moving past it, which is what every editor does.
+        if (!shift and self.caret.hasSelection()) {
+            self.setCaret(self.caret.offset, false);
+            self.idle = 0;
+            return;
+        }
         self.setCaret(prevCodepoint(self.text(), self.caret.offset), shift);
     }
 
     pub fn moveRight(self: *Editor, shift: bool) void {
+        // A bare arrow collapses a selection to the caret instead of moving past it, which is what every editor does.
+        if (!shift and self.caret.hasSelection()) {
+            self.setCaret(self.caret.offset, false);
+            self.idle = 0;
+            return;
+        }
         self.setCaret(self.caret.offset + codepointLen(self.text(), self.caret.offset), shift);
     }
 
@@ -313,7 +325,10 @@ pub const Editor = struct {
 
     /// Place the caret from a click. `extend` keeps the anchor, which is what a shift-click does.
     pub fn clickAt(self: *Editor, x: f32, char_w: f32, extend: bool) void {
-        self.setCaret(self.caretAtX(x, char_w), extend);
+        var at = self.caretAtX(x, char_w);
+        // Never leave the caret inside a multi-byte codepoint: a click between the bytes of `\xc3\xa9` would split it on the next Backspace.
+        while (at > 0 and at < self.len and (self.buf[at] & 0xC0) == 0x80) at -= 1;
+        self.setCaret(at, extend);
         self.idle = 0;
     }
 
@@ -431,12 +446,36 @@ pub fn handleKey(
         else => {},
     }
 
-    // Printable ASCII only.
+    // A Ctrl/Cmd combo is a shortcut, never a character: inserting a literal control byte is always wrong, and the app owns the clipboard.
+    if (ctrl) return .ignored;
+    // Printable ASCII only, for the backends that send a keycode instead of the composed text.
     if (keyChar(keycode, shift)) |c| {
         if (!editor.insertByte(c)) return .ignored;
         return .edited;
     }
     return .ignored;
+}
+
+/// Copy the selection into `out`; null when nothing is selected. `out` is truncated, never overrun.
+pub fn copySelection(editor: *const Editor, out: []u8) ?[]const u8 {
+    const span = editor.caret.selection() orelse return null;
+    if (span.start >= span.end) return null;
+    const n = @min(span.end - span.start, out.len);
+    @memcpy(out[0..n], editor.buf[span.start..][0..n]);
+    return out[0..n];
+}
+
+/// Cut: copy the selection, then remove it. Null when nothing is selected.
+pub fn cutSelection(editor: *Editor, out: []u8) ?[]const u8 {
+    const copied = copySelection(editor, out) orelse return null;
+    _ = editor.deleteSelection();
+    editor.idle = 0;
+    return copied;
+}
+
+/// Paste a run at the caret, replacing any selection: the same edit as `handleText`, named for the gesture.
+pub fn paste(editor: *Editor, text: []const u8) Action {
+    return handleText(editor, text);
 }
 
 /// Insert a run the platform already composed, which is how `A` (Caps Lock), `*`, `(` and `\xc3\xa9` arrive on macOS.
@@ -462,6 +501,9 @@ pub const KEY_DOWN: u32 = 108;
 pub const KEY_HOME: u32 = 102;
 pub const KEY_END: u32 = 107;
 pub const KEY_DELETE: u32 = 111;
+pub const KEY_X: u32 = 45;
+pub const KEY_C: u32 = 46;
+pub const KEY_V: u32 = 47;
 pub const KEY_K: u32 = 37;
 // Ctrl+O.
 pub const KEY_O: u32 = 24;
@@ -784,6 +826,67 @@ test "backspace, delete and the arrows step over a whole multi-byte codepoint" {
     e.setCaret(0, false);
     e.deleteForward();
     try testing.expectEqualStrings("b", e.text());
+}
+
+test "a bare arrow collapses a selection instead of moving the caret" {
+    var buf: [16]u8 = undefined;
+    var e = Editor.init(&buf);
+    _ = e.insertSlice("abcd");
+    e.setCaret(3, false);
+    e.setCaret(1, true);
+    e.moveRight(false);
+    try testing.expectEqual(@as(usize, 1), e.caret.offset);
+    try testing.expect(!e.caret.hasSelection());
+    e.setCaret(1, false);
+    e.setCaret(3, true);
+    e.moveLeft(false);
+    try testing.expectEqual(@as(usize, 3), e.caret.offset);
+    try testing.expect(!e.caret.hasSelection());
+}
+
+test "a click never lands inside a multi-byte codepoint" {
+    var buf: [16]u8 = undefined;
+    var e = Editor.init(&buf);
+    _ = e.insertSlice("\xc3\xa9a");
+    // Byte column 1 is the middle of `e-acute`, so the click snaps back to its start.
+    e.clickAt(10, 10, false);
+    try testing.expectEqual(@as(usize, 0), e.caret.offset);
+    // Byte column 2 is the `a`.
+    e.clickAt(20, 10, false);
+    try testing.expectEqual(@as(usize, 2), e.caret.offset);
+}
+
+test "copy and cut hand back the selection, and paste puts a run back in its place" {
+    var buf: [32]u8 = undefined;
+    var e = Editor.init(&buf);
+    _ = e.insertSlice("SELECT name");
+    // Select `name`.
+    e.setCaret(14, false);
+    e.setCaret(7, true);
+    var out: [32]u8 = undefined;
+    try testing.expectEqualStrings("name", copySelection(&e, &out).?);
+    // Copying leaves the text alone.
+    try testing.expectEqualStrings("SELECT name", e.text());
+
+    try testing.expectEqualStrings("name", cutSelection(&e, &out).?);
+    try testing.expectEqualStrings("SELECT ", e.text());
+
+    try testing.expectEqual(Action.edited, paste(&e, "id, name"));
+    try testing.expectEqualStrings("SELECT id, name", e.text());
+
+    // With no selection there is nothing to copy or cut.
+    try testing.expect(copySelection(&e, &out) == null);
+    try testing.expect(cutSelection(&e, &out) == null);
+}
+
+test "paste replaces a selection instead of doubling it" {
+    var buf: [32]u8 = undefined;
+    var e = Editor.init(&buf);
+    _ = e.insertSlice("abc");
+    e.setCaret(0, false);
+    e.setCaret(3, true);
+    try testing.expectEqual(Action.edited, paste(&e, "xy"));
+    try testing.expectEqualStrings("xy", e.text());
 }
 
 test "handleText inserts a composed run and restarts the blink" {

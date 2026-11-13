@@ -79,6 +79,7 @@ struct GlinCocoaWindow {
     int shift_down;
     int ctrl_down;
     int alt_down;
+    int cmd_down;
 };
 
 /// The characters AppKit composed for this event, or NULL when the key is not text.
@@ -244,6 +245,7 @@ enum {
     int shift = (flags & NSEventModifierFlagShift) ? 1 : 0;
     int ctrl = (flags & NSEventModifierFlagControl) ? 1 : 0;
     int alt = (flags & NSEventModifierFlagOption) ? 1 : 0;
+    int cmd = (flags & NSEventModifierFlagCommand) ? 1 : 0;
     if (shift != o->shift_down) {
         o->shift_down = shift;
         o->on_key(o->user, 56, shift, NULL);
@@ -255,6 +257,11 @@ enum {
     if (alt != o->alt_down) {
         o->alt_down = alt;
         o->on_key(o->user, 58, alt, NULL);
+    }
+    // Cmd (55) maps to evdev 125, so the app can tell Cmd+C from a plain `c` and route it to the clipboard.
+    if (cmd != o->cmd_down) {
+        o->cmd_down = cmd;
+        o->on_key(o->user, 55, cmd, NULL);
     }
 }
 
@@ -686,6 +693,33 @@ double glin_cocoa_backing_scale(GlinCocoaWindow *win) {
     if (!v) return 1.0;
     CGFloat s = v.window.backingScaleFactor;
     return (s > 0) ? (double)s : 1.0;
+}
+
+int glin_cocoa_clipboard_read(char *buf, int cap) {
+    @autoreleasepool {
+        if (!buf || cap <= 0) return 0;
+        NSString *s = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+        if (s == nil) return 0;
+        NSData *d = [s dataUsingEncoding:NSUTF8StringEncoding];
+        if (d == nil) return 0;
+        NSUInteger n = d.length;
+        if (n > (NSUInteger)cap) n = (NSUInteger)cap;
+        memcpy(buf, d.bytes, n);
+        return (int)n;
+    }
+}
+
+void glin_cocoa_clipboard_write(const char *text_utf8, int len) {
+    @autoreleasepool {
+        if (!text_utf8 || len < 0) return;
+        NSPasteboard *pb = [NSPasteboard generalPasteboard];
+        NSString *s = [[NSString alloc] initWithBytes:text_utf8
+                                              length:(NSUInteger)len
+                                            encoding:NSUTF8StringEncoding];
+        if (s == nil) return;
+        [pb clearContents];
+        [pb setString:s forType:NSPasteboardTypeString];
+    }
 }
 
 void glin_cocoa_set_cursor(int shape) {
