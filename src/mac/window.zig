@@ -107,6 +107,13 @@ pub const Window = struct {
             self,
         );
 
+        // The window may not be the size that was asked for: macOS constrains it to the screen's visible frame and sends
+        // no resize for that, so the first frame would lay out at a size the view does not have.
+        var cw: c_int = 0;
+        var ch: c_int = 0;
+        c.glin_cocoa_content_size(handle, &cw, &ch);
+        if (cw > 0 and ch > 0) _ = adapter.noteResize(&self.state, @intCast(cw), @intCast(ch));
+
         std.log.info(
             "macOS window: {d}x{d} ({s})",
             .{ cfg.width, cfg.height, cfg.title },

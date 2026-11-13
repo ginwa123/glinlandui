@@ -115,6 +115,12 @@ pub const Window = struct {
         defer self.handle = null;
         defer c.glin_win_window_destroy(handle);
 
+        // The client area may differ from what was asked for; adopt the real size so the first frame lays out in it.
+        var cw: c_int = 0;
+        var ch: c_int = 0;
+        c.glin_win_content_size(handle, &cw, &ch);
+        if (cw > 0 and ch > 0) _ = adapter.noteResize(&self.state, @intCast(cw), @intCast(ch));
+
         c.glin_win_window_set_callbacks(
             handle,
             onFrame,
