@@ -456,6 +456,11 @@ pub fn handleKey(
     return .ignored;
 }
 
+/// True when the caret should be drawn: solid for half a second after it moved, then a 1 Hz blink.
+pub fn caretVisible(editor: *const Editor) bool {
+    return editor.idle < 0.5 or @mod(editor.idle, 1.0) < 0.5;
+}
+
 /// Copy the selection into `out`; null when nothing is selected. `out` is truncated, never overrun.
 pub fn copySelection(editor: *const Editor, out: []u8) ?[]const u8 {
     const span = editor.caret.selection() orelse return null;
@@ -807,6 +812,18 @@ test "movement clamps at both ends" {
     try testing.expectEqual(@as(usize, 2), e.caret.offset);
 }
 
+test "the caret is solid right after an edit and blinks after half a second" {
+    var buf: [8]u8 = undefined;
+    var e = Editor.init(&buf);
+    try testing.expect(caretVisible(&e));
+    // 0.6 s idle is the dark half of the blink.
+    e.idle = 0.6;
+    try testing.expect(!caretVisible(&e));
+    // 1.1 s is the bright half again.
+    e.idle = 1.1;
+    try testing.expect(caretVisible(&e));
+}
+
 test "backspace, delete and the arrows step over a whole multi-byte codepoint" {
     var buf: [32]u8 = undefined;
     var e = Editor.init(&buf);
@@ -1013,6 +1030,10 @@ pub fn clampTo(text: []const u8, buf: []u8) []const u8 {
 }
 
 /// Render one editor line with a visible caret, into `buf`.
+/// A one-run fallback for a renderer that can only emit one text run per line: the caret becomes a `|` glyph.
+///
+/// A real UI should not use this. The bar is a glyph, so it takes a character cell and the tail of the line shifts
+/// every time it blinks; draw a 1px box at `column * char_width` instead (meja's `editor.caret` does).
 pub fn renderLineWithCaret(line_text: []const u8, caret_at: ?usize, buf: []u8) []const u8 {
     const at = caret_at orelse return clampTo(line_text, buf);
     if (buf.len == 0) return buf[0..0];

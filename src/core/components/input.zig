@@ -480,7 +480,7 @@ pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
     input.idle += frame_mod.delta_s;
     const fg = (if (props.disabled) props.disabled_fg else props.fg).toClay();
     // Solid for half a second after the caret moves, then blinking: a caret that blinks while you type is a caret you cannot find.
-    const blink_on = input.idle < 0.5 or @mod(input.idle, 1.0) < 0.5;
+    const blink_on = text_editor.caretVisible(input);
 
     cl.UI()(.{
         .id = .ID(props.id),
