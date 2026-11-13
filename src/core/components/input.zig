@@ -426,6 +426,8 @@ pub const FieldCtx = struct {
 pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
     const input = ctx.input;
     const text = input.text();
+    // The field owns its own animation: advancing the blink here means an app never has to remember to tick a field it declared.
+    input.idle += frame_mod.delta_s;
     const fg = (if (props.disabled) props.disabled_fg else props.fg).toClay();
     // Solid for half a second after the caret moves, then blinking: a caret that blinks while you type is a caret you cannot find.
     const blink_on = input.idle < 0.5 or @mod(input.idle, 1.0) < 0.5;
