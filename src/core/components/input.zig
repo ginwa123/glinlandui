@@ -525,7 +525,18 @@ pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
         }
     });
 
-    registry.registerClickCursor(cl.getElementId(props.id), onFieldClick, ctx, .text);
+    registry.registerClickDoubleCursor(cl.getElementId(props.id), onFieldClick, onFieldDoubleClick, ctx, .text);
+}
+
+/// Select the word under a double click, which is what every text field does.
+fn onFieldDoubleClick(ctx: ?*anyopaque) void {
+    const c: *FieldCtx = @ptrCast(@alignCast(ctx.?));
+    const data = cl.getElementData(cl.getElementId(c.id));
+    if (!data.found) return;
+    const x = frame_mod.ptr_x - data.bounding_box.x - 8;
+    text_editor.selectWordAt(c.input, c.input.caretAtX(x, c.char_w));
+    c.input.idle = 0;
+    if (c.on_focus) |f| f(c.focus_ctx);
 }
 
 /// Place the caret from a click, using the field's own box and the frame's pointer.

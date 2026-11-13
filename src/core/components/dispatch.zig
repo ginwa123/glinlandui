@@ -119,6 +119,11 @@ pub fn handleText(chain: *KeyChain, text: []const u8) bool {
 /// Drag threshold: press + release with less than this much motion is a click; more marks dragging (scroll drag, release fires nothing).
 pub const drag_threshold_px: f32 = 6;
 
+/// How long two clicks may be apart and still be a double click.
+pub const double_click_ms: i64 = 400;
+/// How far apart they may land, in points, and still be the same spot.
+pub const double_click_slop_px: f32 = 4;
+
 /// Owner-held pointer state (mirrors Shell's pointer_x/y/down).
 pub const PtrState = struct {
     x: f32 = 0,
@@ -131,6 +136,14 @@ pub const PtrState = struct {
     press_in_bounds: bool = false,
     /// Motion past drag_threshold_px while down (scroll drag in flight).
     dragging: bool = false,
+    /// This event's time in milliseconds, stamped by the host. 0 = no clock, which never makes a double click.
+    now_ms: i64 = 0,
+    /// The previous click's time and press point, for double-click detection. 0 = none yet.
+    last_click_ms: i64 = 0,
+    last_click_x: f32 = 0,
+    last_click_y: f32 = 0,
+    /// 1 after a single click, 2 after a double.
+    click_count: u8 = 0,
 };
 
 /// Always stores x/y.
@@ -151,7 +164,7 @@ pub fn pointerEvent(s: *PtrState, x: f32, y: f32, pressed: bool, button_code: u3
         s.down = false;
         s.dragging = false;
         s.press_in_bounds = false;
-        if (fire) _ = registry.dispatchClick(s.down_x, s.down_y);
+        if (fire) fireClick(s);
     } else if (s.down and !s.dragging) {
         const dx = x - s.down_x;
         const dy = y - s.down_y;
@@ -159,6 +172,28 @@ pub fn pointerEvent(s: *PtrState, x: f32, y: f32, pressed: bool, button_code: u3
             s.dragging = true;
         }
     }
+}
+
+/// Fire the click at the press point, as a double click when it is the second one on the same spot inside the window.
+fn fireClick(s: *PtrState) void {
+    const x = s.down_x;
+    const y = s.down_y;
+    const now = s.now_ms;
+    const same_spot = @abs(x - s.last_click_x) <= double_click_slop_px and @abs(y - s.last_click_y) <= double_click_slop_px;
+    // Without a clock there is no way to tell a double click from two clicks, so it stays a single.
+    const quick = now != 0 and s.last_click_ms != 0 and now - s.last_click_ms <= double_click_ms;
+    if (same_spot and quick) {
+        s.click_count = 2;
+        // A third click starts over rather than stacking into a triple.
+        s.last_click_ms = 0;
+        _ = registry.dispatchDoubleClick(x, y);
+        return;
+    }
+    s.click_count = 1;
+    s.last_click_ms = now;
+    s.last_click_x = x;
+    s.last_click_y = y;
+    _ = registry.dispatchClick(x, y);
 }
 
 // ---- Test doubles ----
@@ -385,6 +420,92 @@ test "text: no handler means not consumed, key chain untouched" {
     var c = KeyChain{};
     try std.testing.expect(!handleText(&c, "x"));
     try std.testing.expectEqual(@as(usize, 0), c.n);
+}
+
+// ---- Double click ----
+
+const DblRec = struct { singles: usize = 0, doubles: usize = 0 };
+
+fn dblSingle(ctx: ?*anyopaque) void {
+    const r: *DblRec = @ptrCast(@alignCast(ctx.?));
+    r.singles += 1;
+}
+
+fn dblDouble(ctx: ?*anyopaque) void {
+    const r: *DblRec = @ptrCast(@alignCast(ctx.?));
+    r.doubles += 1;
+}
+
+/// One press+release at the centre of the laid-out row.
+fn clickOnce(s: *PtrState, cx: f32, cy: f32) void {
+    pointerEvent(s, cx, cy, true, BTN_LEFT, 720, 480);
+    pointerEvent(s, cx, cy, false, BTN_LEFT, 720, 480);
+}
+
+test "double click: a second click on the same spot inside the window is a double" {
+    try layoutOne();
+    registry.beginFrame();
+    var rec = DblRec{};
+    registry.registerClickDoubleCursor(rowId(), dblSingle, dblDouble, &rec, .text);
+    const bb = boxCenter();
+    const cx = bb.x + bb.width * 0.5;
+    const cy = bb.y + bb.height * 0.5;
+    var s = PtrState{};
+    s.now_ms = 1000;
+    clickOnce(&s, cx, cy);
+    try std.testing.expectEqual(@as(usize, 1), rec.singles);
+    try std.testing.expectEqual(@as(usize, 0), rec.doubles);
+    s.now_ms = 1150;
+    clickOnce(&s, cx, cy);
+    try std.testing.expectEqual(@as(usize, 1), rec.singles);
+    try std.testing.expectEqual(@as(usize, 1), rec.doubles);
+    try std.testing.expectEqual(@as(u8, 2), s.click_count);
+}
+
+test "double click: a slow second click is two singles" {
+    try layoutOne();
+    registry.beginFrame();
+    var rec = DblRec{};
+    registry.registerClickDoubleCursor(rowId(), dblSingle, dblDouble, &rec, .text);
+    const bb = boxCenter();
+    const cx = bb.x + bb.width * 0.5;
+    const cy = bb.y + bb.height * 0.5;
+    var s = PtrState{};
+    s.now_ms = 1000;
+    clickOnce(&s, cx, cy);
+    s.now_ms = 1000 + double_click_ms + 50;
+    clickOnce(&s, cx, cy);
+    try std.testing.expectEqual(@as(usize, 2), rec.singles);
+    try std.testing.expectEqual(@as(usize, 0), rec.doubles);
+}
+
+test "double click: a second click elsewhere is two singles" {
+    try layoutOne();
+    registry.beginFrame();
+    var rec = DblRec{};
+    registry.registerClickDoubleCursor(rowId(), dblSingle, dblDouble, &rec, .text);
+    const bb = boxCenter();
+    const cy = bb.y + bb.height * 0.5;
+    var s = PtrState{};
+    s.now_ms = 1000;
+    clickOnce(&s, bb.x + bb.width * 0.5, cy);
+    s.now_ms = 1100;
+    clickOnce(&s, bb.x + bb.width * 0.5 + double_click_slop_px * 4, cy);
+    try std.testing.expectEqual(@as(usize, 2), rec.singles);
+    try std.testing.expectEqual(@as(usize, 0), rec.doubles);
+}
+
+test "double click: with no clock a second click is still a single" {
+    try layoutOne();
+    registry.beginFrame();
+    var rec = DblRec{};
+    registry.registerClickDoubleCursor(rowId(), dblSingle, dblDouble, &rec, .text);
+    const bb = boxCenter();
+    var s = PtrState{};
+    clickOnce(&s, bb.x + bb.width * 0.5, bb.y + bb.height * 0.5);
+    clickOnce(&s, bb.x + bb.width * 0.5, bb.y + bb.height * 0.5);
+    try std.testing.expectEqual(@as(usize, 2), rec.singles);
+    try std.testing.expectEqual(@as(usize, 0), rec.doubles);
 }
 
 // ---- Press/release disambiguation (drag support): press records, motion past the threshold marks dragging, release fires only when not dragged.

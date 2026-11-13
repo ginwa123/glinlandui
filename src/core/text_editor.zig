@@ -456,6 +456,24 @@ pub fn handleKey(
     return .ignored;
 }
 
+/// Select the run around `offset` the way a double click does: the word (letters, digits, underscore), or the run of
+/// non-word bytes between two words. A newline always ends a run, so a double click never selects across lines.
+pub fn selectWordAt(editor: *Editor, offset: usize) void {
+    if (editor.len == 0) return;
+    var at = @min(offset, editor.len);
+    // The end of the buffer has no byte at `at`, so anchor on the one before it.
+    if (at == editor.len) at -= 1;
+    const text = editor.buf[0..editor.len];
+    const word = isWordByte(text[at]);
+    var start = at;
+    while (start > 0 and text[start - 1] != '\n' and isWordByte(text[start - 1]) == word) start -= 1;
+    var end = at;
+    while (end < text.len and text[end] != '\n' and isWordByte(text[end]) == word) end += 1;
+    editor.setCaret(start, false);
+    editor.setCaret(end, true);
+    editor.idle = 0;
+}
+
 /// True when the caret should be drawn: solid for half a second after it moved, then a 1 Hz blink.
 pub fn caretVisible(editor: *const Editor) bool {
     return editor.idle < 0.5 or @mod(editor.idle, 1.0) < 0.5;
@@ -810,6 +828,32 @@ test "movement clamps at both ends" {
     e.moveRight(false);
     e.moveRight(false);
     try testing.expectEqual(@as(usize, 2), e.caret.offset);
+}
+
+test "selectWordAt takes the whole word under the offset, and never crosses a newline" {
+    var buf: [64]u8 = undefined;
+    var e = Editor.init(&buf);
+    _ = e.insertSlice("SELECT name FROM t\nWHERE id = 1");
+    // Inside `name`.
+    selectWordAt(&e, 9);
+    var span = e.caret.selection().?;
+    try testing.expectEqual(@as(usize, 7), span.start);
+    try testing.expectEqual(@as(usize, 11), span.end);
+    // A click on the space before `name` takes the run of non-word bytes.
+    selectWordAt(&e, 6);
+    span = e.caret.selection().?;
+    try testing.expectEqual(@as(usize, 6), span.start);
+    try testing.expectEqual(@as(usize, 7), span.end);
+    // The end of the buffer anchors on the last byte, not past it.
+    selectWordAt(&e, e.len);
+    span = e.caret.selection().?;
+    try testing.expectEqual(@as(usize, e.len - 1), span.start);
+    try testing.expectEqual(@as(usize, e.len), span.end);
+    // `id` is a word even though it is short.
+    selectWordAt(&e, 25);
+    span = e.caret.selection().?;
+    try testing.expectEqual(@as(usize, 25), span.start);
+    try testing.expectEqual(@as(usize, 27), span.end);
 }
 
 test "the caret is solid right after an edit and blinks after half a second" {

@@ -21,6 +21,8 @@ const Entry = struct {
     id: cl.ElementId,
     cb_row: ?*const fn (?*anyopaque, usize) void = null,
     cb_click: ?*const fn (?*anyopaque) void = null,
+    /// Second click on the same spot; a target with one costs a single entry, not two.
+    cb_double: ?*const fn (?*anyopaque) void = null,
     ctx: ?*anyopaque = null,
     index: usize = 0,
     /// Dispatch priority: highest-z containing match wins (overlay cards register above in-flow rows).
@@ -66,6 +68,14 @@ pub fn registerClickCursor(id: cl.ElementId, cb: ClickFn, ctx: ?*anyopaque, curs
     count += 1;
 }
 
+/// Register a click target that also answers a double click (word select). One entry, two callbacks.
+pub fn registerClickDoubleCursor(id: cl.ElementId, cb: ClickFn, cb_double: ClickFn, ctx: ?*anyopaque, cursor: Cursor) void {
+    const before = count;
+    registerClickCursor(id, cb, ctx, cursor);
+    // Only when it actually landed: a full registry must not rewrite somebody else's entry.
+    if (count > before) entries[count - 1].cb_double = cb_double;
+}
+
 /// Register a hover-only entry (no click callback): dispatchClick skips it but hoverCursorAt sees it.
 pub fn registerHover(id: cl.ElementId, cursor: Cursor) void {
     registerHoverZ(id, cursor, 0);
@@ -82,21 +92,44 @@ fn contains(bb: cl.BoundingBox, x: f32, y: f32) bool {
     return x >= bb.x and x < bb.x + bb.width and y >= bb.y and y < bb.y + bb.height;
 }
 
-/// Dispatch a click point: the highest-z containing match fires once (ties keep last-registered-first).
-pub fn dispatchClick(x: f32, y: f32) bool {
+/// The highest-z entry containing the point (ties keep last-registered-first), or null.
+fn topmostAt(x: f32, y: f32) ?Entry {
     var best: ?Entry = null;
     var i: usize = 0;
     while (i < count) : (i += 1) {
         const e = entries[i];
         // Hover-only entries never fire clicks.
-        if (e.cb_row == null and e.cb_click == null) continue;
+        if (e.cb_row == null and e.cb_click == null and e.cb_double == null) continue;
         const data = cl.getElementData(e.id);
         if (!data.found) continue;
         if (!contains(data.bounding_box, x, y)) continue;
         // Forward scan + >= : later entries win ties (legacy order).
         if (best == null or e.z >= best.?.z) best = e;
     }
-    const hit = best orelse return false;
+    return best;
+}
+
+/// Dispatch a click point: the highest-z containing match fires once (ties keep last-registered-first).
+pub fn dispatchClick(x: f32, y: f32) bool {
+    const hit = topmostAt(x, y) orelse return false;
+    if (hit.cb_row) |cb| {
+        cb(hit.ctx, hit.index);
+        return true;
+    }
+    if (hit.cb_click) |cb0| {
+        cb0(hit.ctx);
+        return true;
+    }
+    return false;
+}
+
+/// Dispatch a double click: the same hit test, preferring the double callback and falling back to the single one.
+pub fn dispatchDoubleClick(x: f32, y: f32) bool {
+    const hit = topmostAt(x, y) orelse return false;
+    if (hit.cb_double) |cb| {
+        cb(hit.ctx);
+        return true;
+    }
     if (hit.cb_row) |cb| {
         cb(hit.ctx, hit.index);
         return true;

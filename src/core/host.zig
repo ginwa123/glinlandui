@@ -23,6 +23,9 @@ pub const Host = struct {
     win_w: u32 = 720,
     win_h: u32 = 480,
     ptr: dispatch.PtrState = .{},
+    /// Millisecond clock for double-click timing. The app supplies one (its own Io); null means no double clicks.
+    clock: ?*const fn (?*anyopaque) i64 = null,
+    clock_ctx: ?*anyopaque = null,
     /// A monotonic frame clock in seconds. The host advances it; a component only reads it.
     clock_s: f32 = 0,
     /// Pending wheel scroll delta (px, accumulated by onScrollEvent, consumed once per frame by frame() into Clay's scroll containers).
@@ -123,6 +126,8 @@ pub const Host = struct {
         const last_y = self.ptr.y;
         // Keep the frame-visible pointer current, so a click handler dispatched below places the caret where the release happened.
         frame_mod.setPointer(x, y);
+        // Stamp the event so a double click can be told from two clicks; with no clock every click is a single.
+        self.ptr.now_ms = if (self.clock) |f| f(self.clock_ctx) else 0;
         dispatch.pointerEvent(&self.ptr, x, y, pressed, button, self.win_w, self.win_h);
         // Slider-style drag: while a press-drag is in flight, nudge the scroll container under the pointer 1:1 (pointer down = scroll down).
         if (self.ptr.down and self.ptr.dragging and (x != last_x or y != last_y)) {
