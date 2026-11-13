@@ -54,6 +54,9 @@ pub const Window = struct {
     blit_buf: []u8 = &.{},
     /// The cursor shape last handed to AppKit, so a frame that did not change it costs nothing.
     last_shape: u32 = 0,
+    /// The size the last completed layout used; the pointer is flipped in THIS space, never a pending one.
+    layout_w: u32 = 0,
+    layout_h: u32 = 0,
     /// Is the primary button currently held?
     left_held: bool = false,
     /// Frames composited so far.
@@ -135,20 +138,22 @@ pub const Window = struct {
     /// `-drawRect:`.
     fn onFrame(p: ?*anyopaque) callconv(.c) void {
         const self = ctx(p);
-        const w = self.state.win_w;
-        const h = self.state.win_h;
-
-        // Adopt at most one coalesced resize per frame (macos_adapter), so a live drag lays out once per drawn frame instead of per event.
+        // Adopt a coalesced resize FIRST (macos_adapter): the frame must lay out at the size it is about to draw, or the pointer space and the boxes disagree.
         if (adapter.applyPendingResize(&self.state)) {
             onResized(self);
         }
         if (adapter.resolveQuit(&self.state)) return;
+        const w = self.state.win_w;
+        const h = self.state.win_h;
 
         // Render at the display's backing scale, so text is rasterized at device resolution rather than upscaled.
         if (self.handle) |win_handle| soft.setRenderScale(@floatCast(c.glin_cocoa_backing_scale(win_handle)));
 
         const d = self.delegate orelse return;
         d.on_frame(d.ptr, w, h);
+        // Record the space those boxes were laid out in, so a pointer event that arrives before the next frame flips in it.
+        self.layout_w = w;
+        self.layout_h = h;
         self.applyCursor();
         self.presentFrame();
     }
@@ -194,8 +199,10 @@ pub const Window = struct {
     ) callconv(.c) void {
         const self = ctx(p);
         const d = self.delegate orelse return;
-        const w = self.state.win_w;
-        const h = self.state.win_h;
+        // The last layout's size, not the window's: a resize adopted but not yet drawn would shift every hit test.
+        const space = contract.pointerSpace(self.layout_w, self.layout_h, self.state.win_w, self.state.win_h);
+        const w = space.w;
+        const h = space.h;
 
         // Translate to the Delegate's contract: evdev button code on a transition, 0 on motion, and the y axis flipped.
         const t = input_macos.translate(w, h, .{

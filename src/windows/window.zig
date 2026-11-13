@@ -72,6 +72,9 @@ pub const Window = struct {
     handle: ?*c.GlinWinWindow = null,
     /// The upload buffer, allocated on first use and reused every frame.
     blit_buf: []u8 = &.{},
+    /// The size the last completed layout used; the pointer is translated in THIS space, never a pending one.
+    layout_w: u32 = 0,
+    layout_h: u32 = 0,
     /// Is the primary button currently held?
     left_held: bool = false,
     /// Frames composited so far.
@@ -149,17 +152,19 @@ pub const Window = struct {
     /// WM_PAINT.
     fn onFrame(p: ?*anyopaque) callconv(.c) void {
         const self = ctx(p);
-        const w = self.state.win_w;
-        const h = self.state.win_h;
-
-        // Adopt at most one coalesced resize per frame (windows/adapter), so a live drag lays out once per drawn frame instead of per event.
+        // Adopt a coalesced resize FIRST (windows/adapter): the frame must lay out at the size it is about to draw.
         if (adapter.applyPendingResize(&self.state)) {
             onResized(self);
         }
         if (adapter.resolveQuit(&self.state)) return;
+        const w = self.state.win_w;
+        const h = self.state.win_h;
 
         const d = self.delegate orelse return;
         d.on_frame(d.ptr, w, h);
+        // Record the space those boxes were laid out in, so a pointer event that arrives before the next frame translates in it.
+        self.layout_w = w;
+        self.layout_h = h;
         self.presentFrame();
     }
 
@@ -201,8 +206,10 @@ pub const Window = struct {
     ) callconv(.c) void {
         const self = ctx(p);
         const d = self.delegate orelse return;
-        const w = self.state.win_w;
-        const h = self.state.win_h;
+        // The last layout's size, not the window's: a resize adopted but not yet drawn would shift every hit test.
+        const space = contract.pointerSpace(self.layout_w, self.layout_h, self.state.win_w, self.state.win_h);
+        const w = space.w;
+        const h = space.h;
 
         // Translate to the Delegate's contract: evdev button code on a transition, 0 on motion, and NO y flip (Win32's client origin is already top-left).
         const kind_u8: u8 = if (kind >= 0 and kind <= 255) @intCast(kind) else 0;

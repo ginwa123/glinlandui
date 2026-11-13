@@ -82,6 +82,21 @@ pub fn frameStep(frame_done: bool, needs_draw: bool, frame_pending: bool) FrameS
     return .idle;
 }
 
+/// A width/height pair.
+pub const LayoutSize = struct { w: u32, h: u32 };
+
+/// The space a pointer event must be translated in: the size the LAST completed layout used.
+///
+/// A resize is coalesced and adopted inside a frame, so `WindowState.win_w/win_h` can already be the new size while the
+/// boxes on screen came from the old one. Flipping y in the new space is what made a click land a little above the
+/// element it hit -- and the cursor shape, resolved from the same point, went with it.
+pub fn pointerSpace(layout_w: u32, layout_h: u32, win_w: u32, win_h: u32) LayoutSize {
+    return .{
+        .w = if (layout_w != 0) layout_w else win_w,
+        .h = if (layout_h != 0) layout_h else win_h,
+    };
+}
+
 /// Toolkit-style window configuration shared by both backends.
 pub const WindowConfig = struct {
     app_id: [*:0]const u8 = "qs-settings",
@@ -284,6 +299,15 @@ test "eglConfigAttribs requests RGBA8 ES3 window surface terminated by NONE" {
     try std.testing.expectEqual(@as(i32, 8), alpha);
     try std.testing.expect(surface_type & consts.EglConfigValue.window_bit != 0);
     try std.testing.expect(renderable & consts.EglConfigValue.openGL_es3_bit != 0);
+}
+
+test "pointerSpace follows the last layout, not an adopted-but-not-yet-drawn resize" {
+    // Before the first frame there is no layout, so the window's own size is the only thing to go on.
+    try std.testing.expectEqual(LayoutSize{ .w = 800, .h = 600 }, pointerSpace(0, 0, 800, 600));
+    // A resize adopted this frame must NOT move the pointer space until a frame has laid out at it.
+    try std.testing.expectEqual(LayoutSize{ .w = 800, .h = 600 }, pointerSpace(800, 600, 1000, 700));
+    // And once it has, the pointer follows.
+    try std.testing.expectEqual(LayoutSize{ .w = 1000, .h = 700 }, pointerSpace(1000, 700, 1000, 700));
 }
 
 test "parseTestFrames parses N, rejects null/empty/invalid" {
