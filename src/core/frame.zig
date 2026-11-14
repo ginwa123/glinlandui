@@ -158,6 +158,9 @@ fn hashColor(h: u64, c: [4]f32) u64 {
     return x;
 }
 
+// Clay multiplies a wheel delta by 10 internally. The toolkit cancels it, so one point of gesture moves one point of content.
+pub const wheel_factor: f32 = 10.0;
+
 // True when this frame's render commands are identical to the previous frame's: nothing on screen changed, so there is nothing to present.
 var commands_repeated: bool = false;
 // How many commands the frame just drawn produced, so a diagnostic can tell "same drawing" from "more rows" at a glance.
@@ -452,8 +455,8 @@ pub fn clayFrameWithOptions(
     options: *const FrameOptions,
 ) u32 {
     cl.setPointerState(.{ .x = pointer_x, .y = pointer_y }, pointer_down);
-    // Clay's built-in drag stays OFF: it is touch-style (content follows the finger), inverted for a scrollbar slider.
-    cl.updateScrollContainers(false, .{ .x = -scroll_dx, .y = -scroll_dy }, 1.0 / 60.0);
+    // Clay's built-in drag stays OFF (touch-style, inverted for a slider), and its wheel delta is divided by its own 10x factor: 1 point of gesture, 1 point of content.
+    cl.updateScrollContainers(false, .{ .x = -scroll_dx / wheel_factor, .y = -scroll_dy / wheel_factor }, 1.0 / 60.0);
     cl.setLayoutDimensions(.{ .w = @floatFromInt(w), .h = @floatFromInt(h) });
     if (options.measure) |_| {
         cl.setMeasureTextFunction(*const FrameOptions, options, measureWithOptions);

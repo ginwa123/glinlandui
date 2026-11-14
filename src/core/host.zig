@@ -399,8 +399,8 @@ test "host: wheel-down (Wayland positive dy) scrolls content down" {
     h.onScrollEvent(0, 5);
     h.frame(720, 480);
     const y1 = cl.getElementData(cl.getElementId("host-scroll-probe")).bounding_box.y;
-    // +5 Wayland dy negates to Clay -50px: content moves up 50.
-    try std.testing.expectApproxEqAbs(y0 - 50, y1, 0.5);
+    // +5 Wayland dy is 5 px of content: one point of gesture, one point of movement.
+    try std.testing.expectApproxEqAbs(y0 - 5, y1, 0.5);
 }
 
 test "host: press-drag down scrolls down slider-style (no click)" {

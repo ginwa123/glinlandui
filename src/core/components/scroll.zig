@@ -4,6 +4,7 @@ const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
 const box_mod = @import("box.zig");
 const semantics = @import("../semantics.zig");
+const frame_mod = @import("../frame.zig");
 
 /// Scroll axes: vertical (column content, clips top-to-bottom), horizontal (row content, clips left-to-right), or both.
 pub const Direction = enum {
@@ -78,7 +79,8 @@ pub fn thumbOffset(scroll_pos: f32, viewport: f32, content: f32, track_len: f32,
 
 /// Forward a wheel delta to Clay's scroll containers.
 pub fn updateScroll(dx: f32, dy: f32, dt: f32) void {
-    cl.updateScrollContainers(false, .{ .x = dx, .y = dy }, dt);
+    // Clay multiplies a wheel delta by 10 internally, so a trackpad would move the list ten times further than the finger. Divide it out.
+    cl.updateScrollContainers(false, .{ .x = dx / frame_mod.wheel_factor, .y = dy / frame_mod.wheel_factor }, dt);
 }
 
 /// Programmatic scroll: nudge the container's scroll position directly (positive dy scrolls down, matching Wayland axis coords — negated internally for.
@@ -526,17 +528,16 @@ fn layoutScrollFrames(dx: f32, dy: f32) ![2]f32 {
 }
 
 test "wheel delta moves scroll content (not just the thumb)" {
-    // Clay coords: negative dy scrolls down (content moves up).
+    // Clay coords: negative dy scrolls down (content moves up). Five points of gesture move five pixels, not fifty.
     const ys = try layoutScrollFrames(0, -5);
-    // -5 * 10 (Clay wheel factor) = -50px.
-    try std.testing.expectApproxEqAbs(ys[0] - 50, ys[1], 0.5);
+    try std.testing.expectApproxEqAbs(ys[0] - 5, ys[1], 0.5);
 }
 
 test "wheel delta updates scrollPosition consistently with content" {
     _ = try layoutScrollFrames(0, -5);
     const data = cl.getScrollContainerData(cl.getElementId("test-scroll-probe"));
     try std.testing.expect(data.found);
-    try std.testing.expectApproxEqAbs(@as(f32, -50), data.scroll_position.y, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f32, -5), data.scroll_position.y, 0.5);
 }
 
 // ---- Slider-style drag tests: pointer down = scroll down (content up), 1:1 clamped — the scrollbar-slider convention (Clay's built-in drag is.
@@ -585,12 +586,12 @@ test "drag down scrolls down 1:1 (slider-style)" {
 test "drag up scrolls up (slider-style)" {
     var s = dispatch.PtrState{};
     const h = try dragSetup(&s);
-    // Wheel down first (Clay coords: -100), so there is room to drag up.
+    // Wheel down first (60 points of gesture = 60 px), so a 30 px drag up has room.
     cl.setPointerState(.{ .x = h.cx, .y = h.cy }, false);
-    updateScroll(0, -10, 1.0 / 60.0);
+    updateScroll(0, -60, 1.0 / 60.0);
     dragFrame();
     const ym = cl.getElementData(cl.getElementId("scroll-probe")).bounding_box.y;
-    try std.testing.expectApproxEqAbs(h.y0 - 100, ym, 0.5);
+    try std.testing.expectApproxEqAbs(h.y0 - 60, ym, 0.5);
     dispatch.pointerEvent(&s, h.cx, h.cy, true, 272, 720, 480);
     dispatch.pointerEvent(&s, h.cx, h.cy - 30, false, 0, 720, 480);
     try std.testing.expect(s.dragging);
