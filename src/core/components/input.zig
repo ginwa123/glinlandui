@@ -351,6 +351,9 @@ pub const FieldProps = struct {
     sel_fg: Color = Color.rgb(0x7a, 0xb8, 0xff),
     /// The selection's background, used by `liveField`.
     sel_bg: Color = Color.rgb(0x2d, 0x3a, 0x52),
+    /// The caret's colour, or the text colour when null. A caret that matches the text merges with the glyph it
+    /// touches and reads as a broken character, which is why this is a prop.
+    caret_fg: ?Color = null,
     radius: u32 = 4,
     pad_tb: u16 = 8,
     pad_lr: u16 = 12,
@@ -441,7 +444,12 @@ pub fn field(props: FieldProps, query: []const u8) void {
 pub const FieldCtx = struct {
     input: *text_editor.Editor,
     id: []const u8,
+    /// Fallback cell width, used only when `measure` is null.
     char_w: f32,
+    /// Measures a run with the font that draws the field. Supply it: a guessed cell width drifts off the glyphs.
+    measure: ?*const fn ([]const u8, u16) f32 = null,
+    /// Left padding of the field, written by `liveField` each frame so a click and the caret share one origin.
+    pad_lr: f32 = 8,
     /// Called after a click places the caret, so the app can take focus.
     on_focus: ?*const fn (?*anyopaque) void = null,
     focus_ctx: ?*anyopaque = null,
@@ -463,7 +471,7 @@ fn dragSelect(ctx: *FieldCtx, id: []const u8) void {
         frame_mod.ptr_press_y >= bb.y and frame_mod.ptr_press_y <= bb.y + bb.height;
     if (!ctx.dragging and !began_here) return;
     // `extend` is false on the anchoring frame (place the caret) and true after it (grow the selection from that anchor).
-    ctx.input.clickAt(frame_mod.ptr_x - bb.x - 8, ctx.char_w, ctx.dragging);
+    ctx.input.clickAt(frame_mod.ptr_x - bb.x - ctx.pad_lr, ctx.char_w, ctx.dragging);
     if (!ctx.dragging) {
         ctx.dragging = true;
         if (ctx.on_focus) |f| f(ctx.focus_ctx);
@@ -473,6 +481,8 @@ fn dragSelect(ctx: *FieldCtx, id: []const u8) void {
 /// A live text field: selection highlight, a blinking caret, and a click that places the caret.
 pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
     const input = ctx.input;
+    // The click and drag handlers need the same origin the text starts at.
+    ctx.pad_lr = @floatFromInt(props.pad_lr);
     // Drag-select first, so the caret and the selection this frame draws are the ones the pointer just asked for.
     dragSelect(ctx, props.id);
     const text = input.text();
@@ -512,16 +522,10 @@ pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
             });
             if (e < text.len) cl.text(text[e..], .{ .font_size = props.font_size, .color = fg });
         } else {
-            const at = @min(input.caret.offset, text.len);
-            if (at > 0) cl.text(text[0..at], .{ .font_size = props.font_size, .color = fg });
-            if (blink_on) {
-                cl.UI()(.{
-                    .id = .IDI(props.id, 2),
-                    .layout = .{ .sizing = .{ .w = .fixed(1), .h = .grow } },
-                    .background_color = fg,
-                })({});
-            }
-            if (at < text.len) cl.text(text[at..], .{ .font_size = props.font_size, .color = fg });
+            // One run for the whole value, with the caret floated over it. A caret in the flow takes a pixel of the
+            // text, so the tail of the value shifted every time it moved and it sat flush against the next glyph.
+            cl.text(text, .{ .font_size = props.font_size, .color = fg });
+            if (blink_on) caretBar(props, ctx, text);
         }
     });
 
@@ -533,10 +537,29 @@ fn onFieldDoubleClick(ctx: ?*anyopaque) void {
     const c: *FieldCtx = @ptrCast(@alignCast(ctx.?));
     const data = cl.getElementData(cl.getElementId(c.id));
     if (!data.found) return;
-    const x = frame_mod.ptr_x - data.bounding_box.x - 8;
+    const x = frame_mod.ptr_x - data.bounding_box.x - c.pad_lr;
     text_editor.selectWordAt(c.input, c.input.caretAtX(x, c.char_w));
     c.input.idle = 0;
     if (c.on_focus) |f| f(c.focus_ctx);
+}
+
+/// The caret: a 1px bar floated at the measured end of the run before it, so it lands on the glyph boundary.
+fn caretBar(props: FieldProps, ctx: *FieldCtx, text: []const u8) void {
+    const at = @min(ctx.input.caret.offset, text.len);
+    const prefix = if (ctx.measure) |m| m(text[0..at], props.font_size) else @as(f32, @floatFromInt(at)) * ctx.char_w;
+    cl.UI()(.{
+        .id = .IDI(props.id, 2),
+        // One DEVICE pixel wide: at 2x a 1 pt bar is 2 px of ink, which is wider than the gap between two glyphs.
+        .layout = .{ .sizing = .{ .w = .fixed(frame_mod.hairline()), .h = .fixed(@floatFromInt(props.font_size + 4)) } },
+        .floating = .{
+            // The padding is part of the parent box, so the offset starts from the border box, not the text.
+            .offset = .{ .x = frame_mod.snapX(@as(f32, @floatFromInt(props.pad_lr)) + prefix), .y = 0 },
+            .attach_to = .to_parent,
+            .attach_points = .{ .element = .left_center, .parent = .left_center },
+            .z_index = 1,
+        },
+        .background_color = (props.caret_fg orelse Color.rgb(0xd8, 0xd8, 0xdc)).toClay(),
+    })({});
 }
 
 /// Place the caret from a click, using the field's own box and the frame's pointer.
@@ -544,7 +567,7 @@ fn onFieldClick(ctx: ?*anyopaque) void {
     const c: *FieldCtx = @ptrCast(@alignCast(ctx.?));
     const data = cl.getElementData(cl.getElementId(c.id));
     if (!data.found) return;
-    const x = frame_mod.ptr_x - data.bounding_box.x - 8;
+    const x = frame_mod.ptr_x - data.bounding_box.x - c.pad_lr;
     c.input.clickAt(x, c.char_w, false);
     c.input.idle = 0;
     if (c.on_focus) |f| f(c.focus_ctx);

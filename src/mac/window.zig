@@ -155,6 +155,8 @@ pub const Window = struct {
 
         // Render at the display's backing scale, so text is rasterized at device resolution rather than upscaled.
         if (self.handle) |win_handle| soft.setRenderScale(@floatCast(c.glin_cocoa_backing_scale(win_handle)));
+        // The components snap hairlines to this grid, so the caret lands on whole device pixels.
+        frame_mod.setPixelScale(soft.renderScale());
 
         const d = self.delegate orelse return;
         d.on_frame(d.ptr, w, h);

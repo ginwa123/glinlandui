@@ -57,6 +57,28 @@ pub fn setPointer(x: f32, y: f32) void {
     ptr_y = y;
 }
 
+/// Device pixels per logical point, as the window backend set it. 1.0 until a Retina window says otherwise.
+pub var pixel_scale: f32 = 1;
+
+/// Record the window's backing scale, so a hairline can be snapped to real device pixels.
+pub fn setPixelScale(s: f32) void {
+    pixel_scale = if (s > 0) s else 1;
+}
+
+/// Snap a caret's left edge to the device pixel grid.
+///
+/// A 1 pt bar at a fractional x is antialiased across two device pixels, and the half-covered one blends into the
+/// character beside it — which is what makes a caret look like it is drawn on top of a glyph.
+pub fn snapX(x: f32) f32 {
+    const k = pixel_scale;
+    return @round(x * k) / k;
+}
+
+/// One device pixel, in logical points: the width a caret should be so it covers whole pixels and nothing more.
+pub fn hairline() f32 {
+    return 1 / pixel_scale;
+}
+
 /// Record the button state and the press origin for this frame.
 pub fn setPointerButton(down: bool, press_x: f32, press_y: f32) void {
     ptr_down = down;
