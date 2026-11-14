@@ -72,7 +72,7 @@ pub const Window = struct {
     diff_prev: []u8 = &.{},
     diff_prev_w: u32 = 0,
     diff_prev_h: u32 = 0,
-    diff_frames: u32 = 0,
+    diff_prints: u32 = 0,
 
     pub fn init(alloc: std.mem.Allocator, config: WindowConfig) Window {
         // The allocator is accepted for signature parity with the web backend, which genuinely needs it (`wasm_allocator` is the only allocator that grows a.
@@ -191,14 +191,13 @@ pub const Window = struct {
         if (self.handle) |handle| c.glin_cocoa_set_animating(handle, if (on) 1 else 0);
     }
 
-    // GLIN_FRAME_DIFF=1: every tenth frame, print how many pixels differ from the last one and where — the answer to "what is the blink".
+    // GLIN_FRAME_DIFF=1: report the case that matters — commands identical to the previous frame, pixels not. That is a blink the app did not draw.
     fn reportFrameDiff(self: *Window, surface: ?*soft.Surface) void {
         const sf = surface orelse return;
-        // One comparison in ten: the compare is a full-surface pass, and a blink that is visible is visible on every sampled frame.
-        self.diff_frames +%= 1;
-        if (self.diff_frames % 10 != 1) return;
         const n = sf.pixels.len;
-        if (self.diff_prev.len == n and self.diff_prev_w == sf.width and self.diff_prev_h == sf.height) {
+        const comparable = self.diff_prev.len == n and self.diff_prev_w == sf.width and self.diff_prev_h == sf.height;
+        // Consecutive frames only: the previous frame is the one to compare against, not the last one that was printed.
+        if (comparable and frame_mod.commandsRepeated() and self.diff_prints < 50) {
             var count: usize = 0;
             var min_x: usize = sf.width;
             var max_x: usize = 0;
@@ -217,9 +216,12 @@ pub const Window = struct {
                     max_y = @max(max_y, y);
                 }
             }
-            std.log.info("FRAME DIFF {d} px  x {d}..{d}  y {d}..{d}  repeated={}", .{ count, min_x, max_x, min_y, max_y, frame_mod.commandsRepeated() });
+            if (count > 0) {
+                self.diff_prints += 1;
+                std.log.info("FRAME DIFF {d} px  x {d}..{d}  y {d}..{d}  commands identical, pixels not", .{ count, min_x, max_x, min_y, max_y });
+            }
         }
-        if (self.diff_prev.len != n) {
+        if (!comparable) {
             self.diff_prev = std.heap.page_allocator.alloc(u8, n) catch return;
         }
         @memcpy(self.diff_prev[0..n], sf.pixels);
