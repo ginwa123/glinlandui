@@ -1,62 +1,66 @@
-//! Table virtualisation: which rows and columns to draw, given a scroll position.
+// Table virtualisation: which rows and columns to draw, given a scroll position.
 
 const std = @import("std");
 
-/// Height of one row in pixels, including its bottom border.
+// Height of one row in pixels, including its bottom border.
 pub const row_height: u16 = 22;
 
-/// Default width of a column when nothing better is known.
+// Default width of a column when nothing better is known.
 pub const default_column_width: u16 = 120;
 
-/// Widest a column may be, so one long name cannot consume the window.
+// Widest a column may be, so one long name cannot consume the window.
 pub const max_column_width: u16 = 400;
 
-/// Narrowest a column may be, so a one-character header stays clickable.
+// Narrowest a column may be, so a one-character header stays clickable.
 pub const min_column_width: u16 = 40;
 
-/// What is currently on screen.
+// What is currently on screen.
 pub const Viewport = struct {
-    /// Rows in the result set.
+    // Rows in the result set.
     total_rows: usize,
-    /// Columns in the result set.
+    // Columns in the result set.
     total_cols: usize,
-    /// Scroll offset in pixels, measured from the top. Never negative.
+    // Scroll offset in pixels, measured from the top. Never negative.
     scroll_y: f32,
-    /// Visible height in pixels.
+    // Visible height in pixels.
     height: f32,
-    /// Visible width in pixels.
+    // Visible width in pixels.
     width: f32,
-    /// How many extra rows to draw above and below, to cover partial rows and fast scrolling.
+    // How many extra rows to draw above and below, to cover partial rows and fast scrolling.
     overscan: usize = 2,
+    // Height of one row in this list. Defaults to the module constant, but a caller that draws taller rows MUST pass its own: with 10,000 rows a 2 px
+
+    // disagreement puts the declared rows 20,000 px away from the viewport.
+    row_height: u16 = row_height,
 };
 
-/// The slice of the result set that is visible.
+// The slice of the result set that is visible.
 pub const Visible = struct {
-    /// Index of the first row to declare.
+    // Index of the first row to declare.
     first_row: usize,
-    /// Number of rows to declare.
+    // Number of rows to declare.
     row_count: usize,
-    /// Index of the first column to declare.
+    // Index of the first column to declare.
     first_col: usize,
-    /// Number of columns to declare.
+    // Number of columns to declare.
     col_count: usize,
-    /// True when there are rows below the viewport.
+    // True when there are rows below the viewport.
     has_more_below: bool,
-    /// True when there are rows above the viewport.
+    // True when there are rows above the viewport.
     has_more_above: bool,
-    /// Total height of all rows, for the scrollbar's content size.
+    // Total height of all rows, for the scrollbar's content size.
     content_height: f32,
 
-    /// Rows that would be declared even before overscan.
+    // Rows that would be declared even before overscan.
     pub fn declaredRows(self: Visible) usize {
         return self.row_count;
     }
 };
 
-/// Work out which rows and columns intersect the viewport.
+// Work out which rows and columns intersect the viewport.
 pub fn visible(view: Viewport) Visible {
-    const content_height = @as(f32, @floatFromInt(view.total_rows)) *
-        @as(f32, @floatFromInt(row_height));
+    const row_h: f32 = @floatFromInt(@max(view.row_height, 1));
+    const content_height = @as(f32, @floatFromInt(view.total_rows)) * row_h;
 
     // A negative or NaN scroll (Clay can hand one back before the first layout settles) must not produce a nonsense first_row.
     const scroll_y = if (std.math.isNan(view.scroll_y) or view.scroll_y < 0) 0 else view.scroll_y;
@@ -65,13 +69,11 @@ pub fn visible(view: Viewport) Visible {
     const max_scroll = @max(content_height - @max(view.height, 0), 0);
     const effective_scroll = @min(scroll_y, max_scroll);
 
-    const first_visible = @as(usize, @intFromFloat(effective_scroll / @as(f32, @floatFromInt(row_height))));
+    const first_visible = @as(usize, @intFromFloat(effective_scroll / row_h));
     const first_row = first_visible -| view.overscan;
 
     // How many rows fit, plus one for a row that is only partly visible.
-    const visible_rows: usize = @intFromFloat(
-        @ceil(view.height / @as(f32, @floatFromInt(row_height))) + 1,
-    );
+    const visible_rows: usize = @intFromFloat(@ceil(view.height / row_h) + 1);
     const row_count = @min(
         view.total_rows -| first_row,
         visible_rows + view.overscan * 2,
@@ -88,7 +90,7 @@ pub fn visible(view: Viewport) Visible {
     };
 }
 
-/// How many columns fit across `width` given their pixel widths.
+// How many columns fit across `width` given their pixel widths.
 pub fn visibleColumns(widths: []const u16, width: f32, scroll_x: f32) struct { first: usize, count: usize } {
     if (widths.len == 0) return .{ .first = 0, .count = 0 };
 
@@ -122,14 +124,14 @@ pub fn visibleColumns(widths: []const u16, width: f32, scroll_x: f32) struct { f
     return .{ .first = first, .count = @min(count, widths.len - first) };
 }
 
-/// Clamp a column's width into the allowed range, and never below 1 so the layout arithmetic cannot divide by zero.
+// Clamp a column's width into the allowed range, and never below 1 so the layout arithmetic cannot divide by zero.
 pub fn clampColumnWidth(w: u16) u16 {
     if (w < min_column_width) return min_column_width;
     if (w > max_column_width) return max_column_width;
     return w;
 }
 
-/// The pixel width a cell should be drawn at, given the widest value it contains.
+// The pixel width a cell should be drawn at, given the widest value it contains.
 pub fn widthForChars(widest_chars: usize, font_size: u16, cell_padding: u16) u16 {
     const char_px = @as(usize, font_size) * 3 / 5;
     const text_px = widest_chars * @max(char_px, 1);
@@ -138,7 +140,7 @@ pub fn widthForChars(widest_chars: usize, font_size: u16, cell_padding: u16) u16
     return @intCast(@max(capped, min_column_width));
 }
 
-/// Size a column to fit its header and its values.
+// Size a column to fit its header and its values.
 pub fn columnWidth(
     values: []const []const u8,
     header: []const u8,
@@ -152,10 +154,10 @@ pub fn columnWidth(
     return widthForChars(widest, font_size, cell_padding);
 }
 
-/// Rows rendered per frame must stay under the click-registry cap, or per-row click targets are silently dropped past the limit.
+// Rows rendered per frame must stay under the click-registry cap, or per-row click targets are silently dropped past the limit.
 pub const max_clickable_rows = 200;
 
-/// True when a row count is safe to give per-row click targets.
+// True when a row count is safe to give per-row click targets.
 pub fn withinClickBudget(row_count: usize) bool {
     return row_count <= max_clickable_rows;
 }

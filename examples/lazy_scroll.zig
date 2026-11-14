@@ -1,15 +1,14 @@
-//! glinlandui example: 10,000 rows, virtualised, with a live frame-rate meter.
-//!
-//! What it is for: a scroll that does not care how much data there is. Only the rows that intersect the viewport are
-//! declared, with one spacer above and one below so the scrollbar still reports the real content height — so the cost
-//! of a frame depends on the WINDOW, not on the 10,000 rows behind it.
-//!
-//! It also measures itself. Every frame records how long the previous one took, and the header shows the current rate,
-//! the average and the worst over the last two seconds. On a 144 Hz display the budget is 6.9 ms; the meter turns red
-//! when a frame exceeds it, so a regression is visible rather than felt.
-//!
-//! Run it:     `zig build run-lazy-scroll`     (window; Space starts the auto-scroll, End jumps to the bottom)
-//! Measure it: `zig build bench-lazy-scroll`   (headless: scrolls to the bottom and prints the frame times)
+// glinlandui example: 10,000 rows, virtualised, with a live frame-rate meter. What it is for: a scroll that does not care how much data there is. Only
+
+// the rows that intersect the viewport are declared, with one spacer above and one below so the scrollbar still reports the real content height — so the
+
+// cost of a frame depends on the WINDOW, not on the 10,000 rows behind it. It also measures itself. Every frame records how long the previous one took,
+
+// and the header shows the current rate, the average and the worst over the last two seconds. On a 144 Hz display the budget is 6.9 ms; the meter turns
+
+// red when a frame exceeds it, so a regression is visible rather than felt. Run it:     `zig build run-lazy-scroll`     (window; Space starts the
+
+// auto-scroll, End jumps to the bottom) Measure it: `zig build bench-lazy-scroll`   (headless: scrolls to the bottom and prints the frame times)
 const std = @import("std");
 const glinlandui = @import("glinlandui");
 const Color = glinlandui.Color;
@@ -24,10 +23,10 @@ const table = glinlandui.table;
 
 // ---- the data ------------------------------------------------------------------------------------------------
 
-/// Ten thousand rows, and none of them is stored: a row is a function of its index. That is the point — the list is
-/// free, and the drawing is what costs.
+// Ten thousand rows, and none of them is stored: a row is a function of its index. That is the point — the list is free, and the drawing is what costs.
 const row_count: usize = 10_000;
-const row_h: f32 = 24;
+// One row's height, taken from the virtualisation helper's own constant so the two cannot disagree.
+const row_h: f32 = @floatFromInt(table.row_height);
 
 // ---- palette (app-local; components stay theme-neutral) -------------------------------------------------------
 
@@ -43,13 +42,14 @@ const accent = Color.hexC("#7aa2c4");
 const bg_button = Color.hexC("#2b2d36");
 const bg_button_hover = Color.hexC("#33363f");
 
-/// The frame budget of a 144 Hz display, in milliseconds.
+// The frame budget of a 144 Hz display, in milliseconds.
 const budget_144_ms: f32 = 1000.0 / 144.0;
 
 // ---- the meter -----------------------------------------------------------------------------------------------
 
-/// The last N frame durations, in nanoseconds. `tick` is called at the top of every frame with the clock, so the meter
-/// measures what the screen actually got, not what the toolkit hoped for.
+// The last N frame durations, in nanoseconds. `tick` is called at the top of every frame with the clock, so the meter measures what the screen actually
+
+// got, not what the toolkit hoped for.
 const Meter = struct {
     const cap = 120;
 
@@ -93,20 +93,20 @@ const Meter = struct {
 const App = struct {
     io: std.Io,
     meter: Meter = .{},
-    /// Auto-scroll: points per frame to move the list.
+    // Auto-scroll: points per frame to move the list.
     auto: bool = false,
     speed: f32 = 400,
-    /// Rows declared in the last frame, so the header can show the virtualisation working.
+    // Rows declared in the last frame, so the header can show the virtualisation working.
     declared: usize = 0,
-    /// Print the meter once a second, for a run you cannot watch (a benchmark on a build machine).
+    // Print the meter once a second, for a run you cannot watch (a benchmark on a build machine).
     log: bool = false,
     log_next_ns: i64 = 0,
-    /// Asks the window for another frame. Null in the headless bench, where the driver drives them.
+    // Asks the window for another frame. Null in the headless bench, where the driver drives them.
     pump: ?*const fn (?*anyopaque) void = null,
     pump_ctx: ?*anyopaque = null,
-    /// Turns the pump off when the animation stops, so an idle window does not redraw forever.
+    // Turns the pump off when the animation stops, so an idle window does not redraw forever.
     idle: ?*const fn (?*anyopaque) void = null,
-    /// Frame-scoped text, the way every immediate-mode app needs one for its labels.
+    // Frame-scoped text, the way every immediate-mode app needs one for its labels.
     text: [1024 * 1024]u8 = undefined,
     text_used: usize = 0,
 
@@ -131,7 +131,7 @@ const App = struct {
         if (self.idle) |p| p(self.pump_ctx);
     }
 
-    /// Auto-scroll on or off, including the frame pump that keeps it moving.
+    // Auto-scroll on or off, including the frame pump that keeps it moving.
     fn setAuto(self: *App, on: bool) void {
         self.auto = on;
         if (on) self.requestFrame() else self.stopFrames();
@@ -271,11 +271,13 @@ fn listChildren(self: *App) void {
         .height = view_h,
         .width = 0,
         .overscan = 2,
+        .row_height = table.row_height,
     });
     self.declared = vis.row_count;
 
-    // Everything above the viewport is ONE empty rectangle of its exact height: scrolling past ten thousand rows costs
-    // a single draw command, and the scrollbar still knows how long the list is.
+    // Everything above the viewport is ONE empty rectangle of its exact height: scrolling past ten thousand rows costs a single draw command, and the
+
+    // scrollbar still knows how long the list is.
     if (vis.first_row > 0) {
         box_mod.box(.{
             .id = "lazy.pad.top",
@@ -300,8 +302,9 @@ fn listChildren(self: *App) void {
     }
 }
 
-/// One row, declared with raw Clay so its id can be `IDI` (numeric) and its two labels sit inside the same element:
-/// ten thousand rows would be ten thousand formatted id strings otherwise.
+// One row, declared with raw Clay so its id can be `IDI` (numeric) and its two labels sit inside the same element: ten thousand rows would be ten
+
+// thousand formatted id strings otherwise.
 fn row(self: *App, index: usize) void {
     const name = self.label("row {d: >5}", .{index});
     const meta = self.label("user{d}@example.com   {d}.{d:0>2}", .{ index, index % 977, index % 100 });
@@ -348,7 +351,7 @@ fn footerChildren(self: *App) void {
 
 // ---- keys ----------------------------------------------------------------------------------------------------
 
-/// evdev codes, so the handler is the same on every host.
+// evdev codes, so the handler is the same on every host.
 const key_space: u32 = 57;
 const key_home: u32 = 102;
 const key_end: u32 = 107;
@@ -376,13 +379,13 @@ fn onKey(ctx: ?*anyopaque, mods: components.input.Mods, keycode: u32) bool {
 
 // ---- the window ----------------------------------------------------------------------------------------------
 
-/// The pump: ask the window for another frame while an animation is running.
+// The pump: ask the window for another frame while an animation is running.
 fn pumpThroughWindow(ctx: ?*anyopaque) void {
     const window: *glinlandui.Window = @ptrCast(@alignCast(ctx.?));
     if (@hasDecl(glinlandui.Window, "setAnimating")) window.setAnimating(true);
 }
 
-/// Stop asking for frames, so an idle window goes quiet again.
+// Stop asking for frames, so an idle window goes quiet again.
 fn idleThroughWindow(ctx: ?*anyopaque) void {
     const window: *glinlandui.Window = @ptrCast(@alignCast(ctx.?));
     if (@hasDecl(glinlandui.Window, "setAnimating")) window.setAnimating(false);
@@ -397,11 +400,27 @@ pub fn main(init: std.process.Init) !void {
 
     var app = App{ .io = threaded.io() };
 
-    // `--bench [frames]`: no window, no vsync, just the frame the toolkit produces. This is the number that has to fit
-    // in 6.9 ms for a 144 Hz display, and it is the one to watch when the renderer changes.
+    // `--bench [frames]`: no window, no vsync, just the frame the toolkit produces. This is the number that has to fit in 6.9 ms for a 144 Hz display, and
+
+    // it is the one to watch when the renderer changes.
     if (args.len > 1 and std.mem.eql(u8, args[1], "--bench")) {
         const frames: usize = if (args.len > 2) std.fmt.parseInt(usize, args[2], 10) catch 600 else 600;
-        return bench(gpa, &app, frames);
+        var width: u32 = 900;
+        var height: u32 = 640;
+        var scale: f32 = 1;
+        for (args[2..]) |a| {
+            if (std.mem.startsWith(u8, a, "--size=")) {
+                const v = a["--size=".len..];
+                if (std.mem.indexOfScalar(u8, v, 'x')) |x| {
+                    width = std.fmt.parseInt(u32, v[0..x], 10) catch width;
+                    height = std.fmt.parseInt(u32, v[x + 1 ..], 10) catch height;
+                }
+            }
+            if (std.mem.startsWith(u8, a, "--scale=")) {
+                scale = std.fmt.parseFloat(f32, a["--scale=".len..]) catch scale;
+            }
+        }
+        return bench(gpa, &app, frames, width, height, scale);
     }
 
     for (args[1..]) |a| {
@@ -409,11 +428,23 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, a, "--log")) app.log = true;
     }
 
+    var win_w: u32 = 900;
+    var win_h: u32 = 640;
+    for (args[1..]) |a| {
+        if (std.mem.startsWith(u8, a, "--size=")) {
+            const v = a["--size=".len..];
+            if (std.mem.indexOfScalar(u8, v, 'x')) |x| {
+                win_w = std.fmt.parseInt(u32, v[0..x], 10) catch win_w;
+                win_h = std.fmt.parseInt(u32, v[x + 1 ..], 10) catch win_h;
+            }
+        }
+    }
+
     var window = glinlandui.Window.init(gpa, .{
         .app_id = "glinlandui-lazy-scroll",
         .title = "glinlandui · 10,000 rows",
-        .width = 900,
-        .height = 640,
+        .width = win_w,
+        .height = win_h,
         .min_width = 480,
         .min_height = 320,
     });
@@ -430,12 +461,15 @@ pub fn main(init: std.process.Init) !void {
     try window.run();
 }
 
-/// Render `frames` frames while scrolling, and report the frame times.
-fn bench(gpa: std.mem.Allocator, app: *App, frames: usize) !void {
+// Render `frames` frames while scrolling, and report the frame times.
+fn bench(gpa: std.mem.Allocator, app: *App, frames: usize, width: u32, height: u32, scale: f32) !void {
     const Driver = glinlandui.testing.Driver;
     var driver = try Driver.initOwned(gpa, app, App.root);
     defer driver.deinit();
-    try driver.start(.{ .width = 900, .height = 640 });
+    try driver.start(.{ .width = width, .height = height });
+    // A real window renders at the display's backing scale; 1x hides half the work the screen actually does.
+    glinlandui.software_render.setRenderScale(scale);
+    glinlandui.frame.setPixelScale(scale);
 
     app.auto = true;
     app.speed = 600;
@@ -453,8 +487,9 @@ fn bench(gpa: std.mem.Allocator, app: *App, frames: usize) !void {
         if (i == 0) cold_ns = durations[0];
     }
 
-    // The first frames pay for the font load and the glyph cache. Reporting them as steady state would understate the
-    // frame rate by an order of magnitude, and hiding them would overstate it — so they are reported separately.
+    // The first frames pay for the font load and the glyph cache. Reporting them as steady state would understate the frame rate by an order of magnitude,
+
+    // and hiding them would overstate it — so they are reported separately.
     const warmup = @min(frames, 20);
     const steady = durations[warmup..];
     std.mem.sort(i64, steady, {}, std.sort.asc(i64));
@@ -462,8 +497,24 @@ fn bench(gpa: std.mem.Allocator, app: *App, frames: usize) !void {
     for (steady) |d| total += d;
     const avg_ms = @as(f32, @floatFromInt(@divTrunc(total, @as(i64, @intCast(steady.len))))) / 1_000_000.0;
 
+    const data = cl.getScrollContainerData(cl.getElementId("lazy.scroll"));
+    if (data.found) {
+        std.debug.print("  viewport {d:.0} x {d:.0}   content {d:.0}   scroll {d:.0},{d:.0}\n", .{
+            data.scroll_container_dimensions.w,
+            data.scroll_container_dimensions.h,
+            data.content_dimensions.h,
+            data.scroll_position.x,
+            data.scroll_position.y,
+        });
+    }
+    if (ui_row_box(0)) |b| {
+        std.debug.print("  row 0 box {d:.0},{d:.0} {d:.0}x{d:.0}\n", .{ b.x, b.y, b.width, b.height });
+    } else {
+        std.debug.print("  row 0 is NOT in the element tree\n", .{});
+    }
+
     std.debug.print(
-        \\LAZY SCROLL BENCH  {d} rows, {d} frames, 900x640
+        \\LAZY SCROLL BENCH  {d} rows, {d} frames, {d}x{d} at {d}x scale
         \\  steady   avg {d: >6.2} ms   p50 {d: >6.2}   p95 {d: >6.2}   p99 {d: >6.2}   max {d: >6.2}   ({d} frames after warm-up)
         \\  cold     first frame {d: >6.2} ms   (font load + glyph cache)
         \\  budget   144 Hz {d: >5.2} ms   60 Hz {d: >5.2} ms
@@ -472,6 +523,9 @@ fn bench(gpa: std.mem.Allocator, app: *App, frames: usize) !void {
     , .{
         row_count,
         frames,
+        width,
+        height,
+        scale,
         avg_ms,
         percentile(steady, 0.50),
         percentile(steady, 0.95),
@@ -483,6 +537,13 @@ fn bench(gpa: std.mem.Allocator, app: *App, frames: usize) !void {
         1000.0 / 60.0,
         app.declared,
     });
+}
+
+// The box of the first declared row, so a bench can prove the rows are on screen and not only declared.
+fn ui_row_box(index: usize) ?glinlandui.zclay.BoundingBox {
+    const d = glinlandui.zclay.getElementData(glinlandui.zclay.ElementId.IDI("lazy.row", @intCast(index)));
+    if (!d.found) return null;
+    return d.bounding_box;
 }
 
 fn percentile(sorted: []const i64, p: f64) f32 {

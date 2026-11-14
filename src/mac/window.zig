@@ -190,17 +190,15 @@ pub const Window = struct {
         const surface = soft.currentSurface() orelse return;
         if (!present.blitSizeValid(surface.width, surface.height)) return;
 
-        const need = present.blitBufLen(surface.width, surface.height);
-        if (self.blit_buf.len < need) {
-            self.blit_buf = std.heap.c_allocator.alloc(u8, need) catch return;
-        }
-        // The hand-off contract (NO channel swap, NO vertical flip) lives in the tested helper; see mac/present.zig for how that was measured.
-        present.identityRgba8(surface.pixels, self.blit_buf, surface.width, surface.height);
+        // No intermediate buffer: the hand-off is byte-identical (NO channel swap, NO vertical flip — see mac/present.zig for how that was measured), and the
+
+        // shim copies into its bitmap anyway. Copying here as well cost a second full-surface memcpy per frame: 27 MB at 2x on a large window, ~10 ms of the
+
+        // budget for nothing.
         self.diag_frames += 1;
-        if (self.diag_frames == 1) reportFirstFrame(self.blit_buf, surface);
+        if (self.diag_frames == 1) reportFirstFrame(surface.pixels, surface);
         if (std.c.getenv("GLIN_DUMP_SURFACE")) |p| dumpRaw(p, surface.pixels);
-        if (std.c.getenv("GLIN_DUMP_BGRA")) |p| dumpRaw(p, self.blit_buf);
-        c.glin_cocoa_present(handle, self.blit_buf.ptr, @intCast(surface.width), @intCast(surface.height));
+        c.glin_cocoa_present(handle, surface.pixels.ptr, @intCast(surface.width), @intCast(surface.height));
     }
 
     // Apply a coalesced resize.
