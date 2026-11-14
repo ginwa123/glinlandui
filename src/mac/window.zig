@@ -10,6 +10,7 @@ const input_macos = @import("input.zig");
 const present = @import("present.zig");
 const soft = @import("../core/render_software.zig");
 const frame_mod = @import("../core/frame.zig");
+const text_editor = @import("../core/text_editor.zig");
 
 // The shim header is plain C by design (see mac/shim.h), so @cImport never has to survive Objective-C macros or CoreGraphics typedefs.
 const c = @cImport({
@@ -184,6 +185,10 @@ pub const Window = struct {
         if (std.c.getenv("GLIN_FRAME_DIFF") != null) self.reportFrameDiff(surface);
         const same_size = if (surface) |sf| sf.width == self.presented_w and sf.height == self.presented_h else false;
         if (!frame_mod.commandsRepeated() or !same_size) self.presentFrame();
+        // A blinking caret needs one repaint per toggle, not a pump: schedule the next toggle and let the run loop sleep in between.
+        if (text_editor.blinkPendingMs()) |ms| {
+            if (self.handle) |handle| c.glin_cocoa_invalidate_after(handle, @intCast(ms));
+        }
     }
 
     // Start or stop the frame pump. An app with its own animation calls this with `true` while it is running and `false` when it stops; the pump redraws at

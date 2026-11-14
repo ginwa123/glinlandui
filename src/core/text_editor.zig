@@ -94,6 +94,10 @@ pub const Editor = struct {
             return;
         }
         self.idle += dt;
+        // The blink toggles every half second of idle, so this is how long the window may sleep before drawing again.
+        const phase_ms: u32 = @intFromFloat(@mod(self.idle * 1000.0, 500.0));
+        const wait: u32 = 500 - @min(phase_ms, 499);
+        next_toggle_ms = if (next_toggle_ms) |w| @min(w, wait) else wait;
     }
 
     // Replace the whole contents.
@@ -508,6 +512,19 @@ pub fn offsetAtX(text: []const u8, x: f32, font_size: u16, measure: *const fn ([
     return lo;
 }
 
+// Milliseconds until the next caret toggle, or null when no focused field is blinking. A window uses it to wake once per toggle.
+var next_toggle_ms: ?u32 = null;
+
+// Forget the last frame's blink schedule; every focused field that ticks this frame sets it again.
+pub fn beginBlinkFrame() void {
+    next_toggle_ms = null;
+}
+
+// Milliseconds until the next caret toggle, or null when nothing needs a repaint for a caret.
+pub fn blinkPendingMs() ?u32 {
+    return next_toggle_ms;
+}
+
 // True when the caret should be drawn: only in the focused field, solid for half a second after it moved, then a 1 Hz blink.
 pub fn caretVisible(editor: *const Editor) bool {
     if (!editor.focused) return false;
@@ -901,6 +918,25 @@ test "the caret is solid right after an edit and blinks after half a second" {
     // 1.1 s is the bright half again.
     e.idle = 1.1;
     try testing.expect(caretVisible(&e));
+}
+
+test "the blink schedule says when the next caret toggle is due" {
+    var buf: [8]u8 = undefined;
+    var e = Editor.init(&buf);
+    beginBlinkFrame();
+    try testing.expect(blinkPendingMs() == null);
+    // 0.1 s of idle: the caret is still in its solid half, and the next toggle is 0.4 s away.
+    e.tickBlink(0.1);
+    try testing.expectEqual(@as(?u32, 400), blinkPendingMs());
+    // A fresh frame starts a fresh schedule; 0.5 s lands exactly on a toggle.
+    beginBlinkFrame();
+    e.tickBlink(0.4);
+    try testing.expectEqual(@as(?u32, 500), blinkPendingMs());
+    // An unfocused field schedules nothing, so a window with no focused caret never wakes for one.
+    beginBlinkFrame();
+    e.focused = false;
+    e.tickBlink(0.2);
+    try testing.expect(blinkPendingMs() == null);
 }
 
 test "an unfocused editor draws no caret and holds its blink clock at zero" {

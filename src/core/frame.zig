@@ -8,6 +8,7 @@ const render = @import("render.zig");
 const text = @import("text_backend.zig");
 const click_registry = @import("components/click_registry.zig");
 const semantics = @import("semantics.zig");
+const text_editor = @import("text_editor.zig");
 
 // ---- Wayland cursor-shape (wp_cursor_shape_manager_v1) ---- Contract (registry crew owns components/click_registry.zig).
 pub const Cursor = enum { default, pointer, text, ew_resize };
@@ -464,8 +465,9 @@ pub fn clayFrameWithOptions(
         cl.setMeasureTextFunction(void, {}, clayMeasure);
     }
     cl.beginLayout();
-    // The frame's scratch strings are released here, so an app never has to remember to reset them.
+    // The frame's scratch strings and the caret-blink schedule are released here, so an app never has to remember either.
     text_used = 0;
+    text_editor.beginBlinkFrame();
     declare(ctx, w, h);
     const commands = cl.endLayout();
     // A frame that draws exactly what the last one did does not need presenting: the window already shows those pixels.

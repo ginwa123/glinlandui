@@ -53,6 +53,9 @@ typedef void (*GlinCocoaOnPointer)(void *user, int kind, int button_number,
 /// looks completely inert.
 void glin_cocoa_invalidate(GlinCocoaWindow *win);
 
+/// Mark the view dirty ONCE, after `ms` milliseconds. A blinking caret needs one repaint per toggle, not a 60 fps pump.
+void glin_cocoa_invalidate_after(GlinCocoaWindow *win, int ms);
+
 /// Raw scroll deltas in AppKit's sign convention (positive dy = content moving
 /// up). The host clamps and negates them.
 typedef void (*GlinCocoaOnScroll)(void *user, double dx, double dy);

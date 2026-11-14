@@ -28,6 +28,8 @@ pub const Host = struct {
     clock_ctx: ?*anyopaque = null,
     /// A monotonic frame clock in seconds. The host advances it; a component only reads it.
     clock_s: f32 = 0,
+    /// The wall clock reading of the last frame, in milliseconds, so `delta_s` is real time rather than one frame's worth.
+    last_clock_ms: i64 = 0,
     /// Pending wheel scroll delta (px, accumulated by onScrollEvent, consumed once per frame by frame() into Clay's scroll containers).
     scroll_dx: f32 = 0,
     scroll_dy: f32 = 0,
@@ -82,8 +84,15 @@ pub const Host = struct {
         frame_mod.setPointer(self.ptr.x, self.ptr.y);
         // The press origin too, so a field can refuse a drag that began outside it.
         frame_mod.setPointerButton(self.ptr.down, self.ptr.down_x, self.ptr.down_y);
-        self.clock_s += 0.016;
-        frame_mod.setTime(self.clock_s, 0.016);
+        // Real elapsed time when the host has a clock (a caret must blink once a second at 60 fps and at 144 fps); a fixed step otherwise, so tests stay deterministic.
+        const now_ms: i64 = if (self.clock) |f| f(self.clock_ctx) else 0;
+        const delta: f32 = if (self.clock != null and self.last_clock_ms != 0 and now_ms > self.last_clock_ms)
+            @min(@as(f32, @floatFromInt(now_ms - self.last_clock_ms)) / 1000.0, 0.25)
+        else
+            0.016;
+        self.last_clock_ms = now_ms;
+        self.clock_s += delta;
+        frame_mod.setTime(self.clock_s, delta);
         // Consume the wheel delta once per frame, in WHOLE pixels with the remainder carried: a sub-pixel offset re-rasterises every glyph.
         const dx = @trunc(self.scroll_dx);
         const dy = @trunc(self.scroll_dy);
