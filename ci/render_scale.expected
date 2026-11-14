@@ -5,6 +5,4 @@
 # the gate fails while a line is here but the backend is wired.
 #
 # mac is deliberately absent: it renders at `backing_scale` (2x on Retina).
-windows
 linux
-web

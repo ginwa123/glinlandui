@@ -132,6 +132,9 @@ void glin_win_quit(GlinWinWindow *win);
 /// The window's current client size in pixels (0 if the window is gone).
 void glin_win_content_size(GlinWinWindow *win, int *out_w, int *out_h);
 
+/// The window's DPI scale (96 dpi = 1.0). The toolkit renders at this density so a 150% display is sharp, not upscaled.
+double glin_win_scale(GlinWinWindow *win);
+
 /// 1 when a D3D11 device and swap chain are live, 0 when the window fell back
 /// to a clear-only back buffer.
 int glin_win_d3d11_active(GlinWinWindow *win);

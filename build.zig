@@ -648,6 +648,8 @@ fn makeFontModule(b: *std.Build, path: ?[]const u8) *std.Build.Module {
 // The first font in a short per-host list that exists, or null.
 fn detectFont() ?[]const u8 {
     const candidates = [_][]const u8{
+        // The bundled face first, so the webapp and the desktop use the same typeface.
+        "src/assets/IBMPlexMono-Regular.ttf",
         // Linux.
         "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",

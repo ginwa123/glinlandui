@@ -121,6 +121,9 @@ pub const Window = struct {
         c.glin_win_content_size(handle, &cw, &ch);
         if (cw > 0 and ch > 0) _ = adapter.noteResize(&self.state, @intCast(cw), @intCast(ch));
 
+        // The display's density, so the surface is rendered at device resolution instead of being upscaled by the compositor.
+        soft.setRenderScale(@floatCast(c.glin_win_scale(handle)));
+
         c.glin_win_window_set_callbacks(
             handle,
             onFrame,

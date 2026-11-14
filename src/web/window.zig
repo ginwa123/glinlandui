@@ -8,6 +8,7 @@ const adapter = @import("adapter.zig");
 const input_web = @import("input.zig");
 const present = @import("present.zig");
 const soft = @import("../core/render_software.zig");
+const scale_mod = @import("../core/scale.zig");
 const glyphs = @import("../core/glyphs.zig");
 
 // NOTE: no render/text/frame re-exports here.
@@ -58,6 +59,10 @@ pub const Window = struct {
 
     /// The device pixel ratio the page last reported.
     device_scale: f32 = 1.0,
+
+    /// The canvas's backing-store size, as the page reported it.
+    backing_w: u32 = 0,
+    backing_h: u32 = 0,
 
     /// Is the primary button currently held?
     left_held: bool = false,
@@ -225,15 +230,29 @@ pub const Window = struct {
     }
 
     /// A proposed canvas size, in BACKING-STORE pixels (the page multiplies the CSS size by the device ratio before calling).
-    pub fn resize(self: *Window, w: u32, h: u32) void {
+    pub fn resize(self: *Window, backing_w: u32, backing_h: u32) void {
         if (!self.live) return;
-        _ = adapter.noteResize(&self.state, w, h);
+        self.backing_w = backing_w;
+        self.backing_h = backing_h;
+        self.applySize();
     }
 
     /// The page's `devicePixelRatio` changed (the window moved to a display with a different density, or the user zoomed).
     pub fn setScale(self: *Window, scale: f32) void {
         if (scale > 0 and scale <= present.max_device_scale) self.device_scale = scale;
+        // The renderer must know the density too, or it draws a 1x image the page upscales into a blur.
+        soft.setRenderScale(self.device_scale);
+        self.applySize();
         self.state.needs_draw = true;
+    }
+
+    // Layout happens in CSS units; the surface is the canvas's backing store, which `render_software` sizes from the scale.
+    fn applySize(self: *Window) void {
+        if (self.backing_w == 0 or self.backing_h == 0) return;
+        const s = scale_mod.clampScale(self.device_scale);
+        const css_w: u32 = @max(@as(u32, @intFromFloat(@round(@as(f32, @floatFromInt(self.backing_w)) / s))), 1);
+        const css_h: u32 = @max(@as(u32, @intFromFloat(@round(@as(f32, @floatFromInt(self.backing_h)) / s))), 1);
+        _ = adapter.noteResize(&self.state, css_w, css_h);
     }
 
     /// Focus was lost.

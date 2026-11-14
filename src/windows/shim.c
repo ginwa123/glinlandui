@@ -658,6 +658,9 @@ static int buttonFor(UINT msg, WPARAM wp) {
     return GLIN_BTN_LEFT;
 }
 
+// Declared here because WM_SIZE (below) reports logical units and the definition lives with the DPI code.
+static int glin_win_logical(GlinWinWindow *win, int device_pixels);
+
 static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     GlinWinWindow *w = (GlinWinWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
     if (w == NULL) {
@@ -674,7 +677,8 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             // A minimised window reports 0x0. The host ignores that, and so
             // must the swap chain, or ResizeBuffers below gets a degenerate
             // size and every later Present fails.
-            w->on_resize(w->user, width, height);
+            // The swap chain below stays in device pixels; the toolkit lays out in logical units.
+            w->on_resize(w->user, glin_win_logical(w, width), glin_win_logical(w, height));
         }
         if (w->back_rtv != NULL) {
             ID3D11DeviceContext_OMSetRenderTargets(w->context, 0, NULL, NULL);
@@ -1090,11 +1094,46 @@ void glin_win_content_size(GlinWinWindow *win, int *out_w, int *out_h) {
         return;
     }
     if (out_w != NULL) {
-        *out_w = (int)(rc.right - rc.left);
+        *out_w = glin_win_logical(win, (int)(rc.right - rc.left));
     }
     if (out_h != NULL) {
-        *out_h = (int)(rc.bottom - rc.top);
+        *out_h = glin_win_logical(win, (int)(rc.bottom - rc.top));
     }
+}
+
+double glin_win_scale(GlinWinWindow *win) {
+    if (win == NULL || win->hwnd == NULL) {
+        return 1.0;
+    }
+    // GetDpiForWindow is Windows 10 1607+; resolving it dynamically keeps the
+    // build free of an SDK-version import while still using the per-window value.
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (user32 != NULL) {
+        typedef UINT(WINAPI * GlinGetDpiForWindow)(HWND);
+        GlinGetDpiForWindow fn = (GlinGetDpiForWindow)(void *)GetProcAddress(user32, "GetDpiForWindow");
+        if (fn != NULL) {
+            UINT dpi = fn(win->hwnd);
+            if (dpi > 0) {
+                return (double)dpi / 96.0;
+            }
+        }
+    }
+    HDC dc = GetDC(win->hwnd);
+    if (dc == NULL) {
+        return 1.0;
+    }
+    int dpi = GetDeviceCaps(dc, LOGPIXELSX);
+    ReleaseDC(win->hwnd, dc);
+    return (dpi > 0) ? (double)dpi / 96.0 : 1.0;
+}
+
+// Device pixels to logical units, so the toolkit's layout never depends on the display density.
+static int glin_win_logical(GlinWinWindow *win, int device_pixels) {
+    double s = glin_win_scale(win);
+    if (s <= 0.0) {
+        return device_pixels;
+    }
+    return (int)((double)device_pixels / s + 0.5);
 }
 
 int glin_win_d3d11_active(GlinWinWindow *win) {
