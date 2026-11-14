@@ -1,8 +1,8 @@
-//! Frame-level fixtures for the audit: each one declares a REAL violation through the real components, and the test
-//! asserts the audit names it. The unit tests in `audit.zig` prove the checks fire on synthetic commands; these prove
-//! the wiring — that a violation declared the way an app declares one actually reaches the audit.
-//!
-//! A verifier that has only ever passed is indistinguishable from one that never ran.
+// Frame-level fixtures for the audit: each one declares a REAL violation through the real components, and the test asserts the audit names it. The unit
+
+// tests in `audit.zig` prove the checks fire on synthetic commands; these prove the wiring — that a violation declared the way an app declares one
+
+// actually reaches the audit. A verifier that has only ever passed is indistinguishable from one that never ran.
 const std = @import("std");
 const cl = @import("zclay");
 const testing = std.testing;
@@ -16,7 +16,7 @@ const button = @import("components/button.zig");
 const text_mod = @import("components/text.zig");
 const registry = @import("components/click_registry.zig");
 
-/// Records every finding the audit reports during one frame.
+// Records every finding the audit reports during one frame.
 const Findings = struct {
     kinds: [16]audit.Kind = undefined,
     n: usize = 0,
@@ -39,7 +39,7 @@ const Findings = struct {
 
 var recording: ?*Findings = null;
 
-/// Render one frame of `root` and return what the audit said about it.
+// Render one frame of `root` and return what the audit said about it.
 fn frameOf(root: Host.RootFn) !Findings {
     var found = Findings{};
     recording = &found;
@@ -92,8 +92,9 @@ test "audit case: two elements with one id are caught where they are declared" {
     try driver.start(.{ .width = 200, .height = 100 });
     driver.frame();
 
-    // Clay's message does not name the id ("An element with this ID was already previously declared"), so the check is
-    // that the duplicate is caught at all — the panic stops the build where the second declaration is.
+    // Clay's message does not name the id ("An element with this ID was already previously declared"), so the check is that the duplicate is caught at all —
+
+    // the panic stops the build where the second declaration is.
     try testing.expect(Dups.seen >= 1);
     try testing.expect(Dups.msg_len > 0);
 }

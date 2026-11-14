@@ -75,6 +75,9 @@ struct GlinCocoaWindow {
     int frames_drawn;
     int max_frames;
 
+    /// The animation pump, when an app has asked for frames.
+    NSTimer *anim_timer;
+
     /// Latched modifier state, because macOS reports modifiers through flagsChanged: and never through keyDown:/keyUp:.
     int shift_down;
     int ctrl_down;
@@ -432,6 +435,10 @@ GlinCocoaWindow *glin_cocoa_window_create(const char *title, int w, int h,
 }
 
 void glin_cocoa_window_destroy(GlinCocoaWindow *win) {
+    if (win && win->anim_timer) {
+        [win->anim_timer invalidate];
+        win->anim_timer = nil;
+    }
     if (!win) return;
     @autoreleasepool {
         win->window.delegate = nil;
@@ -478,6 +485,32 @@ void glin_cocoa_present(GlinCocoaWindow *win, const unsigned char *bgra, int w, 
             // the run hangs until the CI job timeout instead of exiting.
             [(GlinView *)win->view setNeedsDisplay:YES];
         }
+    }
+}
+
+void glin_cocoa_set_animating(GlinCocoaWindow *win, int on) {
+    if (!win) return;
+    @autoreleasepool {
+        if (!on) {
+            if (win->anim_timer) {
+                [win->anim_timer invalidate];
+                win->anim_timer = nil;
+            }
+            return;
+        }
+        if (win->anim_timer) return;
+        // The display's own rate, so a 144 Hz screen gets 144 chances a frame. Older screens report 60.
+        double hz = 60.0;
+        NSScreen *screen = win->window.screen ?: [NSScreen mainScreen];
+        if (screen && screen.maximumFramesPerSecond > 0) hz = (double)screen.maximumFramesPerSecond;
+        win->anim_timer = [NSTimer timerWithTimeInterval:1.0 / hz
+                                                 repeats:YES
+                                                   block:^(NSTimer *t) {
+                                                       (void)t;
+                                                       [(GlinView *)win->view setNeedsDisplay:YES];
+                                                   }];
+        // Common modes, so the pump keeps running while a menu or a scroll gesture is tracking.
+        [[NSRunLoop mainRunLoop] addTimer:win->anim_timer forMode:NSRunLoopCommonModes];
     }
 }
 

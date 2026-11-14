@@ -1,25 +1,25 @@
-//! A multi-line text editor model: a byte buffer, a caret, and every edit and movement.
+// A multi-line text editor model: a byte buffer, a caret, and every edit and movement.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub const Action = enum {
-    /// The buffer or caret did not change.
+    // The buffer or caret did not change.
     ignored,
-    /// Text was inserted or removed, or the caret moved.
+    // Text was inserted or removed, or the caret moved.
     edited,
-    /// The caller should run the query (Ctrl+Enter).
+    // The caller should run the query (Ctrl+Enter).
     run_requested,
 };
 
-/// A caret position within the buffer.
+// A caret position within the buffer.
 pub const Caret = struct {
-    /// Byte offset into the buffer, always in `0..=len`.
+    // Byte offset into the buffer, always in `0..=len`.
     offset: usize = 0,
-    /// The byte offset the selection was anchored at, if any.
+    // The byte offset the selection was anchored at, if any.
     anchor: ?usize = null,
 
-    /// The selected byte range, normalised so `start <= end`.
+    // The selected byte range, normalised so `start <= end`.
     pub fn selection(self: Caret) ?Span {
         const a = self.anchor orelse return null;
         const o = self.offset;
@@ -30,7 +30,7 @@ pub const Caret = struct {
         return self.anchor != null and self.anchor.? != self.offset;
     }
 
-    /// Keep the caret and anchor inside `0..=len`.
+    // Keep the caret and anchor inside `0..=len`.
     pub fn clamp(self: *Caret, len: usize) void {
         if (self.offset > len) self.offset = len;
         if (self.anchor) |a| {
@@ -48,7 +48,7 @@ pub const Span = struct {
     end: usize,
 };
 
-/// The byte that starts the codepoint ending at `offset`, so Backspace and Left step over a whole `\xc3\xa9` instead of one of its bytes.
+// The byte that starts the codepoint ending at `offset`, so Backspace and Left step over a whole `\xc3\xa9` instead of one of its bytes.
 pub fn prevCodepoint(buf: []const u8, offset: usize) usize {
     if (offset == 0) return 0;
     var i = offset - 1;
@@ -58,7 +58,7 @@ pub fn prevCodepoint(buf: []const u8, offset: usize) usize {
     return i;
 }
 
-/// The byte length of the codepoint at `offset` (1 for ASCII, 2..4 for UTF-8), clamped to `buf`.
+// The byte length of the codepoint at `offset` (1 for ASCII, 2..4 for UTF-8), clamped to `buf`.
 pub fn codepointLen(buf: []const u8, offset: usize) usize {
     if (offset >= buf.len) return 0;
     const lead = buf[offset];
@@ -66,15 +66,15 @@ pub fn codepointLen(buf: []const u8, offset: usize) usize {
     return @min(n, buf.len - offset);
 }
 
-/// Edit operations on a caller-owned buffer.
+// Edit operations on a caller-owned buffer.
 pub const Editor = struct {
     buf: []u8,
     len: usize = 0,
     caret: Caret = .{},
 
-    /// Seconds since the caret last moved, which is what a view blinks on.
+    // Seconds since the caret last moved, which is what a view blinks on.
     idle: f32 = 0,
-    /// Horizontal scroll in pixels, for a line wider than the field.
+    // Horizontal scroll in pixels, for a line wider than the field.
     scroll_x: f32 = 0,
 
     pub fn init(buf: []u8) Editor {
@@ -85,7 +85,7 @@ pub const Editor = struct {
         return self.buf[0..self.len];
     }
 
-    /// Replace the whole contents.
+    // Replace the whole contents.
     pub fn setText(self: *Editor, new_text: []const u8) void {
         const n = @min(new_text.len, self.buf.len);
         // @memmove, not @memcpy: the caller may hand this a slice of the buffer being set.
@@ -94,7 +94,7 @@ pub const Editor = struct {
         self.caret = .{};
     }
 
-    /// Insert one byte at the caret, replacing the selection if any.
+    // Insert one byte at the caret, replacing the selection if any.
     pub fn insertByte(self: *Editor, c: u8) bool {
         if (self.caret.hasSelection()) {
             _ = self.deleteSelection();
@@ -113,7 +113,7 @@ pub const Editor = struct {
         return true;
     }
 
-    /// Insert a run of bytes.
+    // Insert a run of bytes.
     pub fn insertSlice(self: *Editor, s: []const u8) usize {
         if (self.caret.hasSelection()) _ = self.deleteSelection();
         var written: usize = 0;
@@ -124,7 +124,7 @@ pub const Editor = struct {
         return written;
     }
 
-    /// Delete the selection, if any. Returns true if something was removed.
+    // Delete the selection, if any. Returns true if something was removed.
     pub fn deleteSelection(self: *Editor) bool {
         const sel = self.caret.selection() orelse return false;
         if (sel.start == sel.end) return false;
@@ -134,7 +134,7 @@ pub const Editor = struct {
         return true;
     }
 
-    /// Delete the byte before the caret (Backspace).
+    // Delete the byte before the caret (Backspace).
     pub fn backspace(self: *Editor) void {
         if (self.deleteSelection()) return;
         if (self.caret.offset == 0) return;
@@ -144,14 +144,14 @@ pub const Editor = struct {
         self.caret.offset = start;
     }
 
-    /// Delete the byte at the caret (Delete).
+    // Delete the byte at the caret (Delete).
     pub fn deleteForward(self: *Editor) void {
         if (self.deleteSelection()) return;
         if (self.caret.offset >= self.len) return;
         self.splice(self.caret.offset, codepointLen(self.text(), self.caret.offset));
     }
 
-    /// Remove `count` bytes at `at`, closing the gap.
+    // Remove `count` bytes at `at`, closing the gap.
     fn splice(self: *Editor, at: usize, count: usize) void {
         const tail = self.len - (at + count);
         if (tail > 0) {
@@ -160,13 +160,13 @@ pub const Editor = struct {
         self.len -= count;
     }
 
-    /// Select everything, or clear the selection.
+    // Select everything, or clear the selection.
     pub fn selectAll(self: *Editor) void {
         self.caret.anchor = 0;
         self.caret.offset = self.len;
     }
 
-    /// Delete the selection, or delete the whole line the caret is on when nothing is selected.
+    // Delete the selection, or delete the whole line the caret is on when nothing is selected.
     pub fn deleteLine(self: *Editor) void {
         if (self.deleteSelection()) return;
         const start = findLineStart(self.buf, 0, self.len, self.caret.offset);
@@ -179,17 +179,17 @@ pub const Editor = struct {
 
     // --- caret movement -------------------------------------------------
 
-    /// Offset of the first byte of the line containing `offset`.
+    // Offset of the first byte of the line containing `offset`.
     pub fn lineStart(self: *const Editor, offset: usize) usize {
         return findLineStart(self.buf, 0, self.len, offset);
     }
 
-    /// Offset just past the last byte of the line containing `offset`, excluding the newline.
+    // Offset just past the last byte of the line containing `offset`, excluding the newline.
     pub fn lineEnd(self: *const Editor, offset: usize) usize {
         return findLineEnd(self.buf, 0, self.len, offset);
     }
 
-    /// 0-based index of the line containing `offset`.
+    // 0-based index of the line containing `offset`.
     pub fn lineNumber(self: *const Editor, offset: usize) usize {
         var n: usize = 0;
         var i: usize = 0;
@@ -200,12 +200,12 @@ pub const Editor = struct {
         return n;
     }
 
-    /// Total number of lines (an empty buffer is one empty line).
+    // Total number of lines (an empty buffer is one empty line).
     pub fn lineCount(self: *const Editor) usize {
         return self.lineNumber(self.len) + 1;
     }
 
-    /// Start offset of 0-based `line`.
+    // Start offset of 0-based `line`.
     pub fn lineStartAt(self: *const Editor, line: usize) usize {
         if (line == 0) return 0;
         var current: usize = 0;
@@ -246,7 +246,7 @@ pub const Editor = struct {
         self.setCaret(self.lineEnd(self.caret.offset), shift);
     }
 
-    /// Move to the start of the previous line.
+    // Move to the start of the previous line.
     pub fn moveLineUp(self: *Editor, shift: bool) void {
         const here = self.lineStart(self.caret.offset);
         if (here == 0) {
@@ -259,7 +259,7 @@ pub const Editor = struct {
         self.setCaret(previous + @min(column, prev_len), shift);
     }
 
-    /// Move to the start of the next line, preserving the column where possible (a short line clamps rather than jumping to the end).
+    // Move to the start of the next line, preserving the column where possible (a short line clamps rather than jumping to the end).
     pub fn moveLineDown(self: *Editor, shift: bool) void {
         const here = self.lineStart(self.caret.offset);
         const column = self.caret.offset - here;
@@ -273,7 +273,7 @@ pub const Editor = struct {
         self.setCaret(next + @min(column, next_len), shift);
     }
 
-    /// Move the caret, maintaining the selection anchor when Shift is held.
+    // Move the caret, maintaining the selection anchor when Shift is held.
     pub fn setCaret(self: *Editor, offset: usize, shift: bool) void {
         const clamped = @min(offset, self.len);
         if (shift) {
@@ -285,19 +285,19 @@ pub const Editor = struct {
         self.caret.offset = clamped;
     }
 
-    /// Delete everything and reset the caret.
+    // Delete everything and reset the caret.
     pub fn insert(self: *Editor, bytes: []const u8) void {
         _ = self.insertSlice(bytes);
         self.idle = 0;
     }
 
-    /// Delete the selection, or the character after the caret.
+    // Delete the selection, or the character after the caret.
     pub fn delete(self: *Editor) void {
         self.deleteForward();
         self.idle = 0;
     }
 
-    /// Move by word, which is what ctrl+arrow does in a single-line field.
+    // Move by word, which is what ctrl+arrow does in a single-line field.
     pub fn moveWordLeft(self: *Editor, shift: bool) void {
         var i = self.caret.offset;
         while (i > 0 and !isWordByte(self.buf[i - 1])) i -= 1;
@@ -306,7 +306,7 @@ pub const Editor = struct {
         self.idle = 0;
     }
 
-    /// Move by word to the right.
+    // Move by word to the right.
     pub fn moveWordRight(self: *Editor, shift: bool) void {
         var i = self.caret.offset;
         while (i < self.len and isWordByte(self.buf[i])) i += 1;
@@ -315,7 +315,7 @@ pub const Editor = struct {
         self.idle = 0;
     }
 
-    /// The byte offset nearest to a horizontal position, given a fixed character width.
+    // The byte offset nearest to a horizontal position, given a fixed character width.
     pub fn caretAtX(self: *const Editor, x: f32, char_w: f32) usize {
         if (char_w <= 0) return self.caret.offset;
         const col_f = @max(x, 0) / char_w;
@@ -323,7 +323,7 @@ pub const Editor = struct {
         return @min(col, self.len);
     }
 
-    /// Place the caret from a click. `extend` keeps the anchor, which is what a shift-click does.
+    // Place the caret from a click. `extend` keeps the anchor, which is what a shift-click does.
     pub fn clickAt(self: *Editor, x: f32, char_w: f32, extend: bool) void {
         var at = self.caretAtX(x, char_w);
         // Never leave the caret inside a multi-byte codepoint: a click between the bytes of `\xc3\xa9` would split it on the next Backspace.
@@ -332,13 +332,13 @@ pub const Editor = struct {
         self.idle = 0;
     }
 
-    /// Extend the selection to a drag position.
+    // Extend the selection to a drag position.
     pub fn dragTo(self: *Editor, x: f32, char_w: f32) void {
         self.setCaret(self.caretAtX(x, char_w), true);
         self.idle = 0;
     }
 
-    /// Select the word under a position, which is what a double-click does.
+    // Select the word under a position, which is what a double-click does.
     pub fn selectWordAt(self: *Editor, x: f32, char_w: f32) void {
         const at = self.caretAtX(x, char_w);
         var s = at;
@@ -355,7 +355,7 @@ pub const Editor = struct {
         self.caret = .{};
     }
 
-    /// True when there is room for more text.
+    // True when there is room for more text.
     pub fn hasRoom(self: *const Editor) bool {
         return self.len < self.buf.len;
     }
@@ -379,7 +379,7 @@ fn findLineEnd(buf: []const u8, from: usize, len: usize, offset: usize) usize {
     return len;
 }
 
-/// The result of feeding one key event to the editor.
+// The result of feeding one key event to the editor.
 pub fn handleKey(
     editor: *Editor,
     keycode: u32,
@@ -456,8 +456,9 @@ pub fn handleKey(
     return .ignored;
 }
 
-/// Select the run around `offset` the way a double click does: the word (letters, digits, underscore), or the run of
-/// non-word bytes between two words. A newline always ends a run, so a double click never selects across lines.
+// Select the run around `offset` the way a double click does: the word (letters, digits, underscore), or the run of non-word bytes between two words. A
+
+// newline always ends a run, so a double click never selects across lines.
 pub fn selectWordAt(editor: *Editor, offset: usize) void {
     if (editor.len == 0) return;
     var at = @min(offset, editor.len);
@@ -474,10 +475,9 @@ pub fn selectWordAt(editor: *Editor, offset: usize) void {
     editor.idle = 0;
 }
 
-/// The byte offset in `text` closest to `x`, using the font that DRAWS it.
-///
-/// `measure` must be the same function the layout uses, or a click lands on the wrong character: a guessed cell width
-/// drifts further off the glyphs the longer the line is.
+// The byte offset in `text` closest to `x`, using the font that DRAWS it. `measure` must be the same function the layout uses, or a click lands on the
+
+// wrong character: a guessed cell width drifts further off the glyphs the longer the line is.
 pub fn offsetAtX(text: []const u8, x: f32, font_size: u16, measure: *const fn ([]const u8, u16) f32) usize {
     if (text.len == 0 or x <= 0) return 0;
     var lo: usize = 0;
@@ -497,12 +497,12 @@ pub fn offsetAtX(text: []const u8, x: f32, font_size: u16, measure: *const fn ([
     return lo;
 }
 
-/// True when the caret should be drawn: solid for half a second after it moved, then a 1 Hz blink.
+// True when the caret should be drawn: solid for half a second after it moved, then a 1 Hz blink.
 pub fn caretVisible(editor: *const Editor) bool {
     return editor.idle < 0.5 or @mod(editor.idle, 1.0) < 0.5;
 }
 
-/// Copy the selection into `out`; null when nothing is selected. `out` is truncated, never overrun.
+// Copy the selection into `out`; null when nothing is selected. `out` is truncated, never overrun.
 pub fn copySelection(editor: *const Editor, out: []u8) ?[]const u8 {
     const span = editor.caret.selection() orelse return null;
     if (span.start >= span.end) return null;
@@ -511,7 +511,7 @@ pub fn copySelection(editor: *const Editor, out: []u8) ?[]const u8 {
     return out[0..n];
 }
 
-/// Cut: copy the selection, then remove it. Null when nothing is selected.
+// Cut: copy the selection, then remove it. Null when nothing is selected.
 pub fn cutSelection(editor: *Editor, out: []u8) ?[]const u8 {
     const copied = copySelection(editor, out) orelse return null;
     _ = editor.deleteSelection();
@@ -519,12 +519,12 @@ pub fn cutSelection(editor: *Editor, out: []u8) ?[]const u8 {
     return copied;
 }
 
-/// Paste a run at the caret, replacing any selection: the same edit as `handleText`, named for the gesture.
+// Paste a run at the caret, replacing any selection: the same edit as `handleText`, named for the gesture.
 pub fn paste(editor: *Editor, text: []const u8) Action {
     return handleText(editor, text);
 }
 
-/// Insert a run the platform already composed, which is how `A` (Caps Lock), `*`, `(` and `\xc3\xa9` arrive on macOS.
+// Insert a run the platform already composed, which is how `A` (Caps Lock), `*`, `(` and `\xc3\xa9` arrive on macOS.
 pub fn handleText(editor: *Editor, text: []const u8) Action {
     if (text.len == 0) return .ignored;
     if (editor.insertSlice(text) == 0) return .ignored;
@@ -553,10 +553,10 @@ pub const KEY_V: u32 = 47;
 pub const KEY_K: u32 = 37;
 // Ctrl+O.
 pub const KEY_O: u32 = 24;
-/// Escape, evdev code 1.
+// Escape, evdev code 1.
 pub const KEY_ESCAPE: u32 = 1;
 
-/// Map a keycode to a printable ASCII byte (US layout), or null.
+// Map a keycode to a printable ASCII byte (US layout), or null.
 pub fn keyChar(keycode: u32, shift: bool) ?u8 {
     // Letters: q..p, a..l, z..m, in evdev order.
     const lower_letters = "qwertyuiopasdfghjklzxcvbnm";
@@ -602,10 +602,10 @@ pub fn keyChar(keycode: u32, shift: bool) ?u8 {
     return null;
 }
 
-/// A key press: the evdev code, and whether Shift must be held.
+// A key press: the evdev code, and whether Shift must be held.
 pub const Keystroke = struct { code: u32, shift: bool };
 
-/// The inverse of `keyChar`: the key that produces `ch`.
+// The inverse of `keyChar`: the key that produces `ch`.
 pub fn keyCodeFor(ch: u8) ?Keystroke {
     if (ch >= 'a' and ch <= 'z') {
         const lower_letters = "qwertyuiopasdfghjklzxcvbnm";
@@ -658,7 +658,7 @@ pub fn keyCodeFor(ch: u8) ?Keystroke {
     return null;
 }
 
-/// True for the characters the digit row produces under Shift.
+// True for the characters the digit row produces under Shift.
 fn shifted_digit(ch: u8) bool {
     const shifted_digits = [_]u8{ '!', '@', '#', '$', '%', '^', '&', '*', '(', ')' };
     return std.mem.indexOfScalar(u8, &shifted_digits, ch) != null;
@@ -1088,7 +1088,7 @@ test "setText truncates rather than overflowing" {
 
 // Rendering
 
-/// Copy `text` into `buf`, truncated to fit. Never writes past the end.
+// Copy `text` into `buf`, truncated to fit. Never writes past the end.
 pub fn clampTo(text: []const u8, buf: []u8) []const u8 {
     const n = @min(text.len, buf.len -| 1);
     // Overlap-tolerant: the destination is a scratch buffer the caller may have carved out of the very text being copied.
@@ -1096,17 +1096,19 @@ pub fn clampTo(text: []const u8, buf: []u8) []const u8 {
     return buf[0..n];
 }
 
-/// Render one editor line with a visible caret, into `buf`.
-/// A one-run fallback for a renderer that can only emit one text run per line: the caret becomes a `|` glyph.
-///
-/// A real UI should not use this. The bar is a glyph, so it takes a character cell and the tail of the line shifts
-/// every time it blinks; draw a 1px box at `column * char_width` instead (meja's `editor.caret` does).
+// Render one editor line with a visible caret, into `buf`. A one-run fallback for a renderer that can only emit one text run per line: the caret becomes
+
+// a `|` glyph. A real UI should not use this. The bar is a glyph, so it takes a character cell and the tail of the line shifts every time it blinks;
+
+// draw a 1px box at `column * char_width` instead (meja's `editor.caret` does).
 pub fn renderLineWithCaret(line_text: []const u8, caret_at: ?usize, buf: []u8) []const u8 {
     const at = caret_at orelse return clampTo(line_text, buf);
     if (buf.len == 0) return buf[0..0];
 
     const caret = @min(at, line_text.len);
-    // A visible bar INSERTED at the caret, not a space that replaces the character under it: a space is invisible, which is why the editor looked like it had no cursor at all.
+    // A visible bar INSERTED at the caret, not a space that replaces the character under it: a space is invisible, which is why the editor looked like it
+
+    // had no cursor at all.
     const head = @min(caret, buf.len -| 1);
     @memmove(buf[0..head], line_text[0..head]);
 

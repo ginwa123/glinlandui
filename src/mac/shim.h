@@ -102,6 +102,14 @@ void glin_cocoa_window_run(GlinCocoaWindow *win, int max_frames);
 /// dimension, in which case the previous frame stays on screen.
 void glin_cocoa_present(GlinCocoaWindow *win, const unsigned char *bgra, int w, int h);
 
+/// Start or stop the animation pump: a timer at the display's refresh rate that asks the view to redraw.
+///
+/// AppKit only draws when something asks it to, so an app with its own animation (a scroll that moves every frame) has
+/// no other way to get the next frame. The pump is a plain timer rather than a display link on purpose: the host
+/// measures its own frame cost, and a vsync-locked pump would hide the difference between "fast enough" and "just in
+/// time". Call it with 1 while animating and 0 when the animation stops.
+void glin_cocoa_set_animating(GlinCocoaWindow *win, int on);
+
 /// Ask the event loop to stop. Safe to call from any callback.
 void glin_cocoa_quit(GlinCocoaWindow *win);
 

@@ -8,7 +8,7 @@ const frame_mod = @import("../frame.zig");
 const text_editor = @import("../text_editor.zig");
 const semantics = @import("../semantics.zig");
 
-/// Raw evdev keycode → printable ASCII under the US layout.
+// Raw evdev keycode → printable ASCII under the US layout.
 pub fn keyChar(evdev: u32, shift: bool) ?u8 {
     // Letters: Q..P, A..L, Z..M rows.
     const lower = "qwertyuiopasdfghjklzxcvbnm";
@@ -47,7 +47,7 @@ pub fn keyChar(evdev: u32, shift: bool) ?u8 {
     return null;
 }
 
-/// Append a char to a caller-owned draft buffer.
+// Append a char to a caller-owned draft buffer.
 pub fn insert(buf: []u8, len: *usize, c: u8) bool {
     if (len.* >= buf.len) return false;
     buf[len.*] = c;
@@ -55,14 +55,14 @@ pub fn insert(buf: []u8, len: *usize, c: u8) bool {
     return true;
 }
 
-/// Drop the last byte (keymap is ASCII-only, so byte == char).
+// Drop the last byte (keymap is ASCII-only, so byte == char).
 pub fn backspace(len: *usize) void {
     if (len.* > 0) len.* -= 1;
 }
 
 // ---- HTML-like caret + keyboard selection (single-line, ASCII) ---- The field used to be append-only (caret pinned at end).
 
-/// Raw evdev codes for navigation (observed live: no +8 offset).
+// Raw evdev codes for navigation (observed live: no +8 offset).
 pub const KEY_LEFT: u32 = 105;
 pub const KEY_RIGHT: u32 = 106;
 pub const KEY_UP: u32 = 103;
@@ -72,13 +72,13 @@ pub const KEY_END: u32 = 107;
 pub const KEY_DELETE: u32 = 111;
 pub const KEY_BACKSPACE: u32 = 14;
 
-/// Caret + keyboard-selection state (owner-held, one per draft buffer).
+// Caret + keyboard-selection state (owner-held, one per draft buffer).
 pub const EditState = struct {
     caret: usize = 0,
     anchor: ?usize = null,
 };
 
-/// Normalized selection span (start < end), or null when caret-only.
+// Normalized selection span (start < end), or null when caret-only.
 pub const Span = struct {
     start: usize,
     end: usize,
@@ -94,7 +94,7 @@ pub fn hasSelection(st: EditState) bool {
     return selection(st) != null;
 }
 
-/// Clamp caret/anchor into 0..len (call after external len edits).
+// Clamp caret/anchor into 0..len (call after external len edits).
 pub fn clampEdit(st: *EditState, len: usize) void {
     st.caret = @min(st.caret, len);
     if (st.anchor) |a| st.anchor = @min(a, len);
@@ -113,7 +113,7 @@ fn moveCaret(st: *EditState, len: usize, new_caret: usize, shift: bool) void {
     }
 }
 
-/// Arrow left: with an active selection and no Shift, collapses to the selection start (HTML); otherwise steps one byte left.
+// Arrow left: with an active selection and no Shift, collapses to the selection start (HTML); otherwise steps one byte left.
 pub fn moveLeft(st: *EditState, len: usize, shift: bool) void {
     if (!shift) {
         if (selection(st.*)) |sp| {
@@ -126,7 +126,7 @@ pub fn moveLeft(st: *EditState, len: usize, shift: bool) void {
     moveCaret(st, len, if (st.caret > 0) st.caret - 1 else 0, shift);
 }
 
-/// Arrow right: mirror of moveLeft (collapses to selection end).
+// Arrow right: mirror of moveLeft (collapses to selection end).
 pub fn moveRight(st: *EditState, len: usize, shift: bool) void {
     if (!shift) {
         if (selection(st.*)) |sp| {
@@ -147,7 +147,7 @@ pub fn moveEnd(st: *EditState, len: usize, shift: bool) void {
     moveCaret(st, len, len, shift);
 }
 
-/// Ctrl+A: select the whole buffer (empty buffer selects nothing).
+// Ctrl+A: select the whole buffer (empty buffer selects nothing).
 pub fn selectAll(st: *EditState, len: usize) void {
     clampEdit(st, len);
     st.caret = len;
@@ -158,7 +158,7 @@ fn isWordChar(c: u8) bool {
     return std.ascii.isAlphanumeric(c) or c == '_';
 }
 
-/// Ctrl+Left target: skip non-word bytes leftward, then word bytes.
+// Ctrl+Left target: skip non-word bytes leftward, then word bytes.
 pub fn wordLeftEnd(buf: []const u8, len: usize, caret: usize) usize {
     var c = @min(caret, len);
     while (c > 0 and !isWordChar(buf[c - 1])) : (c -= 1) {}
@@ -166,7 +166,7 @@ pub fn wordLeftEnd(buf: []const u8, len: usize, caret: usize) usize {
     return c;
 }
 
-/// Ctrl+Right target: skip word bytes rightward, then non-word bytes (lands at the end of the current/next word, like browsers).
+// Ctrl+Right target: skip word bytes rightward, then non-word bytes (lands at the end of the current/next word, like browsers).
 pub fn wordRightEnd(buf: []const u8, len: usize, caret: usize) usize {
     var c = @min(caret, len);
     while (c < len and isWordChar(buf[c])) : (c += 1) {}
@@ -184,14 +184,14 @@ pub fn moveWordRight(st: *EditState, buf: []const u8, len: usize, shift: bool) v
     moveCaret(st, len, wordRightEnd(buf, len, st.caret), shift);
 }
 
-/// Delete span [start,end), shifting the tail left. Returns the new len.
+// Delete span [start,end), shifting the tail left. Returns the new len.
 fn deleteSpan(buf: []u8, len: usize, start: usize, end: usize) usize {
     std.debug.assert(start <= end and end <= len);
     std.mem.copyForwards(u8, buf[start .. len - (end - start)], buf[end..len]);
     return len - (end - start);
 }
 
-/// Type a char: replaces the selection when present, else inserts at the caret.
+// Type a char: replaces the selection when present, else inserts at the caret.
 pub fn insertAt(buf: []u8, len: *usize, st: *EditState, c: u8) bool {
     if (selection(st.*)) |sp| {
         len.* = deleteSpan(buf, len.*, sp.start, sp.end);
@@ -207,7 +207,7 @@ pub fn insertAt(buf: []u8, len: *usize, st: *EditState, c: u8) bool {
     return true;
 }
 
-/// Backspace: deletes the selection when present, else the byte before the caret (no-op at 0).
+// Backspace: deletes the selection when present, else the byte before the caret (no-op at 0).
 pub fn backspaceAt(buf: []u8, len: *usize, st: *EditState) void {
     if (selection(st.*)) |sp| {
         len.* = deleteSpan(buf, len.*, sp.start, sp.end);
@@ -223,7 +223,7 @@ pub fn backspaceAt(buf: []u8, len: *usize, st: *EditState) void {
     st.caret = start;
 }
 
-/// Forward Delete: deletes the selection when present, else the byte at the caret (no-op at end).
+// Forward Delete: deletes the selection when present, else the byte at the caret (no-op at end).
 pub fn deleteAt(buf: []u8, len: *usize, st: *EditState) void {
     if (selection(st.*)) |sp| {
         len.* = deleteSpan(buf, len.*, sp.start, sp.end);
@@ -237,7 +237,7 @@ pub fn deleteAt(buf: []u8, len: *usize, st: *EditState) void {
     len.* = deleteSpan(buf, len.*, st.caret, st.caret + n);
 }
 
-/// Arrow/Home/End dispatch for a single-line field (Up/Down ignored).
+// Arrow/Home/End dispatch for a single-line field (Up/Down ignored).
 pub fn handleNavKey(st: *EditState, buf: []const u8, len: usize, evdev: u32, shift: bool, ctrl: bool) bool {
     switch (evdev) {
         KEY_LEFT => {
@@ -262,11 +262,11 @@ pub fn handleNavKey(st: *EditState, buf: []const u8, len: usize, evdev: u32, shi
 
 // ---- Key-event state machine (component owns interpretation) ---- Why this lives here instead of views.zig: the Wayland loop delivers raw evdev to.
 
-/// Modifier latch: one per window (a single keyboard).
+// Modifier latch: one per window (a single keyboard).
 pub const Mods = struct {
     shift: bool = false,
     ctrl: bool = false,
-    /// Cmd on macOS, the Super/Windows key elsewhere. Its own flag, so an app can tell Cmd from Ctrl.
+    // Cmd on macOS, the Super/Windows key elsewhere. Its own flag, so an app can tell Cmd from Ctrl.
     super: bool = false,
 
     pub fn track(m: *Mods, evdev: u32, pressed: bool) bool {
@@ -288,19 +288,19 @@ pub const Mods = struct {
         }
     }
 
-    /// True while either shortcut modifier is held: Cmd on macOS, Ctrl everywhere else.
+    // True while either shortcut modifier is held: Cmd on macOS, Ctrl everywhere else.
     pub fn shortcut(m: Mods) bool {
         return m.ctrl or m.super;
     }
 };
 
-/// What a key event means for the draft.
+// What a key event means for the draft.
 pub const Action = enum { ignored, edited, confirm };
 
 pub const KEY_ENTER: u32 = 28;
 pub const KEY_A: u32 = 30;
 
-/// Full key handling for one draft buffer: arrows/Home/End (via handleNavKey), Backspace/Delete-at-caret, Ctrl+A select-all, Enter, printables.
+// Full key handling for one draft buffer: arrows/Home/End (via handleNavKey), Backspace/Delete-at-caret, Ctrl+A select-all, Enter, printables.
 pub fn handleKey(buf: []u8, len: *usize, st: *EditState, mods: Mods, evdev: u32, pressed: bool) Action {
     if (!pressed) return .ignored;
     if (handleNavKey(st, buf, len.*, evdev, mods.shift, mods.ctrl)) return .edited;
@@ -332,7 +332,7 @@ pub fn handleKey(buf: []u8, len: *usize, st: *EditState, mods: Mods, evdev: u32,
     return .ignored;
 }
 
-/// Insert a run the platform already composed -- Caps Lock `A`, `*`, `(`, `\xc3\xa9` -- at the caret, replacing any selection.
+// Insert a run the platform already composed -- Caps Lock `A`, `*`, `(`, `\xc3\xa9` -- at the caret, replacing any selection.
 pub fn handleText(buf: []u8, len: *usize, st: *EditState, text: []const u8) Action {
     if (text.len == 0) return .ignored;
     var inserted = false;
@@ -342,26 +342,27 @@ pub fn handleText(buf: []u8, len: *usize, st: *EditState, text: []const u8) Acti
     return if (inserted) .edited else .ignored;
 }
 
-/// Toolkit-style field props.
+// Toolkit-style field props.
 pub const FieldProps = struct {
     id: []const u8,
     font_size: u16 = 14,
     fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
     bg: Color = Color.rgb(0x26, 0x26, 0x26),
-    /// Selected-run text color for fieldEdit (text runs carry color only, no per-run bg at this renderer's fidelity).
+    // Selected-run text color for fieldEdit (text runs carry color only, no per-run bg at this renderer's fidelity).
     sel_fg: Color = Color.rgb(0x7a, 0xb8, 0xff),
-    /// The selection's background, used by `liveField`.
+    // The selection's background, used by `liveField`.
     sel_bg: Color = Color.rgb(0x2d, 0x3a, 0x52),
-    /// The caret's colour, or the text colour when null. A caret that matches the text merges with the glyph it
-    /// touches and reads as a broken character, which is why this is a prop.
+    // The caret's colour, or the text colour when null. A caret that matches the text merges with the glyph it touches and reads as a broken character,
+
+    // which is why this is a prop.
     caret_fg: ?Color = null,
     radius: u32 = 4,
     pad_tb: u16 = 8,
     pad_lr: u16 = 12,
-    /// Fixed size overrides (null = grow width / fit height defaults).
+    // Fixed size overrides (null = grow width / fit height defaults).
     w: ?f32 = null,
     h: ?f32 = null,
-    /// Min/max clamps for the grow/fit axes (0 = no constraint).
+    // Min/max clamps for the grow/fit axes (0 = no constraint).
     min_w: f32 = 0,
     max_w: f32 = 0,
     min_h: f32 = 0,
@@ -390,7 +391,7 @@ fn fieldBorder(props: FieldProps) cl.BorderElementConfig {
     return .{ .color = props.border_color.toClay(), .width = .outside(props.border_width) };
 }
 
-/// Declare a text field: prompt + query + block cursor on the field bg.
+// Declare a text field: prompt + query + block cursor on the field bg.
 pub fn field(props: FieldProps, query: []const u8) void {
     const bg: Color = if (props.disabled) props.disabled_bg else props.bg;
     const fg: Color = if (props.disabled) props.disabled_fg else props.fg;
@@ -441,25 +442,26 @@ pub fn field(props: FieldProps, query: []const u8) void {
     }
 }
 
-/// Declare a text field with HTML-like caret + selection: prompt, then the query split around the caret (before / "|" / after), with the selected span.
+// Declare a text field with HTML-like caret + selection: prompt, then the query split around the caret (before / "|" / after), with the selected span.
 pub const FieldCtx = struct {
     input: *text_editor.Editor,
     id: []const u8,
-    /// Measures a run with the font that draws the field. REQUIRED: a guessed cell width drifts off the glyphs, so
-    /// the caret, the click and the drag would each land somewhere slightly different.
+    // Measures a run with the font that draws the field. REQUIRED: a guessed cell width drifts off the glyphs, so the caret, the click and the drag would
+
+    // each land somewhere slightly different.
     measure: *const fn ([]const u8, u16) f32,
-    /// Left padding of the field, written by `liveField` each frame so a click and the caret share one origin.
+    // Left padding of the field, written by `liveField` each frame so a click and the caret share one origin.
     pad_lr: f32 = 8,
-    /// The field's font size, written by `liveField` each frame, for the same reason.
+    // The field's font size, written by `liveField` each frame, for the same reason.
     font_size: u16 = 14,
-    /// Called after a click places the caret, so the app can take focus.
+    // Called after a click places the caret, so the app can take focus.
     on_focus: ?*const fn (?*anyopaque) void = null,
     focus_ctx: ?*anyopaque = null,
-    /// True while this field owns a drag in flight; the field ticks it, so the app never has to.
+    // True while this field owns a drag in flight; the field ticks it, so the app never has to.
     dragging: bool = false,
 };
 
-/// Anchor the caret on the press, extend it while the button stays down, and release the drag when it comes up.
+// Anchor the caret on the press, extend it while the button stays down, and release the drag when it comes up.
 fn dragSelect(ctx: *FieldCtx, id: []const u8) void {
     if (!frame_mod.ptr_down) {
         ctx.dragging = false;
@@ -481,7 +483,7 @@ fn dragSelect(ctx: *FieldCtx, id: []const u8) void {
     }
 }
 
-/// A live text field: selection highlight, a blinking caret, and a click that places the caret.
+// A live text field: selection highlight, a blinking caret, and a click that places the caret.
 pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
     const input = ctx.input;
     // The click and drag handlers need the same origin and metrics the text is drawn with.
@@ -526,8 +528,9 @@ pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
             });
             if (e < text.len) cl.text(text[e..], .{ .font_size = props.font_size, .color = fg });
         } else {
-            // One run for the whole value, with the caret floated over it. A caret in the flow takes a pixel of the
-            // text, so the tail of the value shifted every time it moved and it sat flush against the next glyph.
+            // One run for the whole value, with the caret floated over it. A caret in the flow takes a pixel of the text, so the tail of the value shifted every
+
+            // time it moved and it sat flush against the next glyph.
             cl.text(text, .{ .font_size = props.font_size, .color = fg });
             if (blink_on) caretBar(props, ctx, text);
         }
@@ -536,7 +539,7 @@ pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
     registry.registerClickDoubleCursor(cl.getElementId(props.id), onFieldClick, onFieldDoubleClick, ctx, .text);
 }
 
-/// Select the word under a double click, which is what every text field does.
+// Select the word under a double click, which is what every text field does.
 fn onFieldDoubleClick(ctx: ?*anyopaque) void {
     const c: *FieldCtx = @ptrCast(@alignCast(ctx.?));
     const data = cl.getElementData(cl.getElementId(c.id));
@@ -547,7 +550,7 @@ fn onFieldDoubleClick(ctx: ?*anyopaque) void {
     if (c.on_focus) |f| f(c.focus_ctx);
 }
 
-/// The caret, floated at the measured end of the run before it. The primitive snaps it and makes it one device pixel.
+// The caret, floated at the measured end of the run before it. The primitive snaps it and makes it one device pixel.
 fn caretBar(props: FieldProps, ctx: *FieldCtx, text: []const u8) void {
     const at = @min(ctx.input.caret.offset, text.len);
     caret_mod.declare(.{
@@ -560,7 +563,7 @@ fn caretBar(props: FieldProps, ctx: *FieldCtx, text: []const u8) void {
     });
 }
 
-/// Place the caret from a click, using the field's own box and the frame's pointer.
+// Place the caret from a click, using the field's own box and the frame's pointer.
 fn onFieldClick(ctx: ?*anyopaque) void {
     const c: *FieldCtx = @ptrCast(@alignCast(ctx.?));
     const data = cl.getElementData(cl.getElementId(c.id));

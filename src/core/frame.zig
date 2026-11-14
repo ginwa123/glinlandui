@@ -16,7 +16,7 @@ pub const shape_default: u32 = 1;
 pub const shape_pointer: u32 = 4;
 pub const shape_text: u32 = 9;
 pub const shape_ew_resize: u32 = 26;
-/// Sentinel for Window.last_shape: 0 is not a valid shape (valid range starts at 1), so the first real shape always counts as a change.
+// Sentinel for Window.last_shape: 0 is not a valid shape (valid range starts at 1), so the first real shape always counts as a change.
 pub const shape_sentinel: u32 = 0;
 
 pub fn cursorShapeFromCursor(cursor: Cursor) u32 {
@@ -28,7 +28,7 @@ pub fn cursorShapeFromCursor(cursor: Cursor) u32 {
     };
 }
 
-/// Resolve the cursor for a pointer point.
+// Resolve the cursor for a pointer point.
 pub fn hoverCursorShape(x: f32, y: f32) u32 {
     if (@hasDecl(click_registry, "hoverCursorAt")) {
         const cur = click_registry.hoverCursorAt(x, y);
@@ -41,71 +41,70 @@ pub fn hoverCursorShape(x: f32, y: f32) u32 {
     return shape_default;
 }
 
-/// The pointer position and the frame clock, so a component can place a caret from a click and blink it without the app plumbing either through.
+// The pointer position and the frame clock, so a component can place a caret from a click and blink it without the app plumbing either through.
 pub var ptr_x: f32 = 0;
 pub var ptr_y: f32 = 0;
 pub var time_s: f32 = 0;
 pub var delta_s: f32 = 0;
 
-/// Whether the left button is held, and where that press began, so a field can tell a drag that started on it from one that wandered in.
+// Whether the left button is held, and where that press began, so a field can tell a drag that started on it from one that wandered in.
 pub var ptr_down: bool = false;
 pub var ptr_press_x: f32 = 0;
 pub var ptr_press_y: f32 = 0;
 
-/// Record the pointer position for this frame.
+// Record the pointer position for this frame.
 pub fn setPointer(x: f32, y: f32) void {
     ptr_x = x;
     ptr_y = y;
 }
 
-/// Device pixels per logical point, as the window backend set it. 1.0 until a Retina window says otherwise.
+// Device pixels per logical point, as the window backend set it. 1.0 until a Retina window says otherwise.
 pub var pixel_scale: f32 = 1;
 
-/// Record the window's backing scale, so a hairline can be snapped to real device pixels.
+// Record the window's backing scale, so a hairline can be snapped to real device pixels.
 pub fn setPixelScale(s: f32) void {
     pixel_scale = if (s > 0) s else 1;
 }
 
-/// Snap a caret's left edge to the device pixel grid.
-///
-/// A 1 pt bar at a fractional x is antialiased across two device pixels, and the half-covered one blends into the
-/// character beside it — which is what makes a caret look like it is drawn on top of a glyph.
+// Snap a caret's left edge to the device pixel grid. A 1 pt bar at a fractional x is antialiased across two device pixels, and the half-covered one
+
+// blends into the character beside it — which is what makes a caret look like it is drawn on top of a glyph.
 pub fn snapX(x: f32) f32 {
     const k = pixel_scale;
     return @round(x * k) / k;
 }
 
-/// One device pixel, in logical points: the width a caret should be so it covers whole pixels and nothing more.
+// One device pixel, in logical points: the width a caret should be so it covers whole pixels and nothing more.
 pub fn hairline() f32 {
     return 1 / pixel_scale;
 }
 
-/// Record the button state and the press origin for this frame.
+// Record the button state and the press origin for this frame.
 pub fn setPointerButton(down: bool, press_x: f32, press_y: f32) void {
     ptr_down = down;
     ptr_press_x = press_x;
     ptr_press_y = press_y;
 }
 
-/// Record the frame clock. `delta` is the time since the previous frame, in seconds.
+// Record the frame clock. `delta` is the time since the previous frame, in seconds.
 pub fn setTime(now: f32, delta: f32) void {
     time_s = now;
     delta_s = delta;
 }
 
-/// Last shape resolved by clayFrame (updated every frame, including headless tests).
+// Last shape resolved by clayFrame (updated every frame, including headless tests).
 pub var current_shape: u32 = shape_default;
 
 pub fn currentShape() u32 {
     return current_shape;
 }
 
-/// Change-only gate (pure, unit-tested): true when the shape differs from the last applied one.
+// Change-only gate (pure, unit-tested): true when the shape differs from the last applied one.
 pub fn shouldApplyShape(last: u32, next: u32) bool {
     return last != next;
 }
 
-/// Engine-side memoized immediate: output-hash draw skipping.
+// Engine-side memoized immediate: output-hash draw skipping.
 fn hashF32(h: u64, v: f32) u64 {
     var x: u64 = h ^ @as(u64, @as(u32, @bitCast(v)));
     x *%= 0x100000001b3;
@@ -130,7 +129,7 @@ fn hashColor(h: u64, c: [4]f32) u64 {
     return x;
 }
 
-/// FNV-1a over command count + per-command type, id, bbox bits and type-specific payload (rect color, text bytes/size/color, border color/widths).
+// FNV-1a over command count + per-command type, id, bbox bits and type-specific payload (rect color, text bytes/size/color, border color/widths).
 pub fn hashCommands(commands: []cl.RenderCommand) u64 {
     var h: u64 = 0xcbf29ce484222325;
     h ^= @as(u64, @intCast(commands.len));
@@ -174,13 +173,13 @@ pub fn hashCommands(commands: []cl.RenderCommand) u64 {
     return h;
 }
 
-/// Per-engine memo state.
+// Per-engine memo state.
 pub const FrameMemo = struct {
     last_hash: ?u64 = null,
     draws: u64 = 0,
     skips: u64 = 0,
 
-    /// Returns true when the caller should issue the GLES draw.
+    // Returns true when the caller should issue the GLES draw.
     pub fn shouldDraw(self: *FrameMemo, commands: []cl.RenderCommand) bool {
         const h = hashCommands(commands);
         if (self.last_hash) |prev| {
@@ -201,11 +200,11 @@ pub const FrameMemo = struct {
     }
 };
 
-/// Engine-owned memo (single-window app).
+// Engine-owned memo (single-window app).
 pub var memo_enabled: bool = false;
 var memo: FrameMemo = .{};
 
-/// Declare callback: app builds its Clay tree here (views.zig declareRoot).
+// Declare callback: app builds its Clay tree here (views.zig declareRoot).
 pub const DeclareFn = *const fn (ctx: *anyopaque, w: u32, h: u32) void;
 
 fn clayMeasure(text_bytes: []const u8, config: *cl.TextElementConfig, _: void) cl.Dimensions {
@@ -213,15 +212,16 @@ fn clayMeasure(text_bytes: []const u8, config: *cl.TextElementConfig, _: void) c
     return .{ .w = ext.w, .h = ext.h };
 }
 
-/// Receives a duplicate element id instead of the default panic. A test installs one to assert the detection without
-/// dying; an app must leave it null.
+// Receives a duplicate element id instead of the default panic. A test installs one to assert the detection without dying; an app must leave it null.
 pub var duplicate_id_sink: ?*const fn (msg: []const u8) void = null;
 
 fn clayErrorHandler(err: cl.ErrorData) callconv(.c) void {
     const msg = err.error_text.chars[0..@intCast(err.error_text.length)];
-    // A duplicate id is not a warning: `getElementData` resolves ids through a map keyed by the hash, so a second
-    // element with the same id makes every click, hover and cursor lookup land on the OTHER one. In a Debug or test
-    // build that is a bug, so stop where it happens instead of logging it 200 times.
+    // A duplicate id is not a warning: `getElementData` resolves ids through a map keyed by the hash, so a second element with the same id makes every
+
+    // click, hover and cursor lookup land on the OTHER one. In a Debug or test build that is a bug, so stop where it happens instead of logging it 200
+
+    // times.
     if (err.error_type == .duplicate_id and builtin.mode == .Debug) {
         if (duplicate_id_sink) |sink| {
             sink(msg);
@@ -232,7 +232,7 @@ fn clayErrorHandler(err: cl.ErrorData) callconv(.c) void {
     std.log.err("clay {s}: {s}", .{ @tagName(err.error_type), msg });
 }
 
-/// Init the Clay arena for a w x h window.
+// Init the Clay arena for a w x h window.
 pub fn initClay(alloc: std.mem.Allocator, w: u32, h: u32) ![]u8 {
     const clay_mem_size = cl.minMemorySize();
     const clay_mem = try alloc.alloc(u8, clay_mem_size);
@@ -244,14 +244,14 @@ pub fn initClay(alloc: std.mem.Allocator, w: u32, h: u32) ![]u8 {
     return clay_mem;
 }
 
-/// Per-frame text measurement override used by headless tests.
+// Per-frame text measurement override used by headless tests.
 pub const MeasureFn = *const fn (
     text: []const u8,
     config: *cl.TextElementConfig,
     user_data: ?*anyopaque,
 ) cl.Dimensions;
 
-/// Called synchronously after Clay finishes layout and before rendering.
+// Called synchronously after Clay finishes layout and before rendering.
 pub const FrameProbeFn = *const fn (
     user_data: ?*anyopaque,
     commands: []const cl.RenderCommand,
@@ -259,13 +259,13 @@ pub const FrameProbeFn = *const fn (
     height: u32,
 ) void;
 
-/// Optional seams used by the reusable headless testing module.
+// Optional seams used by the reusable headless testing module.
 pub const FrameOptions = struct {
     measure: ?MeasureFn = null,
     measure_user_data: ?*anyopaque = null,
     probe: ?FrameProbeFn = null,
     probe_user_data: ?*anyopaque = null,
-    /// Resolve the semantics tree (core/semantics.zig) immediately after layout, once Clay has computed every bounding box.
+    // Resolve the semantics tree (core/semantics.zig) immediately after layout, once Clay has computed every bounding box.
     resolve_semantics: bool = false,
 };
 
@@ -290,7 +290,7 @@ fn invokeProbe(
     }
 }
 
-/// One Clay frame: sync pointer + layout dims, begin, run the app's declare callback, end, then draw (lazy renderer init, clear-only fallback on.
+// One Clay frame: sync pointer + layout dims, begin, run the app's declare callback, end, then draw (lazy renderer init, clear-only fallback on.
 pub fn clayFrame(
     alloc: std.mem.Allocator,
     renderer: *?render.Renderer,
@@ -322,7 +322,7 @@ pub fn clayFrame(
     );
 }
 
-/// Frame variant with injectable measurement and a synchronous command probe.
+// Frame variant with injectable measurement and a synchronous command probe.
 pub fn clayFrameWithOptions(
     alloc: std.mem.Allocator,
     renderer: *?render.Renderer,
@@ -350,8 +350,9 @@ pub fn clayFrameWithOptions(
     cl.beginLayout();
     declare(ctx, w, h);
     const commands = cl.endLayout();
-    // The audit runs on the frames a developer actually sees, not only in tests: the caret, hairline and hit-target
-    // failures it catches are invisible to a unit test and obvious here.
+    // The audit runs on the frames a developer actually sees, not only in tests: the caret, hairline and hit-target failures it catches are invisible to a
+
+    // unit test and obvious here.
     if (audit.enabled) _ = audit.frame(commands, pixel_scale);
     // Semantics resolve AFTER layout (that is when Clay has bounding boxes) and BEFORE the probe, so a probe that inspects the tree sees resolved geometry.
     if (options.resolve_semantics) {

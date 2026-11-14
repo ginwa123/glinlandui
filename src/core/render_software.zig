@@ -1,4 +1,4 @@
-//! Portable software rasterizer — the reference renderer for glinlandui.
+// Portable software rasterizer — the reference renderer for glinlandui.
 const std = @import("std");
 const cl = @import("zclay");
 const glyphs = @import("glyphs.zig");
@@ -13,15 +13,15 @@ pub const coverUv = common.coverUv;
 pub const containBox = common.containBox;
 pub const hashImageKey = common.hashImageKey;
 
-/// Placeholder color drawn when an image cannot be decoded (mirrors `img_placeholder = 0x1a1a1a` in the GLES3 backend).
+// Placeholder color drawn when an image cannot be decoded (mirrors `img_placeholder = 0x1a1a1a` in the GLES3 backend).
 pub const img_placeholder: Color = .rgb(0x1a, 0x1a, 0x1a);
 
-/// Corner radii, ordered (top_left, top_right, bottom_left, bottom_right).
+// Corner radii, ordered (top_left, top_right, bottom_left, bottom_right).
 const R4 = [4]f32;
 
 // ---- Signed distance field ----
 
-/// Rounded-box signed distance for a sample in LOCAL box space, where the box spans [0,bx*2] x [0,by*2] and the sample is centred at the origin.
+// Rounded-box signed distance for a sample in LOCAL box space, where the box spans [0,bx*2] x [0,by*2] and the sample is centred at the origin.
 inline fn sdRoundBox(px: f32, py: f32, bx: f32, by: f32, r: R4) f32 {
     // v_box grows downward, so p.y < 0 is the top half and p.x < 0 the left.
     const rad = if (px < 0.0)
@@ -35,12 +35,12 @@ inline fn sdRoundBox(px: f32, py: f32, bx: f32, by: f32, r: R4) f32 {
     return @sqrt(mx * mx + my * my) + @min(@max(qx, qy), 0.0) - rad;
 }
 
-/// 1px antialias band: exactly 1.0 when the sample is >= half a pixel inside, 0.0 when half a pixel outside, linear in between.
+// 1px antialias band: exactly 1.0 when the sample is >= half a pixel inside, 0.0 when half a pixel outside, linear in between.
 inline fn cov(d: f32) f32 {
     return @min(@max(0.5 - d, 0.0), 1.0);
 }
 
-/// Fragment coverage for a rounded box.
+// Fragment coverage for a rounded box.
 pub fn fragRoundBox(
     vbox_x: f32,
     vbox_y: f32,
@@ -81,17 +81,17 @@ pub fn fragRoundBox(
 
 // ---- Framebuffer ----
 
-/// A decoded RGBA8 image, top-left origin, row 0 = top.
+// A decoded RGBA8 image, top-left origin, row 0 = top.
 pub const Image = struct {
     width: u32,
     height: u32,
     pixels: []const u8, // RGBA8, width*height*4 bytes
 };
 
-/// The scissor region, top-down, half-open on the max edges.
+// The scissor region, top-down, half-open on the max edges.
 const Scissor = struct { x0: i64, y0: i64, x1: i64, y1: i64 };
 
-/// An RGBA8 software framebuffer plus a scissor stack of depth 1.
+// An RGBA8 software framebuffer plus a scissor stack of depth 1.
 pub const Surface = struct {
     alloc: std.mem.Allocator,
     width: u32,
@@ -113,7 +113,7 @@ pub const Surface = struct {
         self.images.deinit(self.alloc);
     }
 
-    /// Reallocate the framebuffer at a new size and clear it.
+    // Reallocate the framebuffer at a new size and clear it.
     pub fn resize(self: *Surface, width: u32, height: u32) !void {
         if (width == 0 or height == 0) return error.InvalidSize;
         if (self.width == width and self.height == height) return;
@@ -126,7 +126,7 @@ pub const Surface = struct {
         self.clear();
     }
 
-    /// Fill the whole framebuffer with the stored clear color (opaque).
+    // Fill the whole framebuffer with the stored clear color (opaque).
     pub fn clear(self: *Surface) void {
         const r = clamp8(self.clear_rgb[0]);
         const g = clamp8(self.clear_rgb[1]);
@@ -141,7 +141,7 @@ pub const Surface = struct {
         self.scissor = null;
     }
 
-    /// Set the color used by `clear` (0-255 RGBA; alpha forced opaque).
+    // Set the color used by `clear` (0-255 RGBA; alpha forced opaque).
     pub fn setClearColor(self: *Surface, color: [4]f32) void {
         self.clear_rgb = color;
     }
@@ -150,7 +150,7 @@ pub const Surface = struct {
         try self.images.put(self.alloc, key, img);
     }
 
-    /// Read one pixel as 0-255 RGBA. Out-of-bounds reads return transparent.
+    // Read one pixel as 0-255 RGBA. Out-of-bounds reads return transparent.
     pub fn px(self: *const Surface, x: i64, y: i64) [4]u8 {
         if (x < 0 or y < 0 or x >= self.width or y >= self.height) return .{ 0, 0, 0, 0 };
         const i = @as(usize, @intCast(y)) * self.width * 4 + @as(usize, @intCast(x)) * 4;
@@ -171,7 +171,7 @@ pub const Surface = struct {
 
     // ---- drawing primitives ----
 
-    /// Rasterize one axis-aligned rounded box with straight-alpha blending.
+    // Rasterize one axis-aligned rounded box with straight-alpha blending.
     pub fn drawBox(
         self: *Surface,
         x: f32,
@@ -197,7 +197,9 @@ pub const Surface = struct {
         const y1 = @min(@as(i64, @intFromFloat(@floor(y + h - 0.5))), @as(i64, self.height) - 1);
         if (x0 > x1 or y0 > y1) return;
 
-        // FAST PATH: a square-cornered box is a plain fill, and evaluating the rounded-box SDF per pixel for one is what made a full-width row cost a millisecond.
+        // FAST PATH: a square-cornered box is a plain fill, and evaluating the rounded-box SDF per pixel for one is what made a full-width row cost a
+
+        // millisecond.
         if (radius[0] <= 0 and radius[1] <= 0 and radius[2] <= 0 and radius[3] <= 0 and mode == 0 and border_w <= 0) {
             const r8 = to8(rgb[0]);
             const g8 = to8(rgb[1]);
@@ -252,7 +254,7 @@ pub const Surface = struct {
         }
     }
 
-    /// Sample an image with bilinear filtering and CLAMP_TO_EDGE addressing, matching the GLES3 texture sampler.
+    // Sample an image with bilinear filtering and CLAMP_TO_EDGE addressing, matching the GLES3 texture sampler.
     fn sampleBilinear(img: Image, u: f32, v: f32) [4]f32 {
         const tw: f32 = @floatFromInt(img.width);
         const th: f32 = @floatFromInt(img.height);
@@ -279,7 +281,7 @@ pub const Surface = struct {
         return acc;
     }
 
-    /// Blit a texture into a box with the given UV window (u0,v0,u1,v1), sampling bilinearly and blending straight-alpha over the destination.
+    // Blit a texture into a box with the given UV window (u0,v0,u1,v1), sampling bilinearly and blending straight-alpha over the destination.
     pub fn drawImageQuad(
         self: *Surface,
         img: Image,
@@ -315,7 +317,7 @@ pub const Surface = struct {
         }
     }
 
-    /// Fill the whole framebuffer with a single straight color.
+    // Fill the whole framebuffer with a single straight color.
     pub fn fill(self: *Surface, color: [4]f32) void {
         const n = normalizeColor(color);
         for (0..self.height) |y| {
@@ -327,7 +329,7 @@ pub const Surface = struct {
 
     // ---- command dispatch ----
 
-    /// Render a slice of Clay render commands into the surface, in order.
+    // Render a slice of Clay render commands into the surface, in order.
     pub fn renderCommands(self: *Surface, commands: []const cl.RenderCommand) void {
         const k = render_scale;
         for (commands) |cmd| {
@@ -418,7 +420,7 @@ pub const Surface = struct {
         }
     }
 
-    /// Rasterize a text run with real glyphs.
+    // Rasterize a text run with real glyphs.
     pub fn drawTextRun(
         self: *Surface,
         bbox_x: f32,
@@ -483,7 +485,7 @@ pub const Surface = struct {
         }
     }
 
-    /// The deterministic per-byte rect fallback used for text when no glyph backend is available.
+    // The deterministic per-byte rect fallback used for text when no glyph backend is available.
     pub fn drawTextRunFallback(
         self: *Surface,
         bbox_x: f32,
@@ -528,7 +530,7 @@ pub const Surface = struct {
 
 const noRadius: R4 = .{ 0, 0, 0, 0 };
 
-/// Map a Clay CornerRadius to the (TL, TR, BL, BR) order, clamping negatives to zero.
+// Map a Clay CornerRadius to the (TL, TR, BL, BR) order, clamping negatives to zero.
 pub fn cornerRadiusVec4(r: cl.CornerRadius) R4 {
     return .{
         @max(r.top_left, 0),
@@ -538,14 +540,14 @@ pub fn cornerRadiusVec4(r: cl.CornerRadius) R4 {
     };
 }
 
-/// Convert a 0-255 (or 0-1) RGBA color to normalized 0..1, auto-detecting range exactly like the GLES3 `mx <= 1.0` heuristic.
+// Convert a 0-255 (or 0-1) RGBA color to normalized 0..1, auto-detecting range exactly like the GLES3 `mx <= 1.0` heuristic.
 fn normalizeColor(color: [4]f32) [4]f32 {
     const mx = @max(@max(color[0], color[1]), @max(color[2], color[3]));
     if (mx <= 1.0) return color;
     return .{ color[0] / 255.0, color[1] / 255.0, color[2] / 255.0, color[3] / 255.0 };
 }
 
-/// Clamp an already-0-255 float to a u8 (no 0..1 rescaling).
+// Clamp an already-0-255 float to a u8 (no 0..1 rescaling).
 fn clamp8(v: f32) u8 {
     const s = @round(v);
     if (s <= 0) return 0;
@@ -553,7 +555,7 @@ fn clamp8(v: f32) u8 {
     return @intFromFloat(s);
 }
 
-/// Quantize a 0..1 float to 0..255 with round-half-up and clamping.
+// Quantize a 0..1 float to 0..255 with round-half-up and clamping.
 fn to8(v: f32) u8 {
     const s = @round(v * 255.0);
     if (s <= 0) return 0;
@@ -563,7 +565,7 @@ fn to8(v: f32) u8 {
 
 // ---- Renderer (matches the frame.zig Renderer contract) ----
 
-/// Adapter so the software surface plugs into the same `render.Renderer` interface frame.zig already calls (`init`, `deinit`, `drawCommands`).
+// Adapter so the software surface plugs into the same `render.Renderer` interface frame.zig already calls (`init`, `deinit`, `drawCommands`).
 pub const Renderer = struct {
     surface: Surface,
 
@@ -593,28 +595,27 @@ pub const Renderer = struct {
     }
 };
 
-/// True once a glyph-bearing font is available, so the fallback can be skipped.
-///
-/// The face comes from `text_face`, which is the SAME face the layout measures with — one font, so a run's measured
-/// width is exactly the width the rasteriser advances its pen by.
+// True once a glyph-bearing font is available, so the fallback can be skipped. The face comes from `text_face`, which is the SAME face the layout
+
+// measures with — one font, so a run's measured width is exactly the width the rasteriser advances its pen by.
 pub fn hasGlyphFont() bool {
     return text_face.font() != null;
 }
 
-/// The device-pixel scale the surface is rendered at: 2.0 on a Retina display, 1.0 elsewhere.
+// The device-pixel scale the surface is rendered at: 2.0 on a Retina display, 1.0 elsewhere.
 var render_scale: f32 = 1.0;
 
-/// Set the device scale. Values at or below zero are ignored.
+// Set the device scale. Values at or below zero are ignored.
 pub fn setRenderScale(s: f32) void {
     render_scale = if (s > 0) s else 1.0;
 }
 
-/// The current device scale.
+// The current device scale.
 pub fn renderScale() f32 {
     return render_scale;
 }
 
-/// The surface the most recent `drawCommands` wrote to.
+// The surface the most recent `drawCommands` wrote to.
 var current_surface: ?*Surface = null;
 
 pub fn currentSurface() ?*Surface {

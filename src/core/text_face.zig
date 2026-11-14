@@ -1,14 +1,14 @@
-//! The one face: text is MEASURED with the font that DRAWS it.
-//!
-//! This file exists because the two used to disagree. Clay lays a run out with the measure callback, and the
-//! software rasteriser draws it with real glyphs; while the callback answered from an estimate (`len * size * 0.6`)
-//! every text box was the wrong width, a caret placed from a measurement drifted off the glyphs, and a run could
-//! overflow the box that was supposed to hold it. Nothing caught it, because the estimate was also what the tests
-//! measured against.
-//!
-//! So: one face, one measurement, used by the layout and by the rasteriser. When the host has no font file (a bare
-//! CI runner, wasm), the estimator is the fallback — and `fontAvailable()` says which one you got, so a test can
-//! skip or assert accordingly instead of silently measuring against a fiction.
+// The one face: text is MEASURED with the font that DRAWS it. This file exists because the two used to disagree. Clay lays a run out with the measure
+
+// callback, and the software rasteriser draws it with real glyphs; while the callback answered from an estimate (`len * size * 0.6`) every text box was
+
+// the wrong width, a caret placed from a measurement drifted off the glyphs, and a run could overflow the box that was supposed to hold it. Nothing
+
+// caught it, because the estimate was also what the tests measured against. So: one face, one measurement, used by the layout and by the rasteriser.
+
+// When the host has no font file (a bare CI runner, wasm), the estimator is the fallback — and `fontAvailable()` says which one you got, so a test can
+
+// skip or assert accordingly instead of silently measuring against a fiction.
 
 const std = @import("std");
 const glyphs = @import("glyphs.zig");
@@ -16,14 +16,15 @@ const estimator = @import("text_estimator.zig");
 
 pub const TextExtent = estimator.TextExtent;
 
-/// The process-wide face. Loaded once, from the installed font or the platform's candidate list.
+// The process-wide face. Loaded once, from the installed font or the platform's candidate list.
 var face: ?glyphs.Font = null;
 var load_tried: bool = false;
 
-/// The face this process measures and draws with, or null when no font file could be parsed.
+// The face this process measures and draws with, or null when no font file could be parsed.
 pub fn font() ?*glyphs.Font {
-    // A backend that installed a face owns its bytes; copy the struct, not the data. Checked every call, because a
-    // host can install its face after the first measurement.
+    // A backend that installed a face owns its bytes; copy the struct, not the data. Checked every call, because a host can install its face after the first
+
+    // measurement.
     if (glyphs.installedFont()) |f| {
         face = f.*;
         load_tried = true;
@@ -37,15 +38,14 @@ pub fn font() ?*glyphs.Font {
     return null;
 }
 
-/// True when text is measured with real metrics rather than the estimator.
+// True when text is measured with real metrics rather than the estimator.
 pub fn fontAvailable() bool {
     return font() != null;
 }
 
-/// The line height a text box reserves at `font_size`.
-///
-/// Deliberately the estimator's 1.2 * size and NOT the font's own ascent-descent: every layout in every consumer is
-/// tuned to that number, and the rasteriser centres the real line box inside it anyway.
+// The line height a text box reserves at `font_size`. Deliberately the estimator's 1.2 * size and NOT the font's own ascent-descent: every layout in
+
+// every consumer is tuned to that number, and the rasteriser centres the real line box inside it anyway.
 pub fn lineHeight(font_size: u16) f32 {
     return estimator.estimatorExtent("", font_size).h;
 }
@@ -73,7 +73,7 @@ fn cachePut(hash: u64, w: f32) void {
     cache_next = (cache_next + 1) % cache_size;
 }
 
-/// Drop the cached widths (and re-probe the font on the next call). For tests and for a font hot-swap.
+// Drop the cached widths (and re-probe the font on the next call). For tests and for a font hot-swap.
 pub fn reset() void {
     for (&cache) |*e| e.valid = false;
     cache_next = 0;
@@ -81,10 +81,11 @@ pub fn reset() void {
     face = null;
 }
 
-/// Width and line height of `text` at `font_size`, measured with the face that draws it.
-///
-/// The width is the sum of the glyph advances — exactly what the rasteriser advances its pen by, so a run can never
-/// be wider than the box the layout gave it, and a caret placed at a measured offset lands on the glyph boundary.
+// Width and line height of `text` at `font_size`, measured with the face that draws it. The width is the sum of the glyph advances — exactly what the
+
+// rasteriser advances its pen by, so a run can never be wider than the box the layout gave it, and a caret placed at a measured offset lands on the
+
+// glyph boundary.
 pub fn measureText(text: []const u8, font_size: u16) TextExtent {
     const h = lineHeight(font_size);
     if (text.len == 0) return .{ .w = 0, .h = h };

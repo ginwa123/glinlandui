@@ -1,21 +1,21 @@
-//! Shared, platform-neutral window contract + tests.
+// Shared, platform-neutral window contract + tests.
 const std = @import("std");
 const consts = @import("protocol_consts.zig");
 
-/// Centered top-left corner of the default 720x480 window.
+// Centered top-left corner of the default 720x480 window.
 pub const Placement = struct {
     x: i32,
     y: i32,
 };
 
-/// 5.1: center the 720x480 window in the output; clamp to 0,0 when the output is smaller than the window.
+// 5.1: center the 720x480 window in the output; clamp to 0,0 when the output is smaller than the window.
 pub fn computePlacement(out_w: u32, out_h: u32) Placement {
     const x: i32 = if (out_w > 720) @intCast((out_w - 720) / 2) else 0;
     const y: i32 = if (out_h > 480) @intCast((out_h - 480) / 2) else 0;
     return .{ .x = x, .y = y };
 }
 
-/// Tiled window size limits: min 520x360.
+// Tiled window size limits: min 520x360.
 pub const min_width: u32 = 520;
 pub const min_height: u32 = 360;
 
@@ -25,12 +25,12 @@ pub fn clampSize(w: u32, h: u32) struct { w: u32, h: u32 } {
     return .{ .w = cw, .h = ch };
 }
 
-/// Escape closes the window.
+// Escape closes the window.
 pub fn keyToClose(keycode: u32) bool {
     return keycode == 1 or keycode == 0xff1b;
 }
 
-/// Legacy (layer-shell era): centred anchor = all four edges.
+// Legacy (layer-shell era): centred anchor = all four edges.
 pub fn centeredAnchor() u32 {
     return consts.LayerAnchor.top |
         consts.LayerAnchor.bottom |
@@ -38,7 +38,7 @@ pub fn centeredAnchor() u32 {
         consts.LayerAnchor.right;
 }
 
-/// Legacy fixed surface size 720x480.
+// Legacy fixed surface size 720x480.
 pub const LayerSize = struct {
     w: u32,
     h: u32,
@@ -48,17 +48,17 @@ pub fn layerSize() LayerSize {
     return .{ .w = 720, .h = 480 };
 }
 
-/// The canonical EGL config attribute list (shared, platform-neutral).
+// The canonical EGL config attribute list (shared, platform-neutral).
 pub const eglConfigAttribs = consts.eglConfigAttribs;
 
-/// Parse QS_SETTINGS_TEST_FRAMES — null/empty/invalid means "run forever".
+// Parse QS_SETTINGS_TEST_FRAMES — null/empty/invalid means "run forever".
 pub fn parseTestFrames(env: ?[]const u8) ?u32 {
     const s = std.mem.trim(u8, env orelse return null, " \t\r\n");
     if (s.len == 0) return null;
     return std.fmt.parseInt(u32, s, 10) catch null;
 }
 
-/// Engine-side motion dedup (memoized immediate, input half): hover floods and sub-pixel repeats must not dirty the frame loop.
+// Engine-side motion dedup (memoized immediate, input half): hover floods and sub-pixel repeats must not dirty the frame loop.
 pub fn pointerPosChanged(old_x: f32, old_y: f32, new_x: f32, new_y: f32) bool {
     const ox: i32 = @intFromFloat(@floor(old_x));
     const oy: i32 = @intFromFloat(@floor(old_y));
@@ -67,12 +67,12 @@ pub fn pointerPosChanged(old_x: f32, old_y: f32, new_x: f32, new_y: f32) bool {
     return ox != nx or oy != ny;
 }
 
-/// Wayland 24.8 fixed-point → float.
+// Wayland 24.8 fixed-point → float.
 pub fn fixedToFloat(f: i32) f32 {
     return @as(f32, @floatFromInt(f)) / 256.0;
 }
 
-/// On-demand frame scheduler decision (pure, unit-tested).
+// On-demand frame scheduler decision (pure, unit-tested).
 pub const FrameStep = enum { draw, kick, idle };
 
 pub fn frameStep(frame_done: bool, needs_draw: bool, frame_pending: bool) FrameStep {
@@ -82,14 +82,14 @@ pub fn frameStep(frame_done: bool, needs_draw: bool, frame_pending: bool) FrameS
     return .idle;
 }
 
-/// A width/height pair.
+// A width/height pair.
 pub const LayoutSize = struct { w: u32, h: u32 };
 
-/// The space a pointer event must be translated in: the size the LAST completed layout used.
-///
-/// A resize is coalesced and adopted inside a frame, so `WindowState.win_w/win_h` can already be the new size while the
-/// boxes on screen came from the old one. Flipping y in the new space is what made a click land a little above the
-/// element it hit -- and the cursor shape, resolved from the same point, went with it.
+// The space a pointer event must be translated in: the size the LAST completed layout used. A resize is coalesced and adopted inside a frame, so
+
+// `WindowState.win_w/win_h` can already be the new size while the boxes on screen came from the old one. Flipping y in the new space is what made a
+
+// click land a little above the element it hit -- and the cursor shape, resolved from the same point, went with it.
 pub fn pointerSpace(layout_w: u32, layout_h: u32, win_w: u32, win_h: u32) LayoutSize {
     return .{
         .w = if (layout_w != 0) layout_w else win_w,
@@ -97,7 +97,7 @@ pub fn pointerSpace(layout_w: u32, layout_h: u32, win_w: u32, win_h: u32) Layout
     };
 }
 
-/// Toolkit-style window configuration shared by both backends.
+// Toolkit-style window configuration shared by both backends.
 pub const WindowConfig = struct {
     app_id: [*:0]const u8 = "qs-settings",
     title: [*:0]const u8 = "Settings",
@@ -107,21 +107,21 @@ pub const WindowConfig = struct {
     min_height: u32 = 360,
 };
 
-/// UI delegate: the backend owns the window/present; the delegate draws in on_frame and receives input/lifecycle callbacks.
+// UI delegate: the backend owns the window/present; the delegate draws in on_frame and receives input/lifecycle callbacks.
 pub const Delegate = struct {
     ptr: *anyopaque,
     on_frame: *const fn (*anyopaque, w: u32, h: u32) void,
     on_pointer: *const fn (*anyopaque, x: f32, y: f32, pressed: bool, button: u32) void,
     on_scroll: ?*const fn (*anyopaque, dx: f32, dy: f32) void = null,
     on_key: *const fn (*anyopaque, keycode: u32, pressed: bool) bool,
-    /// Text a printable key produced, already composed by the platform (Caps Lock, Shift, layout).
+    // Text a printable key produced, already composed by the platform (Caps Lock, Shift, layout).
     on_text: ?*const fn (*anyopaque, text: []const u8) void = null,
     on_resize: *const fn (*anyopaque, w: u32, h: u32) void,
     on_close: *const fn (*anyopaque) void,
     is_quit: *const fn (*anyopaque) bool,
 };
 
-/// A backend-neutral window: the state every backend shares.
+// A backend-neutral window: the state every backend shares.
 pub const WindowState = struct {
     config: WindowConfig,
     delegate: ?Delegate = null,
@@ -144,7 +144,7 @@ pub const WindowState = struct {
         };
     }
 
-    /// 0 in a dimension defers to the client -> config default size; otherwise max(dim, config min).
+    // 0 in a dimension defers to the client -> config default size; otherwise max(dim, config min).
     pub fn clamp(self: WindowState, w: u32, h: u32) struct { w: u32, h: u32 } {
         const cw = if (w == 0) self.config.width else @max(w, self.config.min_width);
         const ch = if (h == 0) self.config.height else @max(h, self.config.min_height);

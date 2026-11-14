@@ -2,7 +2,7 @@ const std = @import("std");
 
 // glinlandui: platform-agnostic Clay GUI library.
 
-/// Generated Wayland protocol artifacts (client header + private-code TU).
+// Generated Wayland protocol artifacts (client header + private-code TU).
 const NativeProtocols = struct {
     xdg: WaylandProtocol,
     layer_shell: WaylandProtocol,
@@ -46,6 +46,15 @@ pub fn build(b: *std.Build) void {
 
     // Hosts the file-dialog example is wired for.
     const dlg_supported = is_linux or is_macos or is_windows;
+
+    // The lazy-scroll demo exists to show a frame budget, so it ships optimized by default (Debug is ~6x slower per frame and would report a number that no
+
+    // user sees). Override with `-Dlazy-optimize=Debug` when profiling.
+    const lazy_optimize = b.option(
+        std.builtin.OptimizeMode,
+        "lazy-optimize",
+        "Optimize mode for the lazy-scroll example (default: ReleaseSafe)",
+    ) orelse .ReleaseSafe;
 
     // ---- vendored zclay Zig bindings (moved from qs build.zig) ---- ONE `zclay` instance per TARGET, and the Clay archive it links must be built for that.
     const zclay_mod = b.createModule(.{
@@ -317,6 +326,53 @@ pub fn build(b: *std.Build) void {
         });
     }
 
+    // ---- Example app: 10,000 rows, virtualised ---- The performance demo: the frame cost of a scroll must depend on the window, not on the data.
+    var lazy_test: ?*std.Build.Step.Compile = null;
+    if (calc_supported) {
+        const lazy_mod = b.createModule(.{
+            .root_source_file = b.path("examples/lazy_scroll.zig"),
+            .target = target,
+            .optimize = lazy_optimize,
+            .imports = &.{
+                .{ .name = "glinlandui", .module = mod },
+            },
+        });
+        const lazy = b.addExecutable(.{
+            .name = "glinlandui-lazy-scroll",
+            .root_module = lazy_mod,
+        });
+        // The clay archive is built for the dependency's mode (Debug), and a Debug C build is instrumented with UBSan; a ReleaseSafe root must therefore bundle
+
+        // the runtime that satisfies those references.
+        lazy.bundle_compiler_rt = true;
+        b.installArtifact(lazy);
+
+        const run_lazy_step = b.step("run-lazy-scroll", "Run the 10,000-row lazy-scroll example");
+        const run_lazy = b.addRunArtifact(lazy);
+        run_lazy_step.dependOn(&run_lazy.step);
+        run_lazy.step.dependOn(b.getInstallStep());
+        if (b.args) |args| {
+            run_lazy.addArgs(args);
+        }
+
+        // The frame-time measurement: no window, no vsync, just the frame the toolkit produces.
+        const bench_lazy_step = b.step("bench-lazy-scroll", "Measure the lazy-scroll frame times (headless)");
+        const bench_lazy = b.addRunArtifact(lazy);
+        bench_lazy.addArgs(&.{ "--bench", "600" });
+        bench_lazy_step.dependOn(&bench_lazy.step);
+
+        lazy_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/lazy_scroll.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "glinlandui", .module = mod },
+                },
+            }),
+        });
+    }
+
     // ---- Example app: the file dialog ---- The "how to use" for `glinlandui.file_dialog`, and the only example in this repository whose subject is an API.
     var dlg_test: ?*std.Build.Step.Compile = null;
     if (dlg_supported) {
@@ -422,6 +478,9 @@ pub fn build(b: *std.Build) void {
     if (calc_e2e_test) |e2e| {
         test_step.dependOn(&b.addRunArtifact(e2e).step);
     }
+    if (lazy_test) |lazy| {
+        test_step.dependOn(&b.addRunArtifact(lazy).step);
+    }
     // The file-dialog example's tests, for the same reason and with the same caveat: they are portable because `platform.zig` picks the PORTABLE dialog.
     if (dlg_test) |dlg| {
         test_step.dependOn(&b.addRunArtifact(dlg).step);
@@ -458,7 +517,7 @@ pub fn build(b: *std.Build) void {
     lines_check.dependOn(&run_lines_check.step);
 }
 
-/// The vendored `zclay` bindings, built for a wasm target and linked against a wasm-targeted Clay.
+// The vendored `zclay` bindings, built for a wasm target and linked against a wasm-targeted Clay.
 fn makeWebZclay(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -473,7 +532,7 @@ fn makeWebZclay(
     return z;
 }
 
-/// Clay, compiled for `target`.
+// Clay, compiled for `target`.
 fn makeClay(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -490,7 +549,12 @@ fn makeClay(
             \\#include <clay.h>
             \\
         ),
-        .flags = &.{"-ffreestanding"},
+        // `-fno-sanitize=undefined` is load-bearing: Zig instruments C sources in a Debug build, and the resulting ubsan references are NOT satisfied when a
+
+        // ReleaseSafe root links this archive (undefined symbol: ___ubsan_handle_add_overflow). Clay is a vendored header we do not change, so its C UB checks
+
+        // earn nothing and cost frame time.
+        .flags = &.{ "-ffreestanding", "-fno-sanitize=undefined" },
     });
     return b.addLibrary(.{
         .name = "clay",
@@ -499,7 +563,7 @@ fn makeClay(
     });
 }
 
-/// Serve `zig-out/web` and print the URL — what "run" means for a webapp.
+// Serve `zig-out/web` and print the URL — what "run" means for a webapp.
 fn serve_and_print(b: *std.Build, app: []const u8) *std.Build.Step.Run {
     const url = if (std.mem.eql(u8, app, "calculator"))
         "http://localhost:8080/?app=calculator"
@@ -516,7 +580,7 @@ fn serve_and_print(b: *std.Build, app: []const u8) *std.Build.Step.Run {
     return cmd;
 }
 
-/// The `glinlandui` module for a wasm target.
+// The `glinlandui` module for a wasm target.
 fn makeWebModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -538,7 +602,7 @@ fn makeWebModule(
     return m;
 }
 
-/// A module exposing the webapp's font as `pub const bytes: []const u8`.
+// A module exposing the webapp's font as `pub const bytes: []const u8`.
 fn makeFontModule(b: *std.Build, path: ?[]const u8) *std.Build.Module {
     const src = path orelse {
         // No font: an empty module, so the entry point's `if (bytes.len == 0)` takes the glyph-free path.
@@ -590,7 +654,7 @@ fn makeFontModule(b: *std.Build, path: ?[]const u8) *std.Build.Module {
     return b.createModule(.{ .root_source_file = generated });
 }
 
-/// The first font in a short per-host list that exists, or null.
+// The first font in a short per-host list that exists, or null.
 fn detectFont() ?[]const u8 {
     const candidates = [_][]const u8{
         // Linux.
@@ -609,7 +673,7 @@ fn detectFont() ?[]const u8 {
     return null;
 }
 
-/// True when `path` names a readable file.
+// True when `path` names a readable file.
 fn fileExists(path: []const u8) bool {
     const io = std.Io.Threaded.global_single_threaded.io();
     const f = std.Io.Dir.cwd().openFile(io, path, .{}) catch return false;
@@ -617,7 +681,7 @@ fn fileExists(path: []const u8) bool {
     return true;
 }
 
-/// Win32 + D3D11 shim TU, its include path, and the import libraries its entry points live in.
+// Win32 + D3D11 shim TU, its include path, and the import libraries its entry points live in.
 fn addWindowsShim(b: *std.Build, m: *std.Build.Module) void {
     m.addIncludePath(b.path("src/windows"));
     // No extra flags: shim.c defines COBJMACROS itself, before it includes anything.
@@ -632,17 +696,17 @@ fn addWindowsShim(b: *std.Build, m: *std.Build.Module) void {
     m.linkSystemLibrary("ole32", .{});
 }
 
-/// Keep the stb implementation headers identical on every Linux runner and independent of the host distribution's stb package version.
+// Keep the stb implementation headers identical on every Linux runner and independent of the host distribution's stb package version.
 fn addVendoredStbInclude(b: *std.Build, m: *std.Build.Module) void {
     m.addIncludePath(b.path("vendor/stb"));
 }
 
-/// Extra C flags a vendored stb TU needs, per target.
+// Extra C flags a vendored stb TU needs, per target.
 fn stbFlags(is_wasm: bool) []const []const u8 {
     return if (is_wasm) &.{ "-DSTBI_NO_STDIO=1", "-DSTBIR_NO_SIMD=1" } else &.{};
 }
 
-/// Pangocairo shim: compiles src/linux/shim.c (real pango/cairo includes) and exposes src/linux/ for @cImport("shim.h").
+// Pangocairo shim: compiles src/linux/shim.c (real pango/cairo includes) and exposes src/linux/ for @cImport("shim.h").
 fn addPangoShim(b: *std.Build, m: *std.Build.Module) void {
     // src/linux, not src/: the shim header moved into the Linux backend folder with its TU, and @cInclude("shim.h") from linux/text.zig and.
     m.addIncludePath(b.path("src/linux"));
@@ -664,7 +728,7 @@ fn addPangoShim(b: *std.Build, m: *std.Build.Module) void {
     });
 }
 
-/// Text-engine system libs: pangocairo stack.
+// Text-engine system libs: pangocairo stack.
 fn linkTextEngine(m: *std.Build.Module) void {
     m.linkSystemLibrary("cairo", .{});
     m.linkSystemLibrary("pango-1.0", .{});
@@ -698,7 +762,7 @@ fn genWaylandProtocol(
     return .{ .header = header, .code = code };
 }
 
-/// The single root for the Linux-only `native-test` step.
+// The single root for the Linux-only `native-test` step.
 fn makeNativeTestStep(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -731,7 +795,7 @@ fn makeNativeTestStep(
     return &b.addRunArtifact(test_exe).step;
 }
 
-/// Linker stub for the cursor-shape protocol's tablet-tool dependency.
+// Linker stub for the cursor-shape protocol's tablet-tool dependency.
 fn addTabletToolStub(b: *std.Build, m: *std.Build.Module) void {
     m.addCSourceFile(.{ .file = b.addWriteFiles().add("tablet_tool_stub.c",
         \\struct wl_interface {

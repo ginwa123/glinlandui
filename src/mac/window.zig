@@ -1,4 +1,4 @@
-//! Real macOS window backend (Cocoa/AppKit).
+// Real macOS window backend (Cocoa/AppKit).
 
 const std = @import("std");
 const log = @import("../core/log.zig");
@@ -36,7 +36,7 @@ pub const frameStep = contract.frameStep;
 pub const WindowConfig = contract.WindowConfig;
 pub const Delegate = contract.Delegate;
 
-/// Headless-render result, kept identical to `core/window_portable.zig` so code that calls `renderHeadless()` works on both backends.
+// Headless-render result, kept identical to `core/window_portable.zig` so code that calls `renderHeadless()` works on both backends.
 pub const RenderResult = struct {
     width: u32,
     height: u32,
@@ -45,21 +45,21 @@ pub const RenderResult = struct {
 
 pub const Window = struct {
     state: contract.WindowState = contract.WindowState.init(.{}),
-    /// Same public field name as the other backends, so `window.delegate = host.delegate()` is one line on every platform.
+    // Same public field name as the other backends, so `window.delegate = host.delegate()` is one line on every platform.
     delegate: ?Delegate = null,
 
-    /// The Cocoa handle, null until `run()` (or `renderHeadless()`) creates it.
+    // The Cocoa handle, null until `run()` (or `renderHeadless()`) creates it.
     handle: ?*c.GlinCocoaWindow = null,
-    /// The blit destination, allocated on first use and reused every frame.
+    // The blit destination, allocated on first use and reused every frame.
     blit_buf: []u8 = &.{},
-    /// The cursor shape last handed to AppKit, so a frame that did not change it costs nothing.
+    // The cursor shape last handed to AppKit, so a frame that did not change it costs nothing.
     last_shape: u32 = 0,
-    /// The size the last completed layout used; the pointer is flipped in THIS space, never a pending one.
+    // The size the last completed layout used; the pointer is flipped in THIS space, never a pending one.
     layout_w: u32 = 0,
     layout_h: u32 = 0,
-    /// Is the primary button currently held?
+    // Is the primary button currently held?
     left_held: bool = false,
-    /// Frames composited so far.
+    // Frames composited so far.
     diag_frames: u32 = 0,
 
     pub fn init(alloc: std.mem.Allocator, config: WindowConfig) Window {
@@ -76,7 +76,7 @@ pub const Window = struct {
         return self.delegate;
     }
 
-    /// Open a real window and run the AppKit event loop.
+    // Open a real window and run the AppKit event loop.
     pub fn run(self: *Window) !void {
         // Headless test builds must never touch Cocoa: `zig build test` runs on every platform and must not need a window server.
         if (builtin.is_test) return;
@@ -107,8 +107,9 @@ pub const Window = struct {
             self,
         );
 
-        // The window may not be the size that was asked for: macOS constrains it to the screen's visible frame and sends
-        // no resize for that, so the first frame would lay out at a size the view does not have.
+        // The window may not be the size that was asked for: macOS constrains it to the screen's visible frame and sends no resize for that, so the first frame
+
+        // would lay out at a size the view does not have.
         var cw: c_int = 0;
         var ch: c_int = 0;
         c.glin_cocoa_content_size(handle, &cw, &ch);
@@ -142,7 +143,7 @@ pub const Window = struct {
         return @ptrCast(@alignCast(p.?));
     }
 
-    /// `-drawRect:`.
+    // `-drawRect:`.
     fn onFrame(p: ?*anyopaque) callconv(.c) void {
         const self = ctx(p);
         // Adopt a coalesced resize FIRST (macos_adapter): the frame must lay out at the size it is about to draw, or the pointer space and the boxes disagree.
@@ -167,7 +168,14 @@ pub const Window = struct {
         self.presentFrame();
     }
 
-    /// Apply the cursor shape the frame resolved, when it changed.
+    // Start or stop the frame pump. An app with its own animation calls this with `true` while it is running and `false` when it stops; the pump redraws at
+
+    // the display's refresh rate in between.
+    pub fn setAnimating(self: *Window, on: bool) void {
+        if (self.handle) |handle| c.glin_cocoa_set_animating(handle, if (on) 1 else 0);
+    }
+
+    // Apply the cursor shape the frame resolved, when it changed.
     fn applyCursor(self: *Window) void {
         if (self.handle == null) return;
         const shape = frame_mod.currentShape();
@@ -176,7 +184,7 @@ pub const Window = struct {
         c.glin_cocoa_set_cursor(@intCast(shape));
     }
 
-    /// Copy the surface the delegate just drew into the shim's bitmap.
+    // Copy the surface the delegate just drew into the shim's bitmap.
     fn presentFrame(self: *Window) void {
         const handle = self.handle orelse return;
         const surface = soft.currentSurface() orelse return;
@@ -195,7 +203,7 @@ pub const Window = struct {
         c.glin_cocoa_present(handle, self.blit_buf.ptr, @intCast(surface.width), @intCast(surface.height));
     }
 
-    /// Apply a coalesced resize.
+    // Apply a coalesced resize.
     fn onResized(_: *Window) void {}
 
     fn onPointer(
@@ -284,7 +292,7 @@ pub const Window = struct {
         c.glin_cocoa_quit(self.handle);
     }
 
-    /// Drive one real frame into a software surface and report what was drawn.
+    // Drive one real frame into a software surface and report what was drawn.
     pub fn renderHeadless(self: *Window) !RenderResult {
         const d = self.delegate orelse return error.NoDelegate;
         const w = self.state.win_w;
@@ -308,14 +316,14 @@ pub const Window = struct {
     }
 };
 
-/// Write raw bytes to a file.
+// Write raw bytes to a file.
 fn dumpRaw(path: [*:0]const u8, bytes: []const u8) void {
     const f = std.c.fopen(path, "wb") orelse return;
     _ = std.c.fwrite(bytes.ptr, 1, bytes.len, f);
     _ = std.c.fclose(f);
     std.log.info("wrote {d} raw bytes to {s}", .{ bytes.len, std.mem.span(path) });
 }
-/// macOS will NOT let an automated test screenshot this app's window without Screen Recording permission (`screencapture` then captures only the.
+// macOS will NOT let an automated test screenshot this app's window without Screen Recording permission (`screencapture` then captures only the.
 fn reportFirstFrame(bgra: []const u8, surface: *const soft.Surface) void {
     var painted: usize = 0;
     var i: usize = 0;

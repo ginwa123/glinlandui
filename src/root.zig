@@ -1,7 +1,7 @@
-//! glinlandui: platform-agnostic Clay GUI library.
+// glinlandui: platform-agnostic Clay GUI library.
 const builtin = @import("builtin");
 
-/// The composition root, exposed so an APPLICATION can reach the two things that genuinely differ between platforms: `platform.allocator` and.
+// The composition root, exposed so an APPLICATION can reach the two things that genuinely differ between platforms: `platform.allocator` and.
 pub const platform = @import("platform.zig");
 
 // Clay bindings re-export: ui consumers must use `glinlandui.zclay` (not a second `@import("zclay")`) so Clay types crossing the library boundary.
@@ -15,19 +15,19 @@ pub const render = @import("core/render.zig");
 pub const text = @import("core/text_backend.zig");
 pub const frame = @import("core/frame.zig");
 pub const host = @import("core/host.zig");
-/// The library's color type.
+// The library's color type.
 pub const Color = @import("core/color.zig").Color;
-/// Portable software rasterizer surface.
+// Portable software rasterizer surface.
 pub const software_render = @import("core/render_software.zig");
-/// Reusable, compositor-free UI test harness.
+// Reusable, compositor-free UI test harness.
 pub const testing = @import("core/testing/root.zig");
-/// Per-frame semantics model: the queryable node tree behind `testing.Driver.onNode*`, and the intended home for accessibility and the debug inspector.
+// Per-frame semantics model: the queryable node tree behind `testing.Driver.onNode*`, and the intended home for accessibility and the debug inspector.
 pub const semantics = @import("core/semantics.zig");
 
-/// The text model every field uses: buffer, caret, selection, and every edit and movement. A single-line field is this with the newline ignored.
+// The text model every field uses: buffer, caret, selection, and every edit and movement. A single-line field is this with the newline ignored.
 pub const text_editor = @import("core/text_editor.zig");
 
-/// Table virtualisation: which rows and columns to draw, given a scroll position.
+// Table virtualisation: which rows and columns to draw, given a scroll position.
 pub const table = @import("core/table.zig");
 
 // Pure utils (geometry / input / EGL / test-frames + legacy helpers).
@@ -43,11 +43,10 @@ pub const layerSize = platform.layerSize;
 pub const eglConfigAttribs = platform.eglConfigAttribs;
 pub const parseTestFrames = platform.parseTestFrames;
 
-/// Deprecated pre-split name for the window facade, kept so consumers that spelled it `glinlandui.wayland_lib.*` keep compiling.
+// Deprecated pre-split name for the window facade, kept so consumers that spelled it `glinlandui.wayland_lib.*` keep compiling.
 pub const wayland_lib = platform;
 
-/// The file / folder / save-target dialog.
-/// The system clipboard: `read(buf)` and `write(text)`. A no-op on a platform with no backend.
+// The file / folder / save-target dialog. The system clipboard: `read(buf)` and `write(text)`. A no-op on a platform with no backend.
 pub const clipboard = platform.clipboard;
 
 pub const file_dialog = struct {
@@ -62,14 +61,14 @@ pub const file_dialog = struct {
     pub const openFile = platform.file_dialog.openFile;
     pub const openFolder = platform.file_dialog.openFolder;
     pub const saveFile = platform.file_dialog.saveFile;
-    /// Whether this host can open a dialog at all — so a UI can hide the button rather than let the user click something that cannot work.
+    // Whether this host can open a dialog at all — so a UI can hide the button rather than let the user click something that cannot work.
     pub const available = platform.file_dialog.available;
 
-    /// A scriptable dialog a test installs, so the outcomes past the call — a selection, a cancellation, each backend error — are reachable without a.
+    // A scriptable dialog a test installs, so the outcomes past the call — a selection, a cancellation, each backend error — are reachable without a.
     pub const fake = @import("core/file_dialog_fake.zig");
 };
 
-/// The browser backend's modules, for the wasm entry point (`src/web_main.zig`).
+// The browser backend's modules, for the wasm entry point (`src/web_main.zig`).
 pub const web = struct {
     pub const window = @import("web/window.zig");
     pub const input = @import("web/input.zig");
@@ -78,9 +77,9 @@ pub const web = struct {
     pub const present = @import("web/present.zig");
     pub const renderer = @import("web/renderer.zig");
     pub const text = @import("web/text.zig");
-    /// The C-heap arithmetic.
+    // The C-heap arithmetic.
     pub const compat_heap = @import("web/compat_heap.zig");
-    /// The freestanding C runtime's `export fn` surface — `malloc`, `free`, `strtol`, the `str*` family.
+    // The freestanding C runtime's `export fn` surface — `malloc`, `free`, `strtol`, the `str*` family.
     pub fn compatImpl() type {
         return @import("web/compat_impl.zig");
     }
@@ -90,7 +89,7 @@ pub const web = struct {
 pub const components = struct {
     pub const box = @import("core/components/box.zig");
     pub const button = @import("core/components/button.zig");
-    /// The caret primitive: one device pixel, snapped to the grid, floated over the text.
+    // The caret primitive: one device pixel, snapped to the grid, floated over the text.
     pub const caret = @import("core/components/caret.zig");
     pub const checkbox = @import("core/components/checkbox.zig");
     pub const click_registry = @import("core/components/click_registry.zig");

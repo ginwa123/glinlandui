@@ -1,31 +1,32 @@
-//! The frame audit: invariants every frame must satisfy, checked where they can still be named.
-//!
-//! The tests in this repo check *model state* and *individual widgets*. Neither can see the three failures that cost
-//! the most time in this project: a caret drawn as a glyph, a 1 pt hairline sitting between device pixels, and a
-//! click target whose id resolves to a different element. All three are mechanically detectable on the frame itself,
-//! which is what this file does — on the frames a developer actually runs, not only in a test.
-//!
-//! Findings go to `sink` when one is installed (a test records them and asserts), and to the log otherwise.
+// The frame audit: invariants every frame must satisfy, checked where they can still be named. The tests in this repo check *model state* and
+
+// *individual widgets*. Neither can see the three failures that cost the most time in this project: a caret drawn as a glyph, a 1 pt hairline sitting
+
+// between device pixels, and a click target whose id resolves to a different element. All three are mechanically detectable on the frame itself, which
+
+// is what this file does — on the frames a developer actually runs, not only in a test. Findings go to `sink` when one is installed (a test records them
+
+// and asserts), and to the log otherwise.
 const std = @import("std");
 const cl = @import("zclay");
 const registry = @import("components/click_registry.zig");
 
 pub const Kind = enum {
-    /// A rectangle thinner than a device pixel is not on the device grid, so it renders as two half-lit columns.
+    // A rectangle thinner than a device pixel is not on the device grid, so it renders as two half-lit columns.
     hairline_off_grid,
-    /// A scissor was started and never ended, so the rest of the frame is clipped.
+    // A scissor was started and never ended, so the rest of the frame is clipped.
     unbalanced_scissor,
-    /// A registered click target has no element this frame (a stale id, or an id that was never declared).
+    // A registered click target has no element this frame (a stale id, or an id that was never declared).
     hit_target_missing,
-    /// A registered click target has an empty box, so nothing can ever be clicked.
+    // A registered click target has an empty box, so nothing can ever be clicked.
     hit_target_empty,
-    /// The topmost target at a click target's own centre is a DIFFERENT target.
+    // The topmost target at a click target's own centre is a DIFFERENT target.
     hit_target_not_self,
 };
 
 pub const Finding = struct {
     kind: Kind,
-    /// The element id hash the finding is about (0 when it is not about one element).
+    // The element id hash the finding is about (0 when it is not about one element).
     id: u32 = 0,
     detail: [160]u8 = undefined,
     detail_len: usize = 0,
@@ -35,13 +36,13 @@ pub const Finding = struct {
     }
 };
 
-/// Receives every finding. A test installs one to assert on; null logs instead.
+// Receives every finding. A test installs one to assert on; null logs instead.
 pub var sink: ?*const fn (Finding) void = null;
 
-/// On by default in a Debug build (and in tests, which are Debug), off in a release build unless `GLIN_AUDIT` is set.
+// On by default in a Debug build (and in tests, which are Debug), off in a release build unless `GLIN_AUDIT` is set.
 pub var enabled: bool = @import("builtin").mode == .Debug;
 
-/// Turn the audit on or off for this process.
+// Turn the audit on or off for this process.
 pub fn setEnabled(on: bool) void {
     enabled = on;
 }
@@ -61,10 +62,10 @@ fn make(kind: Kind, id: u32, comptime fmt: []const u8, args: anytype) Finding {
     return f;
 }
 
-/// A device-pixel width at or below which a rectangle is a hairline.
+// A device-pixel width at or below which a rectangle is a hairline.
 const hairline_max_px: f32 = 1.5;
 
-/// Check the command stream. `scale` is device pixels per point.
+// Check the command stream. `scale` is device pixels per point.
 pub fn checkCommands(commands: []const cl.RenderCommand, scale: f32) usize {
     var findings: usize = 0;
     var depth: i32 = 0;
@@ -72,10 +73,11 @@ pub fn checkCommands(commands: []const cl.RenderCommand, scale: f32) usize {
         switch (cmd.command_type) {
             .scissor_start => depth += 1,
             .scissor_end => depth -= 1,
-            // NOTE: there is deliberately no "text is wider than its box" check. A text element's bounding box IS its
-            // measured width, so the comparison can never fail; what actually overflows is the PARENT, and the command
-            // stream does not carry parentage. `text_face`'s tests prove the other half instead: the width Clay lays a
-            // run out with is the width the rasteriser advances its pen by.
+            // NOTE: there is deliberately no "text is wider than its box" check. A text element's bounding box IS its measured width, so the comparison can never
+
+            // fail; what actually overflows is the PARENT, and the command stream does not carry parentage. `text_face`'s tests prove the other half instead: the
+
+            // width Clay lays a run out with is the width the rasteriser advances its pen by.
             .rectangle => {
                 if (cmd.bounding_box.width <= 0) continue;
                 const device_w = cmd.bounding_box.width * scale;
@@ -104,7 +106,7 @@ fn containsBox(outer: cl.BoundingBox, inner: cl.BoundingBox) bool {
         inner.y + inner.height <= outer.y + outer.height;
 }
 
-/// Check every registered click target against this frame's layout.
+// Check every registered click target against this frame's layout.
 pub fn checkRegistry() usize {
     var findings: usize = 0;
     var i: usize = 0;
@@ -126,10 +128,9 @@ pub fn checkRegistry() usize {
     return findings;
 }
 
-/// Check that a click at each target's own centre reaches that target.
-///
-/// Quadratic in the number of targets, so it runs in tests only — the failure it catches (a duplicate or stale id
-/// resolving to the wrong box) is a development-time bug, not a per-frame one.
+// Check that a click at each target's own centre reaches that target. Quadratic in the number of targets, so it runs in tests only — the failure it
+
+// catches (a duplicate or stale id resolving to the wrong box) is a development-time bug, not a per-frame one.
 pub fn checkHitConsistency() usize {
     var findings: usize = 0;
     var i: usize = 0;
@@ -141,8 +142,9 @@ pub fn checkHitConsistency() usize {
         const cy = data.bounding_box.y + data.bounding_box.height * 0.5;
         const winner = registry.topmostAt(cx, cy) orelse continue;
         if (winner.id.id == hit.id.id) continue;
-        // A higher z is what an overlay is FOR, and a button inside a clickable card legitimately covers its centre.
-        // Only an ambiguous click between two targets at the same level is a bug.
+        // A higher z is what an overlay is FOR, and a button inside a clickable card legitimately covers its centre. Only an ambiguous click between two targets
+
+        // at the same level is a bug.
         if (winner.z > hit.z) continue;
         const wb = cl.getElementData(winner.id).bounding_box;
         if (containsBox(wb, data.bounding_box)) continue;
@@ -152,7 +154,7 @@ pub fn checkHitConsistency() usize {
     return findings;
 }
 
-/// Run every check for one frame.
+// Run every check for one frame.
 pub fn frame(commands: []const cl.RenderCommand, scale: f32) usize {
     if (!enabled) return 0;
     var findings = checkCommands(commands, scale);
@@ -161,8 +163,9 @@ pub fn frame(commands: []const cl.RenderCommand, scale: f32) usize {
     return findings;
 }
 
-// ===================== tests: the verifier must be able to fail =====================
-// A verifier that has only ever passed is indistinguishable from one that never ran.
+// ===================== tests: the verifier must be able to fail ===================== A verifier that has only ever passed is indistinguishable from
+
+// one that never ran.
 
 const testing = std.testing;
 
@@ -210,7 +213,7 @@ fn sinkFn(f: Finding) void {
 
 var current: ?*Recorder = null;
 
-/// Run the command checks with a recording sink, so a test can assert on what the audit found.
+// Run the command checks with a recording sink, so a test can assert on what the audit found.
 fn record(cmds: []const cl.RenderCommand, scale: f32) Recorder {
     var rec = Recorder{};
     current = &rec;
