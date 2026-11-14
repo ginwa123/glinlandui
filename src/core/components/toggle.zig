@@ -22,8 +22,7 @@ pub const ToggleProps = struct {
     hover_bg: ?Color = null,
     disabled: bool = false,
     disabled_bg: Color = Color.rgb(0x2a, 0x2a, 0x2a),
-    on_click: ClickFn = null,
-    ctx: ?*anyopaque = null,
+    on_click: prop.Click = .{},
 };
 
 /// Declare a toggle switch: outer pill (fixed w/h, on/off bg) + inner knob circle parked left (off) or right (on).
@@ -63,9 +62,9 @@ pub fn toggle(props: ToggleProps) void {
         .flags = .{ .enabled = !props.disabled, .checked = props.on },
     });
     if (!props.disabled) {
-        if (props.on_click) |cb| {
+        if (props.on_click.f) |cb| {
             // Pointer cursor: clickable toggle.
-            registry.registerClickCursor(props.id.clay(), cb, props.ctx, .pointer);
+            registry.registerClickCursor(props.id.clay(), cb, props.on_click.ctx, .pointer);
         }
     }
 }
@@ -126,8 +125,8 @@ test "ToggleProps carries neutral defaults" {
     try std.testing.expect(p.hover_bg == null);
     try std.testing.expect(!p.disabled);
     try std.testing.expectEqual(Color.rgb(0x2a, 0x2a, 0x2a), p.disabled_bg);
-    try std.testing.expect(p.on_click == null);
-    try std.testing.expect(p.ctx == null);
+    try std.testing.expect(p.on_click.f == null);
+    try std.testing.expect(p.on_click.ctx == null);
 }
 
 fn rectColorForId(cmds: []cl.RenderCommand, id: u32) ?cl.Color {
@@ -172,7 +171,7 @@ fn testOnClick(ctx: ?*anyopaque) void {
 var click_rec = ClickCtx{};
 
 fn declareClickToggle() void {
-    toggle(.{ .id = .{ .text = "test-click-toggle" }, .on_click = testOnClick, .ctx = &click_rec });
+    toggle(.{ .id = .{ .text = "test-click-toggle" }, .on_click = .{ .f = testOnClick, .ctx = &click_rec } });
 }
 
 test "toggle self-registers on_click; dispatchClick at center fires once" {
@@ -195,7 +194,7 @@ test "toggle self-registers on_click; dispatchClick at center fires once" {
 }
 
 fn declareDisabledToggle() void {
-    toggle(.{ .id = .{ .text = "test-disabled-toggle" }, .disabled = true, .on_click = testOnClick, .ctx = &click_rec });
+    toggle(.{ .id = .{ .text = "test-disabled-toggle" }, .disabled = true, .on_click = .{ .f = testOnClick, .ctx = &click_rec } });
 }
 
 test "disabled toggle uses disabled_bg and registers no click" {

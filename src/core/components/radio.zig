@@ -22,8 +22,7 @@ pub const RadioProps = struct {
     hover_bg: ?Color = null,
     disabled: bool = false,
     disabled_bg: Color = Color.rgb(0x2a, 0x2a, 0x2a),
-    on_click: ClickFn = null,
-    ctx: ?*anyopaque = null,
+    on_click: prop.Click = .{},
 };
 
 /// Declare a radio button: outer circle (fixed size x size) + optional inner dot circle when `selected`.
@@ -66,9 +65,9 @@ pub fn radio(props: RadioProps) void {
         .flags = .{ .enabled = !props.disabled, .selected = props.selected },
     });
     if (!props.disabled) {
-        if (props.on_click) |cb| {
+        if (props.on_click.f) |cb| {
             // Pointer cursor: clickable radio.
-            registry.registerClickCursor(props.id.clay(), cb, props.ctx, .pointer);
+            registry.registerClickCursor(props.id.clay(), cb, props.on_click.ctx, .pointer);
         }
     }
 }
@@ -136,8 +135,8 @@ test "RadioProps carries neutral defaults" {
     try std.testing.expect(p.hover_bg == null);
     try std.testing.expect(!p.disabled);
     try std.testing.expectEqual(Color.rgb(0x2a, 0x2a, 0x2a), p.disabled_bg);
-    try std.testing.expect(p.on_click == null);
-    try std.testing.expect(p.ctx == null);
+    try std.testing.expect(p.on_click.f == null);
+    try std.testing.expect(p.on_click.ctx == null);
 }
 
 fn borderColorForSelected(selected: bool) !cl.Color {
@@ -177,7 +176,7 @@ fn testOnClick(ctx: ?*anyopaque) void {
 var click_rec = ClickCtx{};
 
 fn declareClickRadio() void {
-    radio(.{ .id = .{ .text = "test-click-radio" }, .on_click = testOnClick, .ctx = &click_rec });
+    radio(.{ .id = .{ .text = "test-click-radio" }, .on_click = .{ .f = testOnClick, .ctx = &click_rec } });
 }
 
 test "radio self-registers on_click; dispatchClick at center fires once" {
@@ -207,7 +206,7 @@ fn rectColorForId(cmds: []cl.RenderCommand, id: u32) ?cl.Color {
 }
 
 fn declareDisabledRadio() void {
-    radio(.{ .id = .{ .text = "test-disabled-radio" }, .disabled = true, .on_click = testOnClick, .ctx = &click_rec });
+    radio(.{ .id = .{ .text = "test-disabled-radio" }, .disabled = true, .on_click = .{ .f = testOnClick, .ctx = &click_rec } });
 }
 
 test "disabled radio uses disabled_bg and registers no click" {

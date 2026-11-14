@@ -57,8 +57,7 @@ pub const ListProps = struct {
     disabled: bool = false,
     disabled_bg: Color = Color.rgb(0x1a, 0x1a, 0x1a),
     selected: ?usize = null,
-    on_select: ListSelectFn = null,
-    ctx: ?*anyopaque = null,
+    on_select: prop.Select = .{},
     /// Per-row clicks (Stage B): when non-null, row i registers clicks[i] (guard i < clicks.len; rows beyond get no entry).
     clicks: ?[]const RowClick = null,
     /// Dispatch priority for this list's rows: highest-z containing match wins regardless of declare order (overlay dropdowns float above in-flow rows).
@@ -134,8 +133,8 @@ fn registerCell(props: ListProps, i: usize) void {
         if (i < clicks.len) {
             registry.registerZCursor(rowId(props.id.str(), i), clicks[i].on_click, clicks[i].ctx, i, props.click_z, .pointer);
         }
-    } else if (props.on_select) |cb| {
-        registry.registerZCursor(rowId(props.id.str(), i), cb, props.ctx, i, props.click_z, .pointer);
+    } else if (props.on_select.f) |cb| {
+        registry.registerZCursor(rowId(props.id.str(), i), cb, props.on_select.ctx, i, props.click_z, .pointer);
     }
 }
 
@@ -422,8 +421,8 @@ test "ListProps carries neutral dark defaults + null selection/callbacks" {
     try std.testing.expectEqual(@as(u32, 4), p.radius);
     try std.testing.expectEqual(@as(u16, 0), p.gap);
     try std.testing.expect(p.selected == null);
-    try std.testing.expect(p.on_select == null);
-    try std.testing.expect(p.ctx == null);
+    try std.testing.expect(p.on_select.f == null);
+    try std.testing.expect(p.on_select.ctx == null);
 }
 
 const SelectCtx = struct {
@@ -442,13 +441,12 @@ test "ListProps stores on_select/ctx; direct invocation delivers index" {
     const p = ListProps{
         .id = .{ .text = "x" },
         .selected = 1,
-        .on_select = testOnSelect,
-        .ctx = &c,
+        .on_select = .{ .f = testOnSelect, .ctx = &c },
     };
     try std.testing.expectEqual(@as(?usize, 1), p.selected);
-    try std.testing.expect(p.on_select != null);
-    try std.testing.expect(p.ctx != null);
-    p.on_select.?(p.ctx, 2);
+    try std.testing.expect(p.on_select.f != null);
+    try std.testing.expect(p.on_select.ctx != null);
+    p.on_select.f.?(p.on_select.ctx, 2);
     try std.testing.expectEqual(@as(usize, 1), c.calls);
     try std.testing.expectEqual(@as(?usize, 2), c.last);
 }
@@ -619,7 +617,7 @@ test "list indexed rows declare IDI identities under the list id" {
 var select_rec = SelectCtx{};
 
 fn declareSelectList() void {
-    list(.{ .id = .{ .text = "test-select-list" }, .on_select = testOnSelect, .ctx = &select_rec }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-select-list" }, .on_select = .{ .f = testOnSelect, .ctx = &select_rec } }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "list self-registers on_select per row; dispatchClick fires index" {
@@ -664,7 +662,7 @@ fn renderWithInner(_: CtxA, _: TitleItem, index: usize) void {
 }
 
 fn declareInnerList() void {
-    list(.{ .id = .{ .text = "test-inner-list" }, .on_select = onOuterClick }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderWithInner);
+    list(.{ .id = .{ .text = "test-inner-list" }, .on_select = .{ .f = onOuterClick } }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderWithInner);
 }
 
 test "a widget inside a row wins the hit test over the row itself" {
@@ -796,7 +794,7 @@ test "list clicks short slice leaves extra rows without entry" {
 }
 
 fn declareDisabledList() void {
-    list(.{ .id = .{ .text = "test-disabled-list" }, .disabled = true, .on_select = testOnSelect, .ctx = &disabled_rec }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-disabled-list" }, .disabled = true, .on_select = .{ .f = testOnSelect, .ctx = &disabled_rec } }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 var disabled_rec = SelectCtx{};
@@ -1007,7 +1005,7 @@ var grid_click_rec = SelectCtx{};
 
 fn declareClickGrid() void {
     list(
-        .{ .id = .{ .text = "test-click-grid" }, .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60, .on_select = testOnSelect, .ctx = &grid_click_rec },
+        .{ .id = .{ .text = "test-click-grid" }, .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60, .on_select = .{ .f = testOnSelect, .ctx = &grid_click_rec } },
         g_slice,
         CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) },
         renderA,

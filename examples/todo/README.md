@@ -27,7 +27,7 @@ zig build test-todo         # the app's own tests + the E2E suite, headless
 |---|---|---|
 | `ViewModelStore` / `viewModel()` | `view_model.Store(T)` + `App.vm()` | one instance per screen, created once, `onCleared` on leave |
 | `MaterialTheme { }` | `theme.Theme` (+ `theme.dark` / `theme.light`) | colour roles and a type scale, passed down as a value |
-| `TextField(value, onValueChange)` | `input.TextField(&field)` | one struct: the look, the draft, the caret, the keyboard, and `on_change`/`on_submit` |
+| `TextField(value, onValueChange)` | `input.textField(&field)` | one struct: the look, the draft, the caret, the keyboard, and `on_change`/`on_submit` |
 | `LazyColumn { itemsIndexed(..) }` | `list.list(props, items, ctx, renderItem)` | rows with ids, hover and per-row clicks |
 
 ### From this app

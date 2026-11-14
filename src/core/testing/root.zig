@@ -672,8 +672,7 @@ test "driver captures a real component frame" {
                 .label = .{ .text = "OK" },
                 .w = .{ .fixed = 100 },
                 .h = .{ .fixed = 40 },
-                .on_click = onClick,
-                .ctx = &app.state,
+                .on_click = .{ .f = onClick, .ctx = &app.state },
             });
         }
         fn onClick(ctx: ?*anyopaque) void {
@@ -757,8 +756,7 @@ const E2eApp = struct {
             .h = .{ .fixed = 40 },
             .pad = props.Pad.axes(0, 0),
             .disabled = true,
-            .on_click = bump,
-            .ctx = ctx,
+            .on_click = .{ .f = bump, .ctx = ctx },
         });
     }
 
@@ -770,8 +768,7 @@ const E2eApp = struct {
                 .w = .{ .fixed = 180 },
                 .h = .{ .fixed = 40 },
                 .pad = props.Pad.axes(0, 0),
-                .on_click = bump,
-                .ctx = ctx,
+                .on_click = .{ .f = bump, .ctx = ctx },
             });
         }
     }

@@ -368,14 +368,12 @@ pub const Field = struct {
     disabled: bool = false,
     disabled_bg: Color = Color.rgb(0x1a, 0x1a, 0x1a),
     disabled_fg: Color = Color.rgb(0x77, 0x77, 0x77),
-    // ---- the intents it raises: called with the new text after every edit that changed it.
-    on_change: ChangeFn = null,
+    // ---- the intents it raises, each with the model it belongs to.
+    on_change: prop.Change = .{},
     // Called on Enter with the draft. True means the intent took it, and then the field clears itself.
-    on_submit: SubmitFn = null,
+    on_submit: prop.Submit = .{},
     // Called after a click places the caret, so the app can take focus.
-    on_focus: ?*const fn (?*anyopaque) void = null,
-    // The one handle every callback gets: Zig has no closures, so a function pointer cannot capture its model.
-    ctx: ?*anyopaque = null,
+    on_focus: prop.Click = .{},
     // Measures a run with the font that draws the field. The engine's text backend is that font.
     measure: *const fn ([]const u8, u16) f32 = text_backend.runWidth,
 
@@ -385,7 +383,7 @@ pub const Field = struct {
     // The id as text, copied because a click uses it after the frame.
     name_buf: [96]u8 = undefined,
     name_len: usize = 0,
-    // Left padding, written by `TextField` each frame so a click and the caret share one origin.
+    // Left padding, written by `textField` each frame so a click and the caret share one origin.
     pad_lr: f32 = 8,
     // True while this field owns a drag in flight; the field ticks it, so the app never has to.
     dragging: bool = false,
@@ -424,8 +422,8 @@ pub const Field = struct {
 
     // Raise the submit intent: Enter, or a button that does the same thing. True when the app took the draft.
     pub fn submit(self: *Field) bool {
-        const f = self.on_submit orelse return false;
-        if (!f(self.ctx, self.editor.text())) return false;
+        const f = self.on_submit.f orelse return false;
+        if (!f(self.on_submit.ctx, self.editor.text())) return false;
         self.editor.setText("");
         self.report();
         return true;
@@ -438,7 +436,7 @@ pub const Field = struct {
 
     // Tell the caller the text changed.
     fn report(self: *Field) void {
-        if (self.on_change) |f| f(self.ctx, self.editor.text());
+        if (self.on_change.f) |f| f(self.on_change.ctx, self.editor.text());
     }
 
     // Copy the declared value, so a change next frame is detectable and a truncation is not a change every frame.
@@ -535,12 +533,12 @@ fn dragSelect(field: *Field) void {
     if (!field.dragging) {
         field.dragging = true;
         frame_mod.setFocus(field.name());
-        if (field.on_focus) |f| f(field.ctx);
+        if (field.on_focus.f) |f| f(field.on_focus.ctx);
     }
 }
 
 // Declare a text field: the draft, its caret and selection, the blink, the click that places the caret, and the keyboard.
-pub fn TextField(field: *Field) void {
+pub fn textField(field: *Field) void {
     field.bind();
     const input = &field.editor;
     const name = field.rememberName();
@@ -625,7 +623,7 @@ fn onFieldDoubleClick(ctx: ?*anyopaque) void {
     text_editor.selectWordAt(&field.editor, text_editor.offsetAtX(field.editor.text(), x, field.font_size, field.measure));
     field.editor.idle = 0;
     frame_mod.setFocus(field.name());
-    if (field.on_focus) |f| f(field.ctx);
+    if (field.on_focus.f) |f| f(field.on_focus.ctx);
 }
 
 // The caret, floated at the measured end of the run before it. The primitive snaps it and makes it one device pixel.
@@ -650,7 +648,7 @@ fn onFieldClick(ctx: ?*anyopaque) void {
     field.editor.setCaret(text_editor.offsetAtX(field.editor.text(), x, field.font_size, field.measure), false);
     field.editor.idle = 0;
     frame_mod.setFocus(field.name());
-    if (field.on_focus) |f| f(field.ctx);
+    if (field.on_focus.f) |f| f(field.on_focus.ctx);
 }
 
 // Stub text estimator for headless tests (no font backend needed).
@@ -777,7 +775,7 @@ fn submitted() []const u8 {
 }
 
 fn declareTestField() void {
-    TextField(&test_field);
+    textField(&test_field);
 }
 
 // A fresh field, one declared frame, and the keyboard on it.
@@ -785,8 +783,8 @@ fn startField(value: []const u8) !void {
     test_field = .{
         .id = .{ .text = "test-field" },
         .value = value,
-        .on_change = onTestChange,
-        .on_submit = onTestSubmit,
+        .on_change = .{ .f = onTestChange },
+        .on_submit = .{ .f = onTestSubmit },
     };
     test_value = value;
     report_count = 0;
@@ -798,7 +796,7 @@ fn startField(value: []const u8) !void {
     _ = try layoutCommands(declareTestField);
 }
 
-test "TextField draws the value, declares its id and takes the keyboard" {
+test "textField draws the value, declares its id and takes the keyboard" {
     try startField("jak");
     try std.testing.expectEqualStrings("jak", test_field.text());
     try std.testing.expect(cl.getElementData(cl.getElementId("test-field")).found);
@@ -1149,7 +1147,7 @@ test "handleKey ctrl+A selects all, other ctrl combos insert nothing" {
 var disabled_field: Field = .{ .id = .{ .text = "test-disabled-field" }, .value = "hi", .disabled = true };
 
 fn declareDisabledField() void {
-    TextField(&disabled_field);
+    textField(&disabled_field);
 }
 
 test "disabled field dims to disabled_bg" {
@@ -1167,7 +1165,7 @@ test "disabled field dims to disabled_bg" {
 var border_field: Field = .{ .id = .{ .text = "test-border-field" }, .value = "hi", .border = .{ .width = 1, .color = Color.rgb(0xff, 0x00, 0x00) } };
 
 fn declareBorderField() void {
-    TextField(&border_field);
+    textField(&border_field);
 }
 
 test "field border emits a border command" {

@@ -31,8 +31,7 @@ pub const SliderProps = struct {
     hover_fill: ?Color = null,
     disabled: bool = false,
     disabled_bg: Color = Color.rgb(0x2a, 0x2a, 0x2a),
-    on_change: ClickFn = null,
-    ctx: ?*anyopaque = null,
+    on_change: prop.Click = .{},
 };
 
 /// Pure: clamped 0..1 fraction for value in [min, max].
@@ -118,9 +117,9 @@ pub fn slider(props: SliderProps) void {
         .actions = .{ .drag = true },
     });
     if (!props.disabled) {
-        if (props.on_change) |cb| {
+        if (props.on_change.f) |cb| {
             // Horizontal-resize cursor: draggable slider track.
-            registry.registerClickCursor(props.id.clay(), cb, props.ctx, .ew_resize);
+            registry.registerClickCursor(props.id.clay(), cb, props.on_change.ctx, .ew_resize);
         }
     }
 }
@@ -186,8 +185,8 @@ test "SliderProps carries neutral defaults" {
     try std.testing.expect(p.hover_fill == null);
     try std.testing.expect(!p.disabled);
     try std.testing.expectEqual(Color.rgb(0x2a, 0x2a, 0x2a), p.disabled_bg);
-    try std.testing.expect(p.on_change == null);
-    try std.testing.expect(p.ctx == null);
+    try std.testing.expect(p.on_change.f == null);
+    try std.testing.expect(p.on_change.ctx == null);
 }
 
 test "fracOf clamps below min and above max, guards zero range" {
@@ -263,7 +262,7 @@ fn testOnChange(ctx: ?*anyopaque) void {
 var click_rec = ClickCtx{};
 
 fn declareClickSlider() void {
-    slider(.{ .id = .{ .text = "test-click-slider" }, .on_change = testOnChange, .ctx = &click_rec });
+    slider(.{ .id = .{ .text = "test-click-slider" }, .on_change = .{ .f = testOnChange, .ctx = &click_rec } });
 }
 
 fn declareNoClickSlider() void {
@@ -305,7 +304,7 @@ test "slider self-registers on_change; dispatchClick at center fires once" {
 }
 
 fn declareDisabledSlider() void {
-    slider(.{ .id = .{ .text = "test-disabled-slider" }, .disabled = true, .on_change = testOnChange, .ctx = &click_rec });
+    slider(.{ .id = .{ .text = "test-disabled-slider" }, .disabled = true, .on_change = .{ .f = testOnChange, .ctx = &click_rec } });
 }
 
 test "disabled slider uses disabled_bg and registers no click" {

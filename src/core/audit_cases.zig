@@ -154,7 +154,7 @@ test "audit case: a clean frame reports nothing" {
             box_mod.box(.{ .id = .{ .text = "card" }, .w = .grow, .h = .grow, .direction = .column, .gap = 8, .pad = props.Pad.all(8) }, NoCtx{}, children);
         }
         fn children(_: NoCtx) void {
-            button.button(.{ .id = .{ .text = "card.ok" }, .label = .{ .text = "OK" }, .on_click = noop, .ctx = null });
+            button.button(.{ .id = .{ .text = "card.ok" }, .label = .{ .text = "OK" }, .on_click = .{ .f = noop, .ctx = null } });
             text_mod.label(.{ .label = .{ .text = "short", .size = 14 } });
         }
         fn noop(_: ?*anyopaque) void {}

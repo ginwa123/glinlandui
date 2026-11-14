@@ -51,6 +51,34 @@ pub const Id = union(enum) {
     }
 };
 
+// A click handler and the model it belongs to: Zig has no closures, so the pair travels as one field.
+
+pub const Click = struct {
+    f: ?*const fn (?*anyopaque) void = null,
+    ctx: ?*anyopaque = null,
+};
+
+// A text handler and its model: the new text is handed back, so the model can hold the draft.
+
+pub const Change = struct {
+    f: ?*const fn (?*anyopaque, []const u8) void = null,
+    ctx: ?*anyopaque = null,
+};
+
+// The same, for a handler that answers whether it took the text (a field clears itself when it did).
+
+pub const Submit = struct {
+    f: ?*const fn (?*anyopaque, []const u8) bool = null,
+    ctx: ?*anyopaque = null,
+};
+
+// The same, for a handler that is told WHICH row, tab or option was hit.
+
+pub const Select = struct {
+    f: ?*const fn (?*anyopaque, usize) void = null,
+    ctx: ?*anyopaque = null,
+};
+
 // A run of text: what it says, how big it is, and what colour it is drawn in.
 pub const Label = struct {
     text: []const u8 = "",

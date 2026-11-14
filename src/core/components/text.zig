@@ -4,17 +4,12 @@ const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
 const prop = @import("../props.zig");
 
-/// Click callback: plain fn pointer + opaque ctx (no closures).
-pub const ClickFn = ?*const fn (?*anyopaque) void;
-
 /// Label props: one text run, and what may happen to it.
 pub const TextProps = struct {
     label: prop.Label = .{},
     wrap: bool = false,
     disabled: bool = false,
     disabled_color: Color = Color.rgb(0x77, 0x77, 0x77),
-    on_click: ClickFn = null,
-    ctx: ?*anyopaque = null,
 };
 
 /// Declare a single text element.
@@ -71,7 +66,6 @@ test "TextProps carries neutral defaults" {
     try std.testing.expect(!p.wrap);
     try std.testing.expect(!p.disabled);
     try std.testing.expectEqual(Color.rgb(0x77, 0x77, 0x77), p.disabled_color);
-    try std.testing.expect(p.on_click == null);
 }
 
 test "TextProps needs nothing: a label is optional, so `.{}` is a valid text run" {

@@ -79,8 +79,7 @@ pub const DropdownProps = struct {
     /// Overlay card border (defaults to border_* when 0-width + default color).
     overlay_border_width: u16 = 0,
     overlay_border_color: Color = Color.rgb(0x00, 0x00, 0x00),
-    on_select: DropdownSelectFn = null,
-    ctx: ?*anyopaque = null,
+    on_select: prop.Select = .{},
     /// Per-row clicks passthrough (Stage B): forwarded verbatim to the inner list.
     clicks: ?[]const registry.RowClick = null,
     /// Dispatch priority for inline declares (forwarded to the inner list).
@@ -176,7 +175,7 @@ fn dropdownInner(
         field.disabled = props.disabled;
         field.disabled_bg = props.disabled_bg;
         field.disabled_fg = props.disabled_fg;
-        input.TextField(field);
+        input.textField(field);
     }
     list.list(.{
         .id = .{ .text = props.list_id },
@@ -196,7 +195,6 @@ fn dropdownInner(
         .disabled = props.disabled,
         .disabled_bg = props.disabled_bg,
         .on_select = props.on_select,
-        .ctx = props.ctx,
         .clicks = props.clicks,
         // Overlay floats above in-flow rows: dispatch at the float's z so covered headers can never fire through.
         .click_z = if (props.overlay) props.z_index else props.click_z,
@@ -259,8 +257,8 @@ test "DropdownProps carries neutral dark defaults + null callbacks" {
     try std.testing.expectEqual(@as(u32, 40), p.row_h);
     try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.row_bg);
     try std.testing.expectEqual(Color.rgb(0x26, 0x26, 0x26), p.field_bg);
-    try std.testing.expect(p.on_select == null);
-    try std.testing.expect(p.ctx == null);
+    try std.testing.expect(p.on_select.f == null);
+    try std.testing.expect(p.on_select.ctx == null);
 }
 
 const Ctx = struct {
@@ -342,10 +340,9 @@ test "DropdownProps stores on_select/ctx; direct invocation delivers index" {
     const p = DropdownProps{
         .field_id = "f",
         .list_id = "l",
-        .on_select = testOnSelect,
-        .ctx = &c,
+        .on_select = .{ .f = testOnSelect, .ctx = &c },
     };
-    p.on_select.?(p.ctx, 2);
+    p.on_select.f.?(p.on_select.ctx, 2);
     try std.testing.expectEqual(@as(usize, 1), c.calls);
     try std.testing.expectEqual(@as(?usize, 2), c.last);
 }
@@ -356,8 +353,7 @@ fn declareClickDropdown() void {
     dropdown(.{
         .field_id = "test-dd-click-field",
         .list_id = "test-dd-click-list",
-        .on_select = testOnSelect,
-        .ctx = &click_rec,
+        .on_select = .{ .f = testOnSelect, .ctx = &click_rec },
     }, demo_slice, Ctx{
         .kinds = demo_kinds_slice,
         .fg = Color.rgb(0xe8, 0xe8, 0xe8),

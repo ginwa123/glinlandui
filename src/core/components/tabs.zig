@@ -29,9 +29,8 @@ pub const TabsProps = struct {
     active_fg: Color = Color.rgb(0xf0, 0xf0, 0xf4),
     close_fg: Color = Color.rgb(0x5a, 0x5a, 0x64),
     pad_lr: u16 = 11,
-    on_select: SelectFn = null,
-    on_close: SelectFn = null,
-    ctx: ?*anyopaque = null,
+    on_select: prop.Select = .{},
+    on_close: prop.Select = .{},
     click_z: i16 = 0,
 };
 
@@ -109,12 +108,12 @@ fn tabUi(props: TabsProps, tab: Tab, i: usize) void {
         .role = .list_item,
         .flags = .{ .enabled = true, .selected = tab.active },
     });
-    if (props.on_select) |cb| {
-        registry.registerZCursor(tabId(props.id.str(), i), cb, props.ctx, i, props.click_z, .pointer);
+    if (props.on_select.f) |cb| {
+        registry.registerZCursor(tabId(props.id.str(), i), cb, props.on_select.ctx, i, props.click_z, .pointer);
     }
     if (tab.closable) {
-        if (props.on_close) |cb| {
-            registry.registerZCursor(innerId(props.id.str(), i, 2), cb, props.ctx, i, props.click_z, .pointer);
+        if (props.on_close.f) |cb| {
+            registry.registerZCursor(innerId(props.id.str(), i, 2), cb, props.on_close.ctx, i, props.click_z, .pointer);
         }
     }
 }

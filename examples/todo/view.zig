@@ -78,7 +78,7 @@ fn headerChildren(scope: *Scope) void {
     const t = scope.theme;
     // `TextField(value = state.input)`: one line of state, and the field reports every edit back through `on_change`.
     scope.field.value = scope.state.draft();
-    input_mod.TextField(scope.field);
+    input_mod.textField(scope.field);
 
     button.button(.{
         .id = .{ .text = "todo.add" },
@@ -87,8 +87,7 @@ fn headerChildren(scope: *Scope) void {
         .hover_bg = t.colors.primary_hover,
         .radius = props.Radius.all(6),
         .pad = props.Pad.axes(8, 16),
-        .on_click = onAdd,
-        .ctx = scope.add,
+        .on_click = .{ .f = onAdd, .ctx = scope.add },
     });
 }
 
@@ -137,8 +136,7 @@ fn listChildren(scope: *Scope) void {
         .row_bg = t.colors.background,
         .hover_bg = t.colors.hover,
         .radius = 0,
-        .on_select = onRow,
-        .ctx = scope.vm,
+        .on_select = .{ .f = onRow, .ctx = scope.vm },
     }, scope.state.items(), scope, renderRow);
 }
 
@@ -161,8 +159,7 @@ fn renderRow(scope: *Scope, todo: state_mod.Todo, index: usize) void {
         .checked_bg = t.colors.primary,
         .check_color = t.colors.on_primary,
         .border_color = t.colors.divider,
-        .on_click = onToggle,
-        .ctx = &ctxs[index],
+        .on_click = .{ .f = onToggle, .ctx = &ctxs[index] },
     });
     // The state is a value and this returns before Clay draws, so the run is copied into the frame's scratch.
     text_mod.label(.{
@@ -177,8 +174,7 @@ fn renderRow(scope: *Scope, todo: state_mod.Todo, index: usize) void {
         .hover_bg = t.colors.surface_variant,
         .radius = props.Radius.all(6),
         .pad = props.Pad.axes(4, 10),
-        .on_click = onDelete,
-        .ctx = &ctxs[index],
+        .on_click = .{ .f = onDelete, .ctx = &ctxs[index] },
     });
 }
 

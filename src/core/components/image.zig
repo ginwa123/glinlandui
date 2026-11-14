@@ -21,8 +21,7 @@ pub const ImageProps = struct {
     fit: Fit = .cover,
     max_dim: u16 = 256,
     radius: u32 = 0,
-    on_click: ClickFn = null,
-    ctx: ?*anyopaque = null,
+    on_click: prop.Click = .{},
 };
 
 /// Per-frame ImageRef slots (synchronous-declare lifetime, mirroring the builders' scratch buffers).
@@ -66,9 +65,9 @@ pub fn image(props: ImageProps) void {
         .tag = props.id.str(),
         .role = .image,
     });
-    if (props.on_click) |cb| {
+    if (props.on_click.f) |cb| {
         // Pointer cursor: clickable image.
-        registry.registerClickCursor(props.id.clay(), cb, props.ctx, .pointer);
+        registry.registerClickCursor(props.id.clay(), cb, props.on_click.ctx, .pointer);
     }
 }
 
@@ -120,8 +119,8 @@ test "ImageProps carries neutral defaults" {
     try std.testing.expectEqual(render.ImageFit.cover, p.fit);
     try std.testing.expectEqual(@as(u16, 256), p.max_dim);
     try std.testing.expectEqual(@as(u32, 0), p.radius);
-    try std.testing.expect(p.on_click == null);
-    try std.testing.expect(p.ctx == null);
+    try std.testing.expect(p.on_click.f == null);
+    try std.testing.expect(p.on_click.ctx == null);
 }
 
 test "image_data round-trips path, fit, and max_dim" {
@@ -177,7 +176,7 @@ var click_rec = ClickCtx{};
 
 fn declareClickImage() void {
     beginFrame();
-    image(.{ .id = .{ .text = "test-click-image" }, .path = "/p/a.jpg", .w = 150, .h = 84, .on_click = testOnClick, .ctx = &click_rec });
+    image(.{ .id = .{ .text = "test-click-image" }, .path = "/p/a.jpg", .w = 150, .h = 84, .on_click = .{ .f = testOnClick, .ctx = &click_rec } });
 }
 
 fn declareNoClickImage() void {

@@ -494,8 +494,7 @@ pub const App = struct {
                 .h = .{ .fixed = 40 },
                 .bg = Color.hexC("#2f6df6"),
                 .hover_bg = Color.hexC("#4a82ff"),
-                .on_click = actionOnClick,
-                .ctx = &ctx,
+                .on_click = .{ .f = actionOnClick, .ctx = &ctx },
             });
         }
     }

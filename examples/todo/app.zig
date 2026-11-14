@@ -33,9 +33,8 @@ pub const App = struct {
             .pad = glinlandui.props.Pad.axes(8, 10),
             .border = .{ .width = 1, .color = t.colors.divider },
             .w = .{ .clamp = .{ .min = 120, .max = 640, .grow = true } },
-            .on_change = view.onDraft,
-            .on_submit = view.onSubmit,
-            .ctx = self.vm(),
+            .on_change = .{ .f = view.onDraft, .ctx = self.vm() },
+            .on_submit = .{ .f = view.onSubmit, .ctx = self.vm() },
         };
         self.add_ctx = .{ .field = &self.field };
         frame.setFocus(view.field_id);

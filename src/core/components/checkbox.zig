@@ -23,8 +23,7 @@ pub const CheckboxProps = struct {
     hover_bg: ?Color = null,
     disabled: bool = false,
     disabled_bg: Color = Color.rgb(0x2a, 0x2a, 0x2a),
-    on_click: ClickFn = null,
-    ctx: ?*anyopaque = null,
+    on_click: prop.Click = .{},
 };
 
 /// Declare a checkbox: outer fixed square (unchecked/checked bg) + inner check box (60% size, `check_color`) when `checked`.
@@ -69,9 +68,9 @@ pub fn checkbox(props: CheckboxProps) void {
         .flags = .{ .enabled = !props.disabled, .checked = props.checked },
     });
     if (!props.disabled) {
-        if (props.on_click) |cb| {
+        if (props.on_click.f) |cb| {
             // Pointer cursor: clickable checkbox.
-            registry.registerClickCursor(props.id.clay(), cb, props.ctx, .pointer);
+            registry.registerClickCursor(props.id.clay(), cb, props.on_click.ctx, .pointer);
         }
     }
 }
@@ -140,8 +139,8 @@ test "CheckboxProps carries neutral defaults" {
     try std.testing.expect(p.hover_bg == null);
     try std.testing.expect(!p.disabled);
     try std.testing.expectEqual(Color.rgb(0x2a, 0x2a, 0x2a), p.disabled_bg);
-    try std.testing.expect(p.on_click == null);
-    try std.testing.expect(p.ctx == null);
+    try std.testing.expect(p.on_click.f == null);
+    try std.testing.expect(p.on_click.ctx == null);
 }
 
 fn rectColorForId(cmds: []cl.RenderCommand, id: u32) ?cl.Color {
@@ -186,7 +185,7 @@ fn testOnClick(ctx: ?*anyopaque) void {
 var click_rec = ClickCtx{};
 
 fn declareClickCheckbox() void {
-    checkbox(.{ .id = .{ .text = "test-click-checkbox" }, .on_click = testOnClick, .ctx = &click_rec });
+    checkbox(.{ .id = .{ .text = "test-click-checkbox" }, .on_click = .{ .f = testOnClick, .ctx = &click_rec } });
 }
 
 test "checkbox self-registers on_click; dispatchClick at center fires once" {
@@ -209,7 +208,7 @@ test "checkbox self-registers on_click; dispatchClick at center fires once" {
 }
 
 fn declareDisabledCheckbox() void {
-    checkbox(.{ .id = .{ .text = "test-disabled-checkbox" }, .disabled = true, .on_click = testOnClick, .ctx = &click_rec });
+    checkbox(.{ .id = .{ .text = "test-disabled-checkbox" }, .disabled = true, .on_click = .{ .f = testOnClick, .ctx = &click_rec } });
 }
 
 test "disabled checkbox uses disabled_bg and registers no click" {

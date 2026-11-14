@@ -214,8 +214,7 @@ fn headerChildren(self: *App) void {
         .fg = fg,
         .hover_bg = bg_button_hover,
         .pad = props.Pad.axes(4, 14),
-        .on_click = onToggleAuto,
-        .ctx = self,
+        .on_click = .{ .f = onToggleAuto, .ctx = self },
     });
     button.button(.{
         .id = .{ .text = "header.bottom" },
@@ -224,8 +223,7 @@ fn headerChildren(self: *App) void {
         .fg = fg,
         .hover_bg = bg_button_hover,
         .pad = props.Pad.axes(4, 14),
-        .on_click = onJumpBottom,
-        .ctx = self,
+        .on_click = .{ .f = onJumpBottom, .ctx = self },
     });
 }
 

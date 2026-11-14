@@ -42,8 +42,7 @@ pub const TreeProps = struct {
     radius: u32 = 4,
     /// The selected row's 2px left bar, so selection is a fill AND a mark. Null draws no bar at all.
     selected_bar: ?Color = null,
-    on_select: SelectFn = null,
-    ctx: ?*anyopaque = null,
+    on_select: prop.Select = .{},
     click_z: i16 = 0,
 };
 
@@ -134,8 +133,8 @@ fn rowUi(props: TreeProps, row: Row, i: usize) void {
         .role = .list_item,
         .flags = .{ .enabled = true, .selected = row.selected },
     });
-    if (props.on_select) |cb| {
-        registry.registerZCursor(rowId(props.id.str(), i), cb, props.ctx, i, props.click_z, .pointer);
+    if (props.on_select.f) |cb| {
+        registry.registerZCursor(rowId(props.id.str(), i), cb, props.on_select.ctx, i, props.click_z, .pointer);
     }
 }
 

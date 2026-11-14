@@ -119,26 +119,24 @@ const components = glinlandui.components;
 const App = struct {
     clicks: usize = 0,
 
-    /// The Clay declare callback. Everything the app draws happens here, and
-    /// `ctx` is the app object so the tree is built against live state.
+    /// The declare callback: everything the app draws happens here.
     fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
         const self: *App = @ptrCast(@alignCast(ctx.?));
         components.box.box(.{
-            .id = "hello-root",
+            .id = .{ .text = "hello.root" },
             .w = .grow,
             .h = .grow,
-            .pad = 16,
+            .pad = glinlandui.props.Pad.all(16),
             .gap = 8,
         }, self, children);
     }
 
     fn children(self: *App) void {
-        components.text.label(.{ .str = "Hello, glinlandui", .font_size = 20 });
+        components.text.label(.{ .label = .{ .text = "Hello, glinlandui", .size = 20 } });
         components.button.button(.{
-            .id = "hello-button",       // the element id IS the E2E test tag
-            .label = if (self.clicks == 0) "Click me" else "Clicked!",
-            .on_click = onClick,
-            .ctx = self,
+            .id = .{ .text = "hello.button" },   // the element id IS the E2E test tag
+            .label = .{ .text = if (self.clicks == 0) "Click me" else "Clicked!" },
+            .on_click = .{ .f = onClick, .ctx = self },
         });
     }
 
@@ -157,7 +155,7 @@ pub fn main() !void {
     var host = try glinlandui.host.Host.init(alloc, &app, App.root);
     defer host.deinit();
 
-    var window = glinlandui.Window.init(.{
+    var window = glinlandui.Window.init(alloc, .{
         .app_id = "hello",
         .title = "Hello",
         .width = 360,
@@ -235,9 +233,9 @@ Two lifetimes decide whether an app works, and each one is a bug the todo exampl
 2. **A click callback's `ctx` must outlive the frame.** Clicks are dispatched *after* the declare returns, so a
    pointer to a local is already gone. Own the context on the screen's struct.
 
-Two components already do the plumbing an app would otherwise repeat: `components.input.TextField` takes a
+Two components already do the plumbing an app would otherwise repeat: `components.input.textField` takes a
 `Field` that owns the look, the intents and the draft (buffer, caret, selection, measure) — declare it with
-`TextField(&field)` and the engine types into it, calls `on_change` and `on_submit`, and the app routes no
+`textField(&field)` and the engine types into it, calls `on_change` and `on_submit`, and the app routes no
 key at all — and `components.list` owns a list's rows, their ids, hover and per-row clicks (registering each
 row's target before its box, so a button inside the row wins the hit test).
 

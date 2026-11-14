@@ -55,8 +55,7 @@ pub const App = struct {
         self.field.sel_bg = theme.selected;
         self.field.caret_fg = c.primary;
         self.field.border = .{ .width = 1, .color = c.divider };
-        self.field.on_change = onTyped;
-        self.field.ctx = self;
+        self.field.on_change = .{ .f = onTyped, .ctx = self };
 
         self.dd_field.font_size = scale.label;
         self.dd_field.fg = c.text;
@@ -64,8 +63,7 @@ pub const App = struct {
         self.dd_field.sel_bg = theme.selected;
         self.dd_field.caret_fg = c.primary;
         self.dd_field.border = .{ .width = 1, .color = c.divider };
-        self.dd_field.on_change = onDdTyped;
-        self.dd_field.ctx = self;
+        self.dd_field.on_change = .{ .f = onDdTyped, .ctx = self };
 
         for (&self.radio_ctx, 0..) |*rc, i| rc.* = .{ .app = self, .index = i };
         for (&self.row_ctx, 0..) |*rc, i| rc.* = .{ .app = self, .index = i };
@@ -215,8 +213,7 @@ fn emphasisButtons(self: *App) void {
         .bg = c.primary,
         .fg = c.on_primary,
         .hover_bg = c.primary_hover,
-        .on_click = onPrimary,
-        .ctx = self,
+        .on_click = .{ .f = onPrimary, .ctx = self },
     });
     button.button(.{
         .id = .{ .text = "catalog.btn.secondary" },
@@ -225,8 +222,7 @@ fn emphasisButtons(self: *App) void {
         .fg = c.text,
         .hover_bg = c.hover,
         .border = .{ .width = 1, .color = c.divider },
-        .on_click = onSecondary,
-        .ctx = self,
+        .on_click = .{ .f = onSecondary, .ctx = self },
     });
     button.button(.{
         .id = .{ .text = "catalog.btn.quiet" },
@@ -234,8 +230,7 @@ fn emphasisButtons(self: *App) void {
         .bg = c.surface,
         .fg = c.text_dim,
         .hover_bg = c.hover,
-        .on_click = onQuiet,
-        .ctx = self,
+        .on_click = .{ .f = onQuiet, .ctx = self },
     });
     button.button(.{
         .id = .{ .text = "catalog.btn.danger" },
@@ -244,8 +239,7 @@ fn emphasisButtons(self: *App) void {
         .fg = danger,
         .hover_bg = c.hover,
         .border = .{ .width = 1, .color = danger_edge },
-        .on_click = onDanger,
-        .ctx = self,
+        .on_click = .{ .f = onDanger, .ctx = self },
     });
     button.button(.{
         .id = .{ .text = "catalog.btn.disabled" },
@@ -267,8 +261,7 @@ fn sizeButtons(self: *App) void {
         .hover_bg = c.primary_hover,
         .h = .{ .fixed = 24 },
         .pad = props.Pad.axes(0, 9),
-        .on_click = onSmall,
-        .ctx = self,
+        .on_click = .{ .f = onSmall, .ctx = self },
     });
     button.button(.{
         .id = .{ .text = "catalog.btn.md" },
@@ -278,8 +271,7 @@ fn sizeButtons(self: *App) void {
         .hover_bg = c.primary_hover,
         .h = .{ .fixed = 28 },
         .pad = props.Pad.axes(0, 12),
-        .on_click = onMedium,
-        .ctx = self,
+        .on_click = .{ .f = onMedium, .ctx = self },
     });
     button.button(.{
         .id = .{ .text = "catalog.btn.lg" },
@@ -289,8 +281,7 @@ fn sizeButtons(self: *App) void {
         .hover_bg = c.primary_hover,
         .h = .{ .fixed = 32 },
         .pad = props.Pad.axes(0, 16),
-        .on_click = onLarge,
-        .ctx = self,
+        .on_click = .{ .f = onLarge, .ctx = self },
     });
 }
 
@@ -324,7 +315,7 @@ fn fieldRowChildren(self: *App) void {
 }
 
 fn fieldChildren(self: *App) void {
-    input_mod.TextField(&self.field);
+    input_mod.textField(&self.field);
 }
 
 // ---- selection controls --------------------------------------------------------------------------------------
@@ -342,8 +333,7 @@ fn selectionRow(self: *App) void {
         .check_color = c.on_primary,
         .border_color = c.text_done,
         .hover_bg = c.hover,
-        .on_click = onCheck,
-        .ctx = self,
+        .on_click = .{ .f = onCheck, .ctx = self },
     });
     text_mod.label(.{ .label = .{ .text = "Include views", .size = scale.label, .color = c.text } });
 
@@ -356,8 +346,7 @@ fn selectionRow(self: *App) void {
             .selected_border = c.primary,
             .border_color = c.text_done,
             .dot_color = c.primary,
-            .on_click = onRadio,
-            .ctx = &self.radio_ctx[i],
+            .on_click = .{ .f = onRadio, .ctx = &self.radio_ctx[i] },
         });
     }
     text_mod.label(.{ .label = .{ .text = "read only", .size = scale.label, .color = c.text } });
@@ -368,8 +357,7 @@ fn selectionRow(self: *App) void {
         .on_bg = c.primary,
         .off_bg = c.surface_variant,
         .knob_color = c.on_primary,
-        .on_click = onToggle,
-        .ctx = self,
+        .on_click = .{ .f = onToggle, .ctx = self },
     });
     text_mod.label(.{ .label = .{ .text = "auto-run", .size = scale.label, .color = c.text } });
 
@@ -381,8 +369,7 @@ fn selectionRow(self: *App) void {
         .track_bg = c.surface_variant,
         .fill_bg = c.primary,
         .thumb_color = c.primary,
-        .on_change = onSlider,
-        .ctx = self,
+        .on_change = .{ .f = onSlider, .ctx = self },
     });
 }
 
@@ -478,8 +465,7 @@ fn tabsBody(self: *App) void {
         .fg = c.text_dim,
         .active_fg = c.text,
         .close_fg = c.text_done,
-        .on_select = onTab,
-        .ctx = self,
+        .on_select = .{ .f = onTab, .ctx = self },
     });
 }
 
@@ -500,8 +486,7 @@ fn listBody(self: *App) void {
         .border_width = 1,
         .border_color = c.divider,
         .selected = self.row,
-        .on_select = onRow,
-        .ctx = self,
+        .on_select = .{ .f = onRow, .ctx = self },
     }, demo_row_slice, self, listRow);
 }
 
@@ -539,8 +524,7 @@ fn treeBody(self: *App) void {
         .meta_fg = c.text_dim,
         .caret_fg = c.text_done,
         .selected_bar = c.primary,
-        .on_select = onTree,
-        .ctx = self,
+        .on_select = .{ .f = onTree, .ctx = self },
     });
 }
 
@@ -577,8 +561,7 @@ fn dropdownWrapChildren(self: *App) void {
         .field_bg = c.background,
         .border_width = 1,
         .border_color = c.divider,
-        .on_select = onOption,
-        .ctx = self,
+        .on_select = .{ .f = onOption, .ctx = self },
     }, shown[0..n], self, optionRow);
 }
 

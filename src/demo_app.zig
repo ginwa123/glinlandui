@@ -51,22 +51,19 @@ pub const App = struct {
             .label = .{ .text = "Click me" },
             .w = .{ .fixed = 180 },
             .h = .{ .fixed = 40 },
-            .on_click = onClick,
-            .ctx = self,
+            .on_click = .{ .f = onClick, .ctx = self },
         });
         components.toggle.toggle(.{
             .id = .{ .text = "toggle" },
             .on = self.toggled,
-            .on_click = onToggle,
-            .ctx = self,
+            .on_click = .{ .f = onToggle, .ctx = self },
         });
         components.slider.slider(.{
             .id = .{ .text = "slider" },
             .w = 220,
             .h = 24,
             .value = self.slider_frac,
-            .on_change = onSlider,
-            .ctx = self,
+            .on_change = .{ .f = onSlider, .ctx = self },
         });
         components.text.label(.{
             .label = .{ .text = self.statusText(), .size = 13, .color = Color.rgb(0x7a, 0xb8, 0xff) },
@@ -82,16 +79,14 @@ pub const App = struct {
                 .label = .{ .text = "Open a file..." },
                 .w = .{ .fixed = 220 },
                 .h = .{ .fixed = 40 },
-                .on_click = onOpenFile,
-                .ctx = self,
+                .on_click = .{ .f = onOpenFile, .ctx = self },
             });
             components.button.button(.{
                 .id = .{ .text = "open-folder" },
                 .label = .{ .text = "Choose a folder..." },
                 .w = .{ .fixed = 220 },
                 .h = .{ .fixed = 40 },
-                .on_click = onOpenFolder,
-                .ctx = self,
+                .on_click = .{ .f = onOpenFolder, .ctx = self },
             });
             components.text.label(.{
                 .label = .{ .text = self.pickText(), .size = 13, .color = Color.rgb(0x9a, 0x9a, 0x9a) },
