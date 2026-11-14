@@ -74,6 +74,7 @@ pub const Window = struct {
     diff_prev_h: u32 = 0,
     diff_prints: u32 = 0,
     diff_changed: u32 = 0,
+    frame_no: u64 = 0,
 
     pub fn init(alloc: std.mem.Allocator, config: WindowConfig) Window {
         // The allocator is accepted for signature parity with the web backend, which genuinely needs it (`wasm_allocator` is the only allocator that grows a.
@@ -197,6 +198,7 @@ pub const Window = struct {
         const sf = surface orelse return;
         const n = sf.pixels.len;
         const comparable = self.diff_prev.len == n and self.diff_prev_w == sf.width and self.diff_prev_h == sf.height;
+        self.frame_no +%= 1;
         // Consecutive frames only, and a changed frame is reported too (throttled), so a blink always names its own box.
         if (comparable and !frame_mod.commandsRepeated() and self.diff_prints < 50) {
             self.diff_changed +%= 1;
@@ -208,7 +210,7 @@ pub const Window = struct {
             }
             const box = self.diffBox(sf);
             // A small change is the interesting one: a whole-area repaint is scrolling, a row or a column is a blink.
-            if (box.count * 20 < n) {
+            if (box.count * 20 < n / 4) {
                 self.diff_prints += 1;
                 // The colour the changed box went from and to, which names the state that flipped (base / hover / selected).
                 const cx = (box.min_x + box.max_x) / 2;
@@ -216,7 +218,7 @@ pub const Window = struct {
                 const ci = (cy * @as(usize, sf.width) + cx) * 4;
                 const was = (@as(u32, self.diff_prev[ci]) << 16) | (@as(u32, self.diff_prev[ci + 1]) << 8) | self.diff_prev[ci + 2];
                 const now = (@as(u32, sf.pixels[ci]) << 16) | (@as(u32, sf.pixels[ci + 1]) << 8) | sf.pixels[ci + 2];
-                std.log.info("FRAME CHANGED {d} px  x {d}..{d}  y {d}..{d}  cmds={d}  colour {x:0>6} -> {x:0>6}", .{ box.count, box.min_x, box.max_x, box.min_y, box.max_y, frame_mod.lastCommandCount(), was, now });
+                std.log.info("FRAME CHANGED {d} px  x {d}..{d}  y {d}..{d}  cmds={d}  colour {x:0>6} -> {x:0>6}  frame={d}", .{ box.count, box.min_x, box.max_x, box.min_y, box.max_y, frame_mod.lastCommandCount(), was, now, self.frame_no });
             }
         }
         if (comparable and frame_mod.commandsRepeated() and self.diff_prints < 50) {
