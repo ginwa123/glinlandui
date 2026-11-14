@@ -93,6 +93,30 @@ It compiles with `-Werror`, and that is load-bearing: messaging a selector AppKi
 implement is a clang *warning*, so without it the build passes and the app ships a runtime
 `NSInvalidArgumentException` on every event.
 
+## The performance gate
+
+`zig build bench-lazy-scroll` measures `examples/lazy_scroll.zig` headless: 600 frames at 900x640,
+scale 1, scrolling 10,000 virtualised rows to the bottom. The `lazy-scroll` CI job runs that bench
+on macOS, Linux and Windows and gates it with `ci/check_lazy_scroll_bench.sh`.
+
+Two different things are asserted, and they are deliberately not the same thing:
+
+- **The work is identical on every platform.** `rows`, `frames`, `size`, `scale`, `declared` and
+  `scroll_y` must match `ci/lazy_scroll_bench.expected` exactly. The scroll path is driven by the
+  frame count, not the wall clock, so a difference means a platform stopped measuring the same
+  thing. `declared` and `scroll_y` are font-independent because the header and footer are fixed
+  boxes, which is what makes the comparison legitimate at all.
+- **The timing fits one ceiling.** `avg_ms` and `p95_ms` are checked against the budget in that
+  same file — 12 ms and 25 ms, against ~1 ms measured on an M-series Mac. A hosted runner is
+  several times slower than a developer machine, so this is a regression gate rather than a
+  144 Hz claim, and it is never compared across platforms.
+
+Pixel checksums are NOT part of it: the three platforms use different fonts, so the glyphs differ
+by design. What is comparable is the layout and the scroll, not the ink.
+
+Changing the bench — the frame count, the size, the scroll speed — means changing
+`ci/lazy_scroll_bench.expected` in the same commit. Those numbers are contractual.
+
 ## Dependencies
 
 None. The package is std-only apart from the vendored Clay bindings and stb headers under
