@@ -733,3 +733,103 @@ jobs:
           echo "$out" | grep -q 'serving zig-out/web'
           echo "$out" | grep -q 'http://localhost:8080/?app=calculator'
           echo "-Dweb: builds, serves, prints the URL"
+
+  # ---------------------------------------------------------------------------
+  # Lazy-scroll example (examples/lazy_scroll.zig) — the performance gate.
+  #
+  # `--bench` opens no window and waits for no vsync: it drives the toolkit's own
+  # headless driver for a fixed 600 frames, so the SAME binary measures the same
+  # frames on all three runners. That is what makes the three legs comparable at
+  # all, and it is why this job is a matrix rather than three hand-written jobs.
+  #
+  # What is asserted, in order:
+  #   1. the example's own tests (virtualisation, the meter, the row maths);
+  #   2. the WORK, which must be identical everywhere — rows, frames, size,
+  #      scale, declared rows and the final scroll offset. The scroll path is
+  #      driven by the frame count, not the wall clock, so any difference here
+  #      means a platform stopped measuring the same thing;
+  #   3. the TIMING, against one shared ceiling. A hosted runner is several
+  #      times slower than a developer machine, so the budget in
+  #      ci/lazy_scroll_bench.expected is a regression gate, not a 144 Hz claim.
+  #
+  # The bench log is uploaded on every outcome, so a red leg can be read without
+  # re-running it.
+  # ---------------------------------------------------------------------------
+  lazy-scroll:
+    name: Lazy scroll bench / ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            label: Linux
+          - os: macos-14
+            label: macOS
+          - os: windows-2022
+            label: Windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      # The bench itself needs no display, but the example links the same native
+      # stack as every other target in this repository, so the Linux leg needs
+      # the same packages the `linux` job installs.
+      - name: Install native Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            fonts-dejavu-core \
+            libcairo2-dev \
+            libegl-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libfribidi-dev \
+            libglib2.0-dev \
+            libgles-dev \
+            libharfbuzz-dev \
+            libpango1.0-dev \
+            libpixman-1-dev \
+            libpng-dev \
+            libwayland-dev \
+            pkg-config
+
+          scanner="$(command -v wayland-scanner)"
+          test -n "$scanner"
+          sudo ln -sf "$scanner" /usr/sbin/wayland-scanner
+
+          echo "C_INCLUDE_PATH=/usr/lib/$(gcc -print-multiarch)/glib-2.0/include" >> "$GITHUB_ENV"
+
+      - name: Check formatting (includes examples/)
+        run: zig fmt --check build.zig src examples
+
+      # `test-lazy-scroll` is the example's own suite and nothing else: the
+      # parity step would also work, but it runs the whole toolkit and this job
+      # is about one example.
+      - name: The example's own tests
+        run: zig build test-lazy-scroll --summary all
+
+      - name: Measure the bench (headless, 600 frames, 900x640 at 1x)
+        run: |
+          set -euo pipefail
+          zig build bench-lazy-scroll 2>&1 | tee lazy-scroll-bench.log
+
+      - name: Gate the bench (same work everywhere, timings inside the budget)
+        run: ./ci/check_lazy_scroll_bench.sh lazy-scroll-bench.log
+
+      - name: Upload the bench log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazy-scroll-bench-${{ matrix.label }}
+          path: lazy-scroll-bench.log
+          if-no-files-found: warn

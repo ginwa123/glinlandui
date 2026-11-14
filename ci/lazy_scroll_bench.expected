@@ -1,0 +1,14 @@
+# The work every platform must do. These are inputs (rows, frames, size, scale) or layout values the fixed header and footer make font-independent
+# (declared rows, the clamped scroll offset), so a mismatch means the bench stopped measuring the same thing on that OS.
+rows=10000
+frames=600
+size=900x640
+scale=1.00
+declared=28
+scroll_y=-219430
+
+# The ceiling a hosted CI runner must stay under. This is a regression gate, not a speed target: an M-series Mac reports ~1.2 ms avg and ~1.9 ms p95,
+# and a shared runner is several times slower, so the numbers here are deliberately loose enough to pass on a noisy VM and tight enough to catch a
+# renderer change that costs an order of magnitude.
+budget_avg_ms=12.00
+budget_p95_ms=25.00

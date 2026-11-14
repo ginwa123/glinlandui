@@ -513,6 +513,14 @@ fn bench(gpa: std.mem.Allocator, app: *App, frames: usize, width: u32, height: u
         std.debug.print("  row 0 is NOT in the element tree\n", .{});
     }
 
+    const p50_ms = percentile(steady, 0.50);
+    const p95_ms = percentile(steady, 0.95);
+    const p99_ms = percentile(steady, 0.99);
+    const max_ms = percentile(steady, 1.0);
+    const cold_ms = @as(f32, @floatFromInt(cold_ns)) / 1_000_000.0;
+    // The offset the run ended at: the work every CI platform must reproduce, because the scroll path is frame-count driven, not clock driven.
+    const scroll_y: f32 = if (data.found) data.scroll_position.y else 0;
+
     std.debug.print(
         \\LAZY SCROLL BENCH  {d} rows, {d} frames, {d}x{d} at {d}x scale
         \\  steady   avg {d: >6.2} ms   p50 {d: >6.2}   p95 {d: >6.2}   p99 {d: >6.2}   max {d: >6.2}   ({d} frames after warm-up)
@@ -527,16 +535,22 @@ fn bench(gpa: std.mem.Allocator, app: *App, frames: usize, width: u32, height: u
         height,
         scale,
         avg_ms,
-        percentile(steady, 0.50),
-        percentile(steady, 0.95),
-        percentile(steady, 0.99),
-        percentile(steady, 1.0),
+        p50_ms,
+        p95_ms,
+        p99_ms,
+        max_ms,
         steady.len,
-        @as(f32, @floatFromInt(cold_ns)) / 1_000_000.0,
+        cold_ms,
         budget_144_ms,
         1000.0 / 60.0,
         app.declared,
     });
+
+    // One machine-readable line, parsed by ci/check_lazy_scroll_bench.sh on every platform: the work values must match everywhere, the timings must fit the budget.
+    std.debug.print(
+        "BENCH rows={d} frames={d} size={d}x{d} scale={d:.2} declared={d} scroll_y={d:.0} avg_ms={d:.2} p50_ms={d:.2} p95_ms={d:.2} p99_ms={d:.2} max_ms={d:.2} cold_ms={d:.2}\n",
+        .{ row_count, frames, width, height, scale, app.declared, scroll_y, avg_ms, p50_ms, p95_ms, p99_ms, max_ms, cold_ms },
+    );
 }
 
 // The box of the first declared row, so a bench can prove the rows are on screen and not only declared.

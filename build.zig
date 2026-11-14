@@ -371,6 +371,10 @@ pub fn build(b: *std.Build) void {
                 },
             }),
         });
+
+        // The example's own tests, alone: the CI bench legs assert these before they time anything, and the parity step is far too wide for that.
+        const lazy_test_step = b.step("test-lazy-scroll", "Run the lazy-scroll example's tests only");
+        lazy_test_step.dependOn(&b.addRunArtifact(lazy_test.?).step);
     }
 
     // ---- Example app: the file dialog ---- The "how to use" for `glinlandui.file_dialog`, and the only example in this repository whose subject is an API.
@@ -509,10 +513,9 @@ pub fn build(b: *std.Build) void {
 
     // ---- size: no .zig file over 3000 lines; POSIX sh, so an opt-in step rather than the default build ----
     const lines_check = b.step("lines:check", "Fail if any .zig file exceeds 3000 lines");
-    const run_lines_check = b.addSystemCommand(&.{
-        "sh", "-c",
-        "find src -name '*.zig' -exec wc -l {} + | awk '$1 > 3000 && $2 != \"total\" { print $2 \": \" $1 \" lines (max 3000)\"; bad=1 } END { exit bad }'",
-    });
+    // Kept in a const of its own: a 150-character literal inside the argument list is what made `zig fmt` pad the whole call.
+    const lines_cmd = "find src -name '*.zig' -exec wc -l {} + | awk '$1 > 3000 && $2 != \"total\" { print $2 \": \" $1 \" lines (max 3000)\"; bad=1 } END { exit bad }'";
+    const run_lines_check = b.addSystemCommand(&.{ "sh", "-c", lines_cmd });
     run_lines_check.has_side_effects = true;
     lines_check.dependOn(&run_lines_check.step);
 }
