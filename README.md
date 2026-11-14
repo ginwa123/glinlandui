@@ -182,30 +182,33 @@ The two things worth noticing:
 ## State and MVVM
 
 An immediate-mode app re-declares its whole tree every frame, so "where does the state live?" has one honest
-answer: in a value that frame reads. Three small pieces make that shape ergonomic.
+answer: in a value that frame reads. Two small pieces make that shape ergonomic.
 
 | module | what it gives you | Compose |
 |---|---|---|
-| `glinlandui.state_flow` | `MutableStateFlow(T)` — `get`, `set`, `update`; a value equal to the current one is not a publish | `MutableStateFlow` |
 | `glinlandui.view_model` | `Store(T)` — one instance per screen, `onCleared` on leave | `ViewModelStore` + `viewModel()` |
 | `glinlandui.theme` | `Theme` = colour roles + type scale, with `dark` / `light` | `MaterialTheme` |
 
-There is **no composition runtime**, on purpose. Compose needs one because a composable may be skipped, cached
-or re-ordered; here the frame *is* the recomposition — it reads the state and declares the tree. Two things
-follow, and both simplify an app rather than complicate it:
+There is **no state container and no composition runtime**, on purpose. A ViewModel owns a plain value, an
+intent replaces it, and the next frame reads whatever it says — no observable, no collector, no version, no
+slot table. Compose needs all of that because a composable may be skipped, cached or re-ordered; here the frame
+*is* the recomposition. Two consequences worth knowing:
 
-- **A publish does not schedule a repaint.** The window repaints after every key and pointer event, and a click
-  is dispatched *before* that repaint, so an intent the user raised is on screen in the next frame. An app that
-  changes state from a timer asks the window for a frame itself (`Window.setAnimating`).
+- **Replacing the state does not schedule a repaint.** The window repaints after every key and pointer event,
+  and a click is dispatched *before* that repaint, so an intent the user raised is on screen in the next frame.
+  An app that changes state from a timer asks the window for a frame itself (`Window.setAnimating`).
 - **View-local state that must survive a frame is a field.** `remember` would need a slot table keyed by an id;
   a field on the screen's own struct is typed, inspectable, and needs no key.
 
 ```zig
 const Vm = struct {
-    state: glinlandui.state_flow.MutableStateFlow(State),
+    state: State = .{},
 
+    // An intent replaces the value. Its answer is for the caller: a draft it did not take stays in the field.
     pub fn add(self: *Vm, title: []const u8) bool {
-        return self.state.update(title, reduce_add);   // false when the result equals the current state
+        if (title.len == 0) return false;
+        self.state = self.state.withTodo(title);
+        return true;
     }
 
     pub fn onCleared(self: *Vm) void {}                // the store calls this when the screen goes away
@@ -217,7 +220,7 @@ const App = struct {
     fn content(ctx: ?*anyopaque, w: u32, h: u32) void {
         const self: *App = @ptrCast(@alignCast(ctx.?));
         const vm = self.store.getOrCreate(Vm.init);     // `viewModel()`
-        // ... declare the screen from `vm.uiState()`
+        // ... declare the screen from `vm.state`
     }
 };
 

@@ -25,8 +25,6 @@ zig build test-todo         # the app's own tests + the E2E suite, headless
 
 | Compose | glinlandui | what it is |
 |---|---|---|
-| `MutableStateFlow<T>` | `state_flow.MutableStateFlow(T)` | one value; `set`/`update` publish only when it differs |
-| `_state.update { ... }` | `state.update(arg, reduce)` | the reducer reads the current value and returns the next one |
 | `ViewModelStore` / `viewModel()` | `view_model.Store(T)` + `App.vm()` | one instance per screen, created once, `onCleared` on leave |
 | `MaterialTheme { }` | `theme.Theme` (+ `theme.dark` / `theme.light`) | colour roles and a type scale, passed down as a value |
 | `TextField(value, onValueChange)` | `input.liveField(props, &field)` | a field that owns its draft, caret, selection and keyboard |
@@ -36,7 +34,8 @@ zig build test-todo         # the app's own tests + the E2E suite, headless
 
 | Compose | here | what it is |
 |---|---|---|
-| `data class TodoUiState` | `state.zig` → `TodoUiState` | one value: the rows. Copied on every change, comparable, bounded |
+| `data class TodoUiState` | `state.zig` → `TodoUiState` | one value: the rows. Replaced by an intent, read by the frame, bounded |
+| `MutableStateFlow<T>` + `_state.update { }` | `view_model.zig` → `state: TodoUiState` | a plain field. An intent assigns it; there is no observable and nothing to collect |
 | `it.copy(todos = ...)` | `withTodo` / `withoutTodo` / `withToggled` | a pure function from a state to the next state |
 | `class TodoViewModel : ViewModel()` | `view_model.zig` → `TodoViewModel` | the only writer. Every public function is an intent: `add`, `remove`, `toggle` |
 | `@Composable fun TodoScreen()` | `view.TodoScreen(scope)` | a function of the state. `*Scope` is the hidden `Composer` + `CompositionLocal` bundle |

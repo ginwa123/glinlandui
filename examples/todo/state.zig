@@ -1,5 +1,5 @@
 // The screen's state, as a VALUE: everything the view draws is one of these.
-// This is Kotlin's `data class TodoUiState` — copied on every change and comparable, so the flow can drop a publish that changes nothing.
+// This is Kotlin's `data class TodoUiState` — a plain value a ViewModel replaces, never mutates in place.
 // A half-typed title is NOT in here: it is an editing draft, it lives in the field, and `add` takes it as an argument.
 const std = @import("std");
 
@@ -28,10 +28,6 @@ pub const Todo = struct {
     pub fn text(self: *const Todo) []const u8 {
         return std.mem.sliceTo(&self.title, 0);
     }
-
-    pub fn eql(a: Todo, b: Todo) bool {
-        return a.done == b.done and std.mem.eql(u8, a.text(), b.text());
-    }
 };
 
 // `data class TodoUiState(val todos: List<String> = emptyList())`.
@@ -46,7 +42,7 @@ pub const TodoUiState = struct {
 
     pub fn doneCount(self: *const TodoUiState) usize {
         var n: usize = 0;
-        for (self.items()) |t| {
+        for (self.todos[0..self.count]) |t| {
             if (t.done) n += 1;
         }
         return n;
@@ -79,23 +75,13 @@ pub const TodoUiState = struct {
         next.todos[index].done = !next.todos[index].done;
         return next;
     }
-
-    // What `data class` equality means here: every live row, and nothing in the spare capacity.
-    pub fn eql(a: TodoUiState, b: TodoUiState) bool {
-        if (a.count != b.count) return false;
-        var i: usize = 0;
-        while (i < a.count) : (i += 1) {
-            if (!Todo.eql(a.todos[i], b.todos[i])) return false;
-        }
-        return true;
-    }
 };
 
 // ---- tests ---------------------------------------------------------------------------------------------------
 
-test "a fresh state is empty, and equals another fresh one" {
+test "a fresh state is empty" {
     try std.testing.expectEqual(@as(usize, 0), (TodoUiState{}).count);
-    try std.testing.expect(TodoUiState.eql(.{}, .{}));
+    try std.testing.expectEqual(@as(usize, 0), (TodoUiState{}).items().len);
 }
 
 test "adding a todo grows the count and keeps the title" {
@@ -135,17 +121,7 @@ test "toggling flips exactly one row, and an index out of range is a no-op" {
     try std.testing.expectEqual(@as(usize, 1), toggled.doneCount());
 
     // A click and a state change can race by one frame, so this must not panic.
-    try std.testing.expect(TodoUiState.eql(state, state.withToggled(7)));
-}
-
-test "eql sees a changed row, a removed row, and a toggle that was undone" {
-    var base = TodoUiState{};
-    base = base.withTodo("a");
-    base = base.withTodo("b");
-
-    try std.testing.expect(!TodoUiState.eql(base, base.withToggled(0)));
-    try std.testing.expect(!TodoUiState.eql(base, base.withoutTodo(0)));
-    try std.testing.expect(TodoUiState.eql(base, base.withToggled(0).withToggled(0)));
+    try std.testing.expectEqual(@as(usize, 0), state.withToggled(7).doneCount());
 }
 
 test "capacity is a ceiling, not a crash" {
