@@ -829,8 +829,10 @@ fn exampleExe(
     lib: *std.Build.Module,
     mod: *std.Build.Module,
 ) *std.Build.Step.Compile {
+    // The artifact keeps the hyphenated name the CI legs look for (`glinlandui-file-dialog`), even though the module is `file_dialog`.
+    const dashed = std.mem.replaceOwned(u8, b.allocator, name, "_", "-") catch @panic("OOM");
     return b.addExecutable(.{
-        .name = b.fmt("glinlandui-{s}", .{name}),
+        .name = b.fmt("glinlandui-{s}", .{dashed}),
         .root_module = b.createModule(.{
             .root_source_file = b.path(b.fmt("examples/{s}/main.zig", .{name})),
             .target = target,
