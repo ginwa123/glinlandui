@@ -213,12 +213,20 @@ fn clayMeasure(text_bytes: []const u8, config: *cl.TextElementConfig, _: void) c
     return .{ .w = ext.w, .h = ext.h };
 }
 
+/// Receives a duplicate element id instead of the default panic. A test installs one to assert the detection without
+/// dying; an app must leave it null.
+pub var duplicate_id_sink: ?*const fn (msg: []const u8) void = null;
+
 fn clayErrorHandler(err: cl.ErrorData) callconv(.c) void {
     const msg = err.error_text.chars[0..@intCast(err.error_text.length)];
     // A duplicate id is not a warning: `getElementData` resolves ids through a map keyed by the hash, so a second
     // element with the same id makes every click, hover and cursor lookup land on the OTHER one. In a Debug or test
     // build that is a bug, so stop where it happens instead of logging it 200 times.
     if (err.error_type == .duplicate_id and builtin.mode == .Debug) {
+        if (duplicate_id_sink) |sink| {
+            sink(msg);
+            return;
+        }
         std.debug.panic("glinlandui: duplicate element id: {s}", .{msg});
     }
     std.log.err("clay {s}: {s}", .{ @tagName(err.error_type), msg });

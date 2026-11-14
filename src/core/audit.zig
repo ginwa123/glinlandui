@@ -8,12 +8,9 @@
 //! Findings go to `sink` when one is installed (a test records them and asserts), and to the log otherwise.
 const std = @import("std");
 const cl = @import("zclay");
-const text_backend = @import("text_backend.zig");
 const registry = @import("components/click_registry.zig");
 
 pub const Kind = enum {
-    /// A text run is wider than the box the layout gave it: it will be clipped, or overlap whatever is next to it.
-    text_wider_than_box,
     /// A rectangle thinner than a device pixel is not on the device grid, so it renders as two half-lit columns.
     hairline_off_grid,
     /// A scissor was started and never ended, so the rest of the frame is clipped.
@@ -75,18 +72,10 @@ pub fn checkCommands(commands: []const cl.RenderCommand, scale: f32) usize {
         switch (cmd.command_type) {
             .scissor_start => depth += 1,
             .scissor_end => depth -= 1,
-            .text => {
-                const td = cmd.render_data.text;
-                const bytes = td.string_contents.chars[0..@intCast(td.string_contents.length)];
-                const measured = text_backend.measureText(bytes, td.font_size).w;
-                // One point of slack: the last glyph's right side bearing is not part of its advance.
-                if (measured > cmd.bounding_box.width + 1 and cmd.bounding_box.width > 0) {
-                    report(make(.text_wider_than_box, cmd.id, "{s} is {d:.1} px wide in a {d:.1} px box", .{
-                        bytes, measured, cmd.bounding_box.width,
-                    }));
-                    findings += 1;
-                }
-            },
+            // NOTE: there is deliberately no "text is wider than its box" check. A text element's bounding box IS its
+            // measured width, so the comparison can never fail; what actually overflows is the PARENT, and the command
+            // stream does not carry parentage. `text_face`'s tests prove the other half instead: the width Clay lays a
+            // run out with is the width the rasteriser advances its pen by.
             .rectangle => {
                 if (cmd.bounding_box.width <= 0) continue;
                 const device_w = cmd.bounding_box.width * scale;
@@ -107,6 +96,12 @@ pub fn checkCommands(commands: []const cl.RenderCommand, scale: f32) usize {
         findings += 1;
     }
     return findings;
+}
+
+fn containsBox(outer: cl.BoundingBox, inner: cl.BoundingBox) bool {
+    return inner.x >= outer.x and inner.y >= outer.y and
+        inner.x + inner.width <= outer.x + outer.width and
+        inner.y + inner.height <= outer.y + outer.height;
 }
 
 /// Check every registered click target against this frame's layout.
@@ -145,10 +140,14 @@ pub fn checkHitConsistency() usize {
         const cx = data.bounding_box.x + data.bounding_box.width * 0.5;
         const cy = data.bounding_box.y + data.bounding_box.height * 0.5;
         const winner = registry.topmostAt(cx, cy) orelse continue;
-        if (winner.id.id != hit.id.id) {
-            report(make(.hit_target_not_self, hit.id.id, "entry {d} loses its own centre to id {d}", .{ i, winner.id.id }));
-            findings += 1;
-        }
+        if (winner.id.id == hit.id.id) continue;
+        // A higher z is what an overlay is FOR, and a button inside a clickable card legitimately covers its centre.
+        // Only an ambiguous click between two targets at the same level is a bug.
+        if (winner.z > hit.z) continue;
+        const wb = cl.getElementData(winner.id).bounding_box;
+        if (containsBox(wb, data.bounding_box)) continue;
+        report(make(.hit_target_not_self, hit.id.id, "entry {d} loses its own centre to id {d}", .{ i, winner.id.id }));
+        findings += 1;
     }
     return findings;
 }
@@ -222,19 +221,6 @@ fn record(cmds: []const cl.RenderCommand, scale: f32) Recorder {
     }
     _ = checkCommands(cmds, scale);
     return rec;
-}
-
-test "audit: a text run wider than its box is a finding" {
-    const cmds = [_]cl.RenderCommand{textRun(1, "InvoiceLine", 4)};
-    const rec = record(&cmds, 1);
-    try testing.expect(rec.n >= 1);
-    try testing.expectEqual(Kind.text_wider_than_box, rec.kinds[0]);
-}
-
-test "audit: a text run that fits is not a finding" {
-    const width = text_backend.measureText("InvoiceLine", 14).w;
-    const cmds = [_]cl.RenderCommand{textRun(1, "InvoiceLine", width + 2)};
-    try testing.expectEqual(@as(usize, 0), record(&cmds, 1).n);
 }
 
 test "audit: a hairline between device pixels is a finding, and a snapped one is not" {

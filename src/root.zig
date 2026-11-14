@@ -118,6 +118,7 @@ test {
     _ = @import("core/text_editor.zig");
     _ = @import("core/text_face.zig");
     _ = @import("core/audit.zig");
+    _ = @import("core/audit_cases.zig");
     _ = @import("core/font_io.zig");
     _ = @import("core/table.zig");
     _ = @import("core/testing/finders.zig");
