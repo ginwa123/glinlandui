@@ -4,6 +4,7 @@ const cl = @import("zclay");
 const button = @import("button.zig");
 const input = @import("input.zig");
 const registry = @import("click_registry.zig");
+const frame_mod = @import("../frame.zig");
 
 /// Linux BTN_LEFT (0x110): the only button that dispatches clicks.
 pub const BTN_LEFT: u32 = 272;
@@ -152,6 +153,16 @@ pub fn pointerEvent(s: *PtrState, x: f32, y: f32, pressed: bool, button_code: u3
     s.y = y;
     // BTN_LEFT == 0x110 (272).
     if (button_code == BTN_LEFT and pressed) {
+        // A press anywhere but the focused field takes the keyboard away from it, so a field stops blinking when another component is clicked.
+        if (frame_mod.focusKnown()) {
+            if (frame_mod.focusedId()) |fid| {
+                const data = cl.getElementData(cl.getElementId(fid));
+                const inside = data.found and
+                    x >= data.bounding_box.x and x <= data.bounding_box.x + data.bounding_box.width and
+                    y >= data.bounding_box.y and y <= data.bounding_box.y + data.bounding_box.height;
+                if (!inside) frame_mod.clearFocus();
+            }
+        }
         s.down = true;
         s.dragging = false;
         s.down_x = x;

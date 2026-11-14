@@ -159,6 +159,74 @@ fn hashColor(h: u64, c: [4]f32) u64 {
     return x;
 }
 
+// The element that owns the keyboard: an id the app declared, copied because app ids usually live in the frame arena.
+var focus_buf: [96]u8 = undefined;
+var focus_len: usize = 0;
+var focus_known: bool = false;
+var focus_cleared: bool = false;
+
+// Give the keyboard to `id` (a field's id). Pass null to drop it.
+pub fn setFocus(id: ?[]const u8) void {
+    focus_known = true;
+    if (id) |s| {
+        focus_len = @min(s.len, focus_buf.len);
+        @memcpy(focus_buf[0..focus_len], s[0..focus_len]);
+    } else {
+        focus_len = 0;
+    }
+}
+
+// Forget who owns the keyboard: a new host or window starts with nothing focused.
+pub fn resetFocus() void {
+    focus_len = 0;
+    focus_known = false;
+    focus_cleared = false;
+}
+
+// Drop the keyboard, and remember that this frame a press landed somewhere else.
+pub fn clearFocus() void {
+    focus_known = true;
+    focus_len = 0;
+    focus_cleared = true;
+}
+
+// True once a click has claimed or dropped the keyboard, so a view knows the toolkit owns focus from then on.
+pub fn focusKnown() bool {
+    return focus_known;
+}
+
+// True on the frame a press landed outside the focused element.
+pub fn focusWasCleared() bool {
+    return focus_cleared;
+}
+
+// The id that owns the keyboard, or null when no field has claimed it.
+pub fn focusedId() ?[]const u8 {
+    if (focus_len == 0) return null;
+    return focus_buf[0..focus_len];
+}
+
+// True when `id` is the element that owns the keyboard.
+pub fn isFocused(id: []const u8) bool {
+    return focus_len == id.len and std.mem.eql(u8, focus_buf[0..focus_len], id);
+}
+
+test "focus follows the toolkit: a click elsewhere drops it" {
+    setFocus("sidebar.search");
+    try std.testing.expect(isFocused("sidebar.search"));
+    try std.testing.expect(!isFocused("results.filter"));
+    try std.testing.expectEqualStrings("sidebar.search", focusedId().?);
+    // A press outside the focused element clears it and says so for exactly that frame.
+    clearFocus();
+    try std.testing.expect(focusedId() == null);
+    try std.testing.expect(focusWasCleared());
+    try std.testing.expect(!isFocused("sidebar.search"));
+    // A field claiming the keyboard again wins, and the "was cleared" note belongs to the frame it happened in.
+    setFocus("results.filter");
+    try std.testing.expect(isFocused("results.filter"));
+    try std.testing.expect(focusKnown());
+}
+
 // Clay multiplies a wheel delta by 10 internally. The toolkit cancels it, so one point of gesture moves one point of content.
 pub const wheel_factor: f32 = 10.0;
 
@@ -467,6 +535,7 @@ pub fn clayFrameWithOptions(
     cl.beginLayout();
     // The frame's scratch strings and the caret-blink schedule are released here, so an app never has to remember either.
     text_used = 0;
+    focus_cleared = false;
     text_editor.beginBlinkFrame();
     declare(ctx, w, h);
     const commands = cl.endLayout();

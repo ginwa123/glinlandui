@@ -443,6 +443,7 @@ void glin_cocoa_window_destroy(GlinCocoaWindow *win) {
     }
     if (win && win->wake_timer) {
         [win->wake_timer invalidate];
+        [win->wake_timer release];
         win->wake_timer = nil;
     }
     if (!win) return;
@@ -523,21 +524,27 @@ void glin_cocoa_set_animating(GlinCocoaWindow *win, int on) {
 void glin_cocoa_invalidate_after(GlinCocoaWindow *win, int ms) {
     if (!win || !win->view) return;
     @autoreleasepool {
-        // One wake-up at a time: the next frame schedules its own, so a stale timer firing late would draw an extra frame.
+        // One wake-up at a time, and this file is manual-retain: a timer created here is autoreleased, and the run loop drops its own
+        // retain the moment a non-repeating timer fires, so the field would dangle. We hold our own reference and release it below.
         if (win->wake_timer) {
             [win->wake_timer invalidate];
+            [win->wake_timer release];
             win->wake_timer = nil;
         }
         if (ms <= 0) {
             [(GlinView *)win->view setNeedsDisplay:YES];
             return;
         }
-        win->wake_timer = [NSTimer timerWithTimeInterval:(double)ms / 1000.0
-                                                  repeats:NO
-                                                    block:^(NSTimer *t) {
-                                                        (void)t;
-                                                        [(GlinView *)win->view setNeedsDisplay:YES];
-                                                    }];
+        GlinCocoaWindow *w = win;
+        NSTimer *t = [NSTimer timerWithTimeInterval:(double)ms / 1000.0
+                                             repeats:NO
+                                               block:^(NSTimer *timer) {
+                                                   // The run loop has released its retain by now; clear the field, draw, then drop ours.
+                                                   w->wake_timer = nil;
+                                                   [(GlinView *)w->view setNeedsDisplay:YES];
+                                                   [timer release];
+                                               }];
+        win->wake_timer = [t retain];
         [[NSRunLoop mainRunLoop] addTimer:win->wake_timer forMode:NSRunLoopCommonModes];
     }
 }

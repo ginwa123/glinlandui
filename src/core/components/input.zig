@@ -479,6 +479,7 @@ fn dragSelect(ctx: *FieldCtx, id: []const u8) void {
     ctx.input.setCaret(text_editor.offsetAtX(ctx.input.text(), x, ctx.font_size, ctx.measure), ctx.dragging);
     if (!ctx.dragging) {
         ctx.dragging = true;
+        frame_mod.setFocus(ctx.id);
         if (ctx.on_focus) |f| f(ctx.focus_ctx);
     }
 }
@@ -492,6 +493,8 @@ pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
     // Drag-select first, so the caret and the selection this frame draws are the ones the pointer just asked for.
     dragSelect(ctx, props.id);
     const text = input.text();
+    // Once a click has claimed the keyboard, the toolkit decides who owns it: clicking another component blurs this field.
+    if (frame_mod.focusKnown()) input.focused = frame_mod.isFocused(props.id);
     // The field owns its own animation, and only while it is focused: an unfocused field holds its clock at zero and draws no caret.
     input.tickBlink(frame_mod.delta_s);
     const fg = (if (props.disabled) props.disabled_fg else props.fg).toClay();
@@ -547,6 +550,7 @@ fn onFieldDoubleClick(ctx: ?*anyopaque) void {
     const x = frame_mod.ptr_x - data.bounding_box.x - c.pad_lr;
     text_editor.selectWordAt(c.input, text_editor.offsetAtX(c.input.text(), x, c.font_size, c.measure));
     c.input.idle = 0;
+    frame_mod.setFocus(c.id);
     if (c.on_focus) |f| f(c.focus_ctx);
 }
 
@@ -571,6 +575,7 @@ fn onFieldClick(ctx: ?*anyopaque) void {
     const x = frame_mod.ptr_x - data.bounding_box.x - c.pad_lr;
     c.input.setCaret(text_editor.offsetAtX(c.input.text(), x, c.font_size, c.measure), false);
     c.input.idle = 0;
+    frame_mod.setFocus(c.id);
     if (c.on_focus) |f| f(c.focus_ctx);
 }
 
