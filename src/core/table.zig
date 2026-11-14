@@ -154,6 +154,33 @@ pub fn columnWidth(
     return widthForChars(widest, font_size, cell_padding);
 }
 
+// When to ask for the next chunk: edge-triggered, because a gesture moves the scroll offset every frame and "near the bottom" would fire on each.
+pub const Loader = struct {
+    // True while the viewport is inside the load zone, so entering it can be told from staying in it.
+    inside: bool = false,
+    // True from the request until the app reports the chunk arrived, so one entry cannot queue two loads.
+    waiting: bool = false,
+
+    // True on the frame the viewport ENTERS the bottom zone. `margin` is how close to the end counts as "near".
+    pub fn wantsMore(self: *Loader, scrolled: f32, view: f32, content: f32, margin: f32) bool {
+        if (content <= view) {
+            self.inside = false;
+            return false;
+        }
+        const inside = scrolled + view >= content - margin;
+        const entered = inside and !self.inside;
+        self.inside = inside;
+        if (!entered or self.waiting) return false;
+        self.waiting = true;
+        return true;
+    }
+
+    // The app calls this once the new rows are in, which re-arms the zone for the next entry.
+    pub fn arrived(self: *Loader) void {
+        self.waiting = false;
+    }
+};
+
 // Rows rendered per frame must stay under the click-registry cap, or per-row click targets are silently dropped past the limit.
 pub const max_clickable_rows = 200;
 
@@ -323,4 +350,34 @@ test "the click budget is respected and checkable" {
 test "content height is the full table, so the scrollbar is right" {
     const v = visible(.{ .total_rows = 100, .total_cols = 1, .scroll_y = 0, .height = 440, .width = 800 });
     try testing.expectEqual(@as(f32, 100 * 22), v.content_height);
+}
+
+test "the loader fires once per entry into the bottom zone, not once per frame" {
+    var l = Loader{};
+    // Half way down: nowhere near the end.
+    try testing.expect(!l.wantsMore(1000, 500, 4400, 40));
+    // Entering the zone asks once.
+    try testing.expect(l.wantsMore(3900, 500, 4400, 40));
+    // The wheel keeps moving every frame; staying in the zone must not ask again.
+    try testing.expect(!l.wantsMore(3960, 500, 4400, 40));
+    try testing.expect(!l.wantsMore(3990, 500, 4400, 40));
+    // The chunk arrived and the content grew, so the viewport is no longer at the end.
+    l.arrived();
+    try testing.expect(!l.wantsMore(3990, 500, 8800, 40));
+    // Scrolling on to the new end enters the zone again, and that asks.
+    try testing.expect(l.wantsMore(8300, 500, 8800, 40));
+}
+
+test "the loader never asks for a list that fits, and one request is not queued twice" {
+    var l = Loader{};
+    try testing.expect(!l.wantsMore(0, 600, 400, 40));
+    try testing.expect(l.wantsMore(0, 500, 500, 40) == false);
+    // Already at the end and inside the zone on the very first frame.
+    try testing.expect(l.wantsMore(0, 500, 540, 40));
+    // A second request while the first is in flight is refused.
+    l.inside = false;
+    try testing.expect(!l.wantsMore(0, 500, 540, 40));
+    l.arrived();
+    l.inside = false;
+    try testing.expect(l.wantsMore(0, 500, 540, 40));
 }
