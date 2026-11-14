@@ -68,6 +68,11 @@ pub const Window = struct {
     // Size of the last surface handed to the window, so a resize is never skipped.
     presented_w: u32 = 0,
     presented_h: u32 = 0,
+    // The last frame's pixels, kept only while GLIN_FRAME_DIFF is set, so "it blinks" becomes a count and a box.
+    diff_prev: []u8 = &.{},
+    diff_prev_w: u32 = 0,
+    diff_prev_h: u32 = 0,
+    diff_frames: u32 = 0,
 
     pub fn init(alloc: std.mem.Allocator, config: WindowConfig) Window {
         // The allocator is accepted for signature parity with the web backend, which genuinely needs it (`wasm_allocator` is the only allocator that grows a.
@@ -174,6 +179,7 @@ pub const Window = struct {
         self.applyCursor();
         // A repaint that draws exactly the same commands is already on screen: re-presenting it is how a blink gets into a still window.
         const surface = soft.currentSurface();
+        if (std.c.getenv("GLIN_FRAME_DIFF") != null) self.reportFrameDiff(surface);
         const same_size = if (surface) |sf| sf.width == self.presented_w and sf.height == self.presented_h else false;
         if (!frame_mod.commandsRepeated() or !same_size) self.presentFrame();
     }
@@ -183,6 +189,42 @@ pub const Window = struct {
     // the display's refresh rate in between.
     pub fn setAnimating(self: *Window, on: bool) void {
         if (self.handle) |handle| c.glin_cocoa_set_animating(handle, if (on) 1 else 0);
+    }
+
+    // GLIN_FRAME_DIFF=1: every tenth frame, print how many pixels differ from the last one and where — the answer to "what is the blink".
+    fn reportFrameDiff(self: *Window, surface: ?*soft.Surface) void {
+        const sf = surface orelse return;
+        // One comparison in ten: the compare is a full-surface pass, and a blink that is visible is visible on every sampled frame.
+        self.diff_frames +%= 1;
+        if (self.diff_frames % 10 != 1) return;
+        const n = sf.pixels.len;
+        if (self.diff_prev.len == n and self.diff_prev_w == sf.width and self.diff_prev_h == sf.height) {
+            var count: usize = 0;
+            var min_x: usize = sf.width;
+            var max_x: usize = 0;
+            var min_y: usize = sf.height;
+            var max_y: usize = 0;
+            var y: usize = 0;
+            while (y < sf.height) : (y += 1) {
+                var x: usize = 0;
+                while (x < sf.width) : (x += 1) {
+                    const i = (y * @as(usize, sf.width) + x) * 4;
+                    if (sf.pixels[i] == self.diff_prev[i] and sf.pixels[i + 1] == self.diff_prev[i + 1] and sf.pixels[i + 2] == self.diff_prev[i + 2]) continue;
+                    count += 1;
+                    min_x = @min(min_x, x);
+                    max_x = @max(max_x, x);
+                    min_y = @min(min_y, y);
+                    max_y = @max(max_y, y);
+                }
+            }
+            std.log.info("FRAME DIFF {d} px  x {d}..{d}  y {d}..{d}  repeated={}", .{ count, min_x, max_x, min_y, max_y, frame_mod.commandsRepeated() });
+        }
+        if (self.diff_prev.len != n) {
+            self.diff_prev = std.heap.page_allocator.alloc(u8, n) catch return;
+        }
+        @memcpy(self.diff_prev[0..n], sf.pixels);
+        self.diff_prev_w = sf.width;
+        self.diff_prev_h = sf.height;
     }
 
     // Apply the cursor shape the frame resolved, when it changed.
