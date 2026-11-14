@@ -136,6 +136,8 @@ pub const Host = struct {
     }
 
     pub fn onScrollEvent(self: *Host, dx: f32, dy: f32) void {
+        // A delta this small moves nothing on screen, so it must not make the next frame count as dirty.
+        if (@abs(dx) < 0.01 and @abs(dy) < 0.01) return;
         self.scroll_dx += dx;
         self.scroll_dy += dy;
     }
@@ -290,6 +292,18 @@ test "host: pointer press latches down, release clears" {
     try std.testing.expect(h.ptr.down);
     h.onPointerEvent(10, 20, false, 272);
     try std.testing.expect(!h.ptr.down);
+}
+
+test "host: a no-op scroll does not make the frame dirty" {
+    var h: Host = undefined;
+    try testHost(&h, null, noopRoot);
+    // A trackpad that reports a zero delta, or jitter below a hundredth of a point, must not cost a repaint: that is
+    // what kept an idle window rendering at 60 frames a second.
+    h.onScrollEvent(0, 0);
+    h.onScrollEvent(0.001, -0.004);
+    try std.testing.expectEqual(@as(f32, 0), h.scroll_dy);
+    h.onScrollEvent(0, -40);
+    try std.testing.expectEqual(@as(f32, -40), h.scroll_dy);
 }
 
 test "host: empty keychain returns false (press + release)" {

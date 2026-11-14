@@ -59,6 +59,10 @@ pub const Window = struct {
     layout_h: u32 = 0,
     // Is the primary button currently held?
     left_held: bool = false,
+    // The last pointer state delivered, so a motion event that moves nothing costs no repaint.
+    last_ptr_x: f64 = -1e9,
+    last_ptr_y: f64 = -1e9,
+    last_ptr_pressed: bool = false,
     // Frames composited so far.
     diag_frames: u32 = 0,
 
@@ -214,6 +218,13 @@ pub const Window = struct {
     ) callconv(.c) void {
         const self = ctx(p);
         const d = self.delegate orelse return;
+        // AppKit delivers motion events nobody asked for (a noisy device, a re-keyed window), and repainting on one of
+        // those is what keeps an idle app at 60 frames a second. A pointer event that changes nothing is dropped here.
+        const pressed_now = kind == input_macos.DOWN or (kind == input_macos.MOTION and self.left_held);
+        if (x == self.last_ptr_x and y == self.last_ptr_y and pressed_now == self.last_ptr_pressed) return;
+        self.last_ptr_x = x;
+        self.last_ptr_y = y;
+        self.last_ptr_pressed = pressed_now;
         // The last layout's size, not the window's: a resize adopted but not yet drawn would shift every hit test.
         const space = contract.pointerSpace(self.layout_w, self.layout_h, self.state.win_w, self.state.win_h);
         const w = space.w;
@@ -239,6 +250,8 @@ pub const Window = struct {
         const self = ctx(p);
         const d = self.delegate orelse return;
         const delta = d.on_scroll orelse return;
+        // A zero delta is not a scroll: repainting for one is what made an idle window burn a core.
+        if (dx == 0 and dy == 0) return;
         const s = adapter.scrollDelta(@floatCast(dx), @floatCast(dy));
         self.state.needs_draw = true;
         delta(d.ptr, s.dx, s.dy);
