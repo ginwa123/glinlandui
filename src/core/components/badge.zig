@@ -7,13 +7,10 @@ const Color = @import("../color.zig").Color;
 
 pub const BadgeProps = struct {
     id: prop.Id,
-    label: []const u8,
+    label: prop.Label = .{ .size = 11, .color = Color.rgb(0x8a, 0x8a, 0x94) },
     bg: Color = Color.rgb(0x26, 0x26, 0x2c),
-    fg: Color = Color.rgb(0x8a, 0x8a, 0x94),
-    font_size: u16 = 11,
-    pad_tb: u16 = 1,
-    pad_lr: u16 = 6,
-    radius: u32 = 4,
+    pad: prop.Pad = prop.Pad.axes(1, 6),
+    radius: prop.Radius = prop.Radius.all(4),
 };
 
 /// Declare a badge.
@@ -23,13 +20,13 @@ pub fn badge(props: BadgeProps) void {
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{ .w = .fit, .h = .fit },
-            .padding = .axes(props.pad_tb, props.pad_lr),
+            .padding = props.pad.clay(),
             .child_alignment = .{ .x = .center, .y = .center },
         },
         .background_color = props.bg.toClay(),
-        .corner_radius = .all(@floatFromInt(props.radius)),
+        .corner_radius = props.radius.clay(),
     })({
-        cl.text(props.label, .{ .font_size = props.font_size, .color = props.fg.toClay() });
+        cl.text(props.label.text, .{ .font_size = props.label.size, .color = props.label.color.toClay() });
     });
 }
 
@@ -64,7 +61,7 @@ fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !v
 }
 
 fn declareSample() void {
-    badge(.{ .id = .{ .text = "b" }, .label = "INTEGER" });
+    badge(.{ .id = .{ .text = "b" }, .label = .{ .text = "INTEGER" } });
 }
 
 test "a badge is one rect and one text" {

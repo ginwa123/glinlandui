@@ -358,40 +358,16 @@ pub const FieldProps = struct {
 
     // which is why this is a prop.
     caret_fg: ?Color = null,
-    radius: u32 = 4,
-    pad_tb: u16 = 8,
-    pad_lr: u16 = 12,
-    // Fixed size overrides (null = grow width / fit height defaults).
-    w: ?f32 = null,
-    h: ?f32 = null,
-    // Min/max clamps for the grow/fit axes (0 = no constraint).
-    min_w: f32 = 0,
-    max_w: f32 = 0,
-    min_h: f32 = 0,
-    max_h: f32 = 0,
-    border_width: u16 = 0,
-    border_color: Color = Color.rgb(0x00, 0x00, 0x00),
+    // A field grows to the width it is given and fits its text vertically, unless the caller says otherwise.
+    w: prop.Size = .grow,
+    h: prop.Size = .fit,
+    pad: prop.Pad = prop.Pad.axes(8, 12),
+    radius: prop.Radius = prop.Radius.all(4),
+    border: prop.Border = .{},
     disabled: bool = false,
     disabled_bg: Color = Color.rgb(0x1a, 0x1a, 0x1a),
     disabled_fg: Color = Color.rgb(0x77, 0x77, 0x77),
 };
-
-fn fieldSizingW(props: FieldProps) cl.SizingAxis {
-    if (props.w) |v| return .fixed(v);
-    if (props.min_w > 0 or props.max_w > 0) return .growMinMax(.{ .min = props.min_w, .max = props.max_w });
-    return .grow;
-}
-
-fn fieldSizingH(props: FieldProps) cl.SizingAxis {
-    if (props.h) |v| return .fixed(v);
-    if (props.min_h > 0 or props.max_h > 0) return .fitMinMax(.{ .min = props.min_h, .max = props.max_h });
-    return .fit;
-}
-
-fn fieldBorder(props: FieldProps) cl.BorderElementConfig {
-    if (props.border_width == 0) return .{};
-    return .{ .color = props.border_color.toClay(), .width = .outside(props.border_width) };
-}
 
 // Declare a text field: prompt + query + block cursor on the field bg.
 pub fn field(props: FieldProps, query: []const u8) void {
@@ -401,14 +377,14 @@ pub fn field(props: FieldProps, query: []const u8) void {
         .id = props.id.clay(),
         .layout = .{
             .direction = .left_to_right,
-            .sizing = .{ .w = fieldSizingW(props), .h = fieldSizingH(props) },
-            .padding = .axes(props.pad_tb, props.pad_lr),
+            .sizing = .{ .w = props.w.clay(), .h = props.h.clay() },
+            .padding = props.pad.clay(),
             .child_alignment = .{ .x = .left, .y = .center },
             .child_gap = 0,
         },
         .background_color = bg.toClay(),
-        .corner_radius = .all(@floatFromInt(props.radius)),
-        .border = fieldBorder(props),
+        .corner_radius = props.radius.clay(),
+        .border = props.border.clay(),
     })({
         const fg_c = fg.toClay();
         cl.text(">", .{
@@ -502,7 +478,7 @@ pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
     ctx.bind();
     const input = &ctx.editor;
     // The click and drag handlers need the same origin and metrics the text is drawn with.
-    ctx.pad_lr = @floatFromInt(props.pad_lr);
+    ctx.pad_lr = @floatFromInt(props.pad.left);
     ctx.font_size = props.font_size;
     // Drag-select first, so the caret and the selection this frame draws are the ones the pointer just asked for.
     dragSelect(ctx, props.id.str());
@@ -519,14 +495,14 @@ pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
         .id = props.id.clay(),
         .layout = .{
             .direction = .left_to_right,
-            .sizing = .{ .w = fieldSizingW(props), .h = fieldSizingH(props) },
-            .padding = .axes(props.pad_tb, props.pad_lr),
+            .sizing = .{ .w = props.w.clay(), .h = props.h.clay() },
+            .padding = props.pad.clay(),
             .child_alignment = .{ .x = .left, .y = .center },
             .child_gap = 0,
         },
         .background_color = (if (props.disabled) props.disabled_bg else props.bg).toClay(),
-        .corner_radius = .all(@floatFromInt(props.radius)),
-        .border = fieldBorder(props),
+        .corner_radius = props.radius.clay(),
+        .border = props.border.clay(),
     })({
         if (input.caret.hasSelection()) {
             const span = input.caret.selection().?;
@@ -574,7 +550,7 @@ fn caretBar(props: FieldProps, ctx: *FieldCtx, text: []const u8) void {
     caret_mod.declare(.{
         // The padding is part of the parent box, so the offset starts from the border box, not the text.
         .id = .IDI(props.id.str(), 2),
-        .x = @as(f32, @floatFromInt(props.pad_lr)) + ctx.measure(text[0..at], props.font_size),
+        .x = @as(f32, @floatFromInt(props.pad.left)) + ctx.measure(text[0..at], props.font_size),
         .height = @floatFromInt(props.font_size + 4),
         .color = props.caret_fg orelse Color.rgb(0xd8, 0xd8, 0xdc),
         .anchor = .center,
@@ -602,14 +578,14 @@ pub fn fieldEdit(props: FieldProps, query: []const u8, st: EditState) void {
         .id = props.id.clay(),
         .layout = .{
             .direction = .left_to_right,
-            .sizing = .{ .w = fieldSizingW(props), .h = fieldSizingH(props) },
-            .padding = .axes(props.pad_tb, props.pad_lr),
+            .sizing = .{ .w = props.w.clay(), .h = props.h.clay() },
+            .padding = props.pad.clay(),
             .child_alignment = .{ .x = .left, .y = .center },
             .child_gap = 0,
         },
         .background_color = (if (props.disabled) props.disabled_bg else props.bg).toClay(),
-        .corner_radius = .all(@floatFromInt(props.radius)),
-        .border = fieldBorder(props),
+        .corner_radius = props.radius.clay(),
+        .border = props.border.clay(),
     })({
         cl.text(">", .{ .font_size = props.font_size, .color = fg });
         cl.text(" ", .{ .font_size = props.font_size, .color = fg });
@@ -738,7 +714,9 @@ test "FieldProps carries neutral dark defaults" {
     try std.testing.expectEqual(@as(u16, 14), p.font_size);
     try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.fg);
     try std.testing.expectEqual(Color.rgb(0x26, 0x26, 0x26), p.bg);
-    try std.testing.expectEqual(@as(u32, 4), p.radius);
+    try std.testing.expectEqual(@as(u16, 4), p.radius.top_left);
+    try std.testing.expect(std.meta.activeTag(p.w) == .grow);
+    try std.testing.expectEqual(@as(u16, 8), p.pad.top);
 }
 
 fn declareField() void {
@@ -1106,7 +1084,7 @@ test "disabled field dims to disabled_bg" {
 }
 
 fn declareBorderField() void {
-    field(.{ .id = .{ .text = "test-border-field" }, .border_width = 1, .border_color = Color.rgb(0xff, 0x00, 0x00) }, "hi");
+    field(.{ .id = .{ .text = "test-border-field" }, .border = .{ .width = 1, .color = Color.rgb(0xff, 0x00, 0x00) } }, "hi");
 }
 
 test "field border emits a border command" {

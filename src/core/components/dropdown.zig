@@ -1,6 +1,7 @@
 // Agnostic reusable Clay dropdown (toolkit-style, library only).
 const std = @import("std");
 const cl = @import("zclay");
+const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const list = @import("list.zig");
@@ -106,6 +107,12 @@ pub const DropdownProps = struct {
 };
 
 /// Declare a dropdown: search field (unless show_search is false) + one row per item under the list id namespace (IDI(list_id, index + 1), same +1.
+fn fieldSize(fixed: ?f32, min: f32, max: f32, grow: bool) prop.Size {
+    if (fixed) |v| return .{ .fixed = v };
+    if (min > 0 or max > 0) return .{ .clamp = .{ .min = min, .max = max, .grow = grow } };
+    return if (grow) .grow else .fit;
+}
+
 pub fn dropdown(
     props: DropdownProps,
     query: []const u8,
@@ -168,15 +175,10 @@ fn dropdownInner(
             .font_size = props.font_size,
             .fg = props.row_fg,
             .bg = props.field_bg,
-            .radius = props.radius,
-            .w = props.field_w,
-            .h = props.field_h,
-            .min_w = props.field_min_w,
-            .max_w = props.field_max_w,
-            .min_h = props.field_min_h,
-            .max_h = props.field_max_h,
-            .border_width = props.border_width,
-            .border_color = props.border_color,
+            .radius = prop.Radius.all(@intCast(props.radius)),
+            .w = fieldSize(props.field_w, props.field_min_w, props.field_max_w, true),
+            .h = fieldSize(props.field_h, props.field_min_h, props.field_max_h, false),
+            .border = .{ .width = props.border_width, .color = props.border_color },
             .disabled = props.disabled,
             .disabled_bg = props.disabled_bg,
             .disabled_fg = props.disabled_fg,

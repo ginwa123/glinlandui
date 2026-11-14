@@ -85,13 +85,10 @@ fn headerChildren(scope: *Scope) void {
         .sel_bg = t.colors.surface_variant,
         .sel_fg = t.colors.text,
         .caret_fg = t.colors.primary,
-        .radius = 6,
-        .pad_tb = 8,
-        .pad_lr = 10,
-        .border_width = 1,
-        .border_color = t.colors.divider,
-        .min_w = 120,
-        .max_w = 640,
+        .radius = props.Radius.all(6),
+        .pad = props.Pad.axes(8, 10),
+        .border = .{ .width = 1, .color = t.colors.divider },
+        .w = .{ .clamp = .{ .min = 120, .max = 640, .grow = true } },
     }, scope.field);
 
     button.button(.{
