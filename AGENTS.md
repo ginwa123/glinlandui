@@ -124,6 +124,11 @@ A gesture delta is in **points and moves that many points of content**. Clay mul
 platform delta makes a trackpad scroll ten times further than the fingers moved, which reads on screen as the list jumping and
 rows flashing in and out of the virtualisation window.
 
+A container's offset is looked up **by element ID** (`clay.getScrollOffsetById`), never with Clay's `Clay_GetScrollOffset()`: that one
+matches the element being declared by pointer into the per-frame element array, which is stale mid-declare, so it silently returns zero
+whenever an element earlier in the frame appears or disappears — a blinking caret was enough to snap a scrolled list back to the top of
+its content for one frame, which is exactly the flash users report as "the list blinks".
+
 A frame whose render commands are **identical to the previous frame's** is not presented: `frame.commandsRepeated()` is what the
 Cocoa window checks before blitting, and a resize is never skipped. Re-presenting an unchanged surface is wasted work, and it is
 the window through which any glitch in the blit or the composite reaches the eye as a blink.

@@ -172,7 +172,8 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
             .padding = .all(props.pad),
             .child_gap = props.gap,
         },
-        .clip = .{ .horizontal = axes.h, .vertical = axes.v, .child_offset = cl.getScrollOffset() },
+        // By ID, not Clay_GetScrollOffset(): that matches the open element by a stale pointer and drops the offset when an earlier element blinks.
+        .clip = .{ .horizontal = axes.h, .vertical = axes.v, .child_offset = cl.getScrollOffsetById(cl.getElementId(props.id)) },
         .background_color = if (props.bg) |b| b.toClay() else .{ 0, 0, 0, 0 },
         .corner_radius = .all(@floatFromInt(props.radius)),
         .border = if (props.border_width > 0) .{
@@ -538,6 +539,50 @@ test "wheel delta updates scrollPosition consistently with content" {
     const data = cl.getScrollContainerData(cl.getElementId("test-scroll-probe"));
     try std.testing.expect(data.found);
     try std.testing.expectApproxEqAbs(@as(f32, -5), data.scroll_position.y, 0.5);
+}
+
+// Boxes declared BEFORE the scroll container: one element appearing earlier shifts the container's index in Clay's element array.
+var filler_boxes: usize = 0;
+
+fn declareWithFiller() void {
+    var i: usize = 0;
+    while (i < filler_boxes) : (i += 1) {
+        cl.UI()(.{ .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(1) } } })({});
+    }
+    declareProbeScroll();
+}
+
+test "the scroll offset survives an element declared before the container" {
+    const mem_size = cl.minMemorySize();
+    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
+    const arena = cl.Arena.init(buf);
+    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
+    cl.setMeasureTextFunction(void, {}, stubMeasure);
+
+    filler_boxes = 0;
+    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
+    cl.beginLayout();
+    declareWithFiller();
+    _ = cl.endLayout();
+    const box = cl.getElementData(cl.getElementId("test-scroll-probe")).bounding_box;
+    const off0 = cl.getElementData(cl.getElementId("scroll-probe")).bounding_box.y - box.y;
+
+    // Wheel down 40 with the pointer over the container: the content moves up 40.
+    cl.setPointerState(.{ .x = box.x + 1, .y = box.y + 1 }, false);
+    updateScroll(0, -40, 1.0 / 60.0);
+    cl.beginLayout();
+    declareWithFiller();
+    _ = cl.endLayout();
+    const off1 = cl.getElementData(cl.getElementId("scroll-probe")).bounding_box.y - cl.getElementData(cl.getElementId("test-scroll-probe")).bounding_box.y;
+    try std.testing.expectApproxEqAbs(off0 - 40, off1, 0.5);
+
+    // One extra element before the container, exactly like a caret blinking into the frame: the offset must not move.
+    filler_boxes = 1;
+    cl.beginLayout();
+    declareWithFiller();
+    _ = cl.endLayout();
+    const off2 = cl.getElementData(cl.getElementId("scroll-probe")).bounding_box.y - cl.getElementData(cl.getElementId("test-scroll-probe")).bounding_box.y;
+    try std.testing.expectApproxEqAbs(off1, off2, 0.5);
 }
 
 // ---- Slider-style drag tests: pointer down = scroll down (content up), 1:1 clamped — the scrollbar-slider convention (Clay's built-in drag is.

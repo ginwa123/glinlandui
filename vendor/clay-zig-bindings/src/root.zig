@@ -16,6 +16,7 @@ pub extern var Clay__debugViewWidth: u32;
 /// for direct calls to the clay C library
 pub const cdefs = struct {
     pub extern fn Clay_GetElementData(id: ElementId) ElementData;
+    pub extern fn Clay_GetScrollOffsetById(id: ElementId) Vector2;
     pub extern fn Clay_MinMemorySize() u32;
     pub extern fn Clay_CreateArenaWithCapacityAndMemory(capacity: usize, memory: ?*anyopaque) Arena;
     pub extern fn Clay_SetPointerState(position: Vector2, pointerDown: bool) void;
@@ -1125,6 +1126,7 @@ pub fn getElementId(string: []const u8) ElementId {
 // Returns the internally stored scroll offset for the currently open element.
 // Generally intended for use with clip elements to create scrolling containers.
 pub const getScrollOffset = cdefs.Clay_GetScrollOffset;
+pub const getScrollOffsetById = cdefs.Clay_GetScrollOffsetById;
 
 // Returns the array of element IDs that the pointer is currently over.
 pub fn getPointerOverIds() []ElementId {

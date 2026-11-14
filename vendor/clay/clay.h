@@ -848,6 +848,8 @@ CLAY_DLL_EXPORT void Clay_UpdateScrollContainers(bool enableDragScrolling, Clay_
 // Returns the internally stored scroll offset for the currently open element.
 // Generally intended for use with clip elements to create scrolling containers.
 CLAY_DLL_EXPORT Clay_Vector2 Clay_GetScrollOffset(void);
+// The same, keyed by container ID: usable while the element is being declared, unlike the pointer lookup above.
+CLAY_DLL_EXPORT Clay_Vector2 Clay_GetScrollOffsetById(Clay_ElementId id);
 // Updates the layout dimensions in response to the window or outer container being resized.
 CLAY_DLL_EXPORT void Clay_SetLayoutDimensions(Clay_Dimensions dimensions);
 // Called before starting any layout declarations.
@@ -4035,6 +4037,22 @@ Clay_Vector2 Clay_GetScrollOffset(void) {
     for (int32_t i = 0; i < context->scrollContainerDatas.length; i++) {
         Clay__ScrollContainerDataInternal *mapping = Clay__ScrollContainerDataInternalArray_Get(&context->scrollContainerDatas, i);
         if (mapping->layoutElement == openLayoutElement) {
+            return mapping->scrollPosition;
+        }
+    }
+    return CLAY__INIT(Clay_Vector2) CLAY__DEFAULT_STRUCT;
+}
+
+// Same as Clay_GetScrollOffset, keyed by ID: the pointer form is stale mid-declare and misses when an earlier element appears or disappears.
+CLAY_WASM_EXPORT("Clay_GetScrollOffsetById")
+Clay_Vector2 Clay_GetScrollOffsetById(Clay_ElementId id) {
+    Clay_Context* context = Clay_GetCurrentContext();
+    if (context->booleanWarnings.maxElementsExceeded) {
+        return CLAY__INIT(Clay_Vector2) CLAY__DEFAULT_STRUCT;
+    }
+    for (int32_t i = 0; i < context->scrollContainerDatas.length; i++) {
+        Clay__ScrollContainerDataInternal *mapping = Clay__ScrollContainerDataInternalArray_Get(&context->scrollContainerDatas, i);
+        if (mapping->elementId == id.id) {
             return mapping->scrollPosition;
         }
     }
