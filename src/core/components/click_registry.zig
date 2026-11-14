@@ -93,7 +93,7 @@ fn contains(bb: cl.BoundingBox, x: f32, y: f32) bool {
 }
 
 /// The highest-z entry containing the point (ties keep last-registered-first), or null.
-fn topmostAt(x: f32, y: f32) ?Entry {
+pub fn topmostAt(x: f32, y: f32) ?Entry {
     var best: ?Entry = null;
     var i: usize = 0;
     while (i < count) : (i += 1) {

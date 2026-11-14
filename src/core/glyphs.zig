@@ -5,7 +5,7 @@ const stb = @cImport({
     @cInclude("stb/stb_truetype.h");
 });
 
-const text_backend = @import("text_backend.zig");
+const font_io = @import("font_io.zig");
 
 pub const bytes_per_pixel: usize = 4;
 
@@ -20,7 +20,7 @@ pub const Font = struct {
 
     /// Load the platform's default UI font, trying each candidate until one actually PARSES.
     pub fn loadDefault() ?Font {
-        for (text_backend.fontCandidates()) |path| {
+        for (font_io.fontCandidates()) |path| {
             if (load(path)) |font| {
                 return font;
             } else |_| {
@@ -32,7 +32,7 @@ pub const Font = struct {
 
     /// Load one specific font file.
     pub fn load(path: [:0]const u8) !Font {
-        const buf = try text_backend.readFontBytes(path, std.heap.page_allocator);
+        const buf = try font_io.readFontBytes(path, std.heap.page_allocator);
         errdefer std.heap.page_allocator.free(buf);
         return fromBytes(buf);
     }
@@ -240,7 +240,7 @@ pub fn measure(font: *const Font, text: []const u8, font_size: u16) struct { wid
 
 // ---- a font supplied by the backend, for hosts that have no font paths ----
 
-/// A process-wide font installed by a platform backend, preferred over walking `text_backend.fontCandidates()`.
+/// A process-wide font installed by a platform backend, preferred over walking the candidate list.
 var installed_font: ?Font = null;
 
 /// Install `f` as the process-wide font.

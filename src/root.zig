@@ -90,6 +90,8 @@ pub const web = struct {
 pub const components = struct {
     pub const box = @import("core/components/box.zig");
     pub const button = @import("core/components/button.zig");
+    /// The caret primitive: one device pixel, snapped to the grid, floated over the text.
+    pub const caret = @import("core/components/caret.zig");
     pub const checkbox = @import("core/components/checkbox.zig");
     pub const click_registry = @import("core/components/click_registry.zig");
     pub const dispatch = @import("core/components/dispatch.zig");
@@ -114,6 +116,9 @@ test {
     // The semantics model and the E2E test surface built on it.
     _ = @import("core/semantics.zig");
     _ = @import("core/text_editor.zig");
+    _ = @import("core/text_face.zig");
+    _ = @import("core/audit.zig");
+    _ = @import("core/font_io.zig");
     _ = @import("core/table.zig");
     _ = @import("core/testing/finders.zig");
     _ = @import("core/testing/assertions.zig");

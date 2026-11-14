@@ -2,6 +2,7 @@
 const std = @import("std");
 const cl = @import("zclay");
 const glyphs = @import("glyphs.zig");
+const text_face = @import("text_face.zig");
 const common = @import("render_common.zig");
 const Color = @import("color.zig").Color;
 
@@ -429,13 +430,13 @@ pub const Surface = struct {
     ) void {
         if (text_bytes.len == 0) return;
         const n = normalizeColor(color);
-        if (!hasGlyphFont()) {
+        const face = text_face.font() orelse {
             self.drawTextRunFallback(bbox_x, bbox_y, text_bytes, font_size, color);
             return;
-        }
-        const font = textBytes.?;
+        };
+        const font = face;
         const fs: u16 = if (font_size == 0) 16 else font_size;
-        const m = glyphs.measure(&font, text_bytes, fs);
+        const m = glyphs.measure(font, text_bytes, fs);
         if (m.width <= 0) {
             self.drawTextRunFallback(bbox_x, bbox_y, text_bytes, font_size, color);
             return;
@@ -450,7 +451,7 @@ pub const Surface = struct {
         while (i < text_bytes.len) {
             const cp = glyphs.nextCodepoint(text_bytes, &i);
             const gm = font.glyphMetrics(cp, fs);
-            if (glyphs.cachedGlyph(&font, cp, fs)) |mask| {
+            if (glyphs.cachedGlyph(font, cp, fs)) |mask| {
                 const gx: isize = @intFromFloat(@floor(pen + mask.xoff));
                 // stb's yoff is measured from the BASELINE, positive downward (stbtt_GetGlyphBitmapBoxSubpixel negates the font-space y1), so the mask's top row sits.
                 const top = baseline + mask.yoff;
@@ -592,17 +593,12 @@ pub const Renderer = struct {
     }
 };
 
-/// Process-global font, loaded once on first text and reused after.
-var textBytes: ?glyphs.Font = null;
-
 /// True once a glyph-bearing font is available, so the fallback can be skipped.
+///
+/// The face comes from `text_face`, which is the SAME face the layout measures with — one font, so a run's measured
+/// width is exactly the width the rasteriser advances its pen by.
 pub fn hasGlyphFont() bool {
-    if (glyphs.installedFont()) |f| {
-        textBytes = f.*;
-        return true;
-    }
-    if (textBytes == null) textBytes = glyphs.Font.loadDefault();
-    return textBytes != null;
+    return text_face.font() != null;
 }
 
 /// The device-pixel scale the surface is rendered at: 2.0 on a Retina display, 1.0 elsewhere.

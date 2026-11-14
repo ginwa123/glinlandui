@@ -474,6 +474,29 @@ pub fn selectWordAt(editor: *Editor, offset: usize) void {
     editor.idle = 0;
 }
 
+/// The byte offset in `text` closest to `x`, using the font that DRAWS it.
+///
+/// `measure` must be the same function the layout uses, or a click lands on the wrong character: a guessed cell width
+/// drifts further off the glyphs the longer the line is.
+pub fn offsetAtX(text: []const u8, x: f32, font_size: u16, measure: *const fn ([]const u8, u16) f32) usize {
+    if (text.len == 0 or x <= 0) return 0;
+    var lo: usize = 0;
+    var hi: usize = text.len;
+    // Largest offset whose prefix still ends left of x.
+    while (lo < hi) {
+        const mid = (lo + hi + 1) / 2;
+        if (measure(text[0..mid], font_size) <= x) lo = mid else hi = mid - 1;
+    }
+    // Never leave the caret inside a codepoint.
+    while (lo > 0 and lo < text.len and (text[lo] & 0xC0) == 0x80) lo -= 1;
+    // The nearer edge wins, which is what makes a click between two letters feel right.
+    if (lo < text.len) {
+        const step = codepointLen(text, lo);
+        if (x - measure(text[0..lo], font_size) > measure(text[0..lo + step], font_size) - x) return lo + step;
+    }
+    return lo;
+}
+
 /// True when the caret should be drawn: solid for half a second after it moved, then a 1 Hz blink.
 pub fn caretVisible(editor: *const Editor) bool {
     return editor.idle < 0.5 or @mod(editor.idle, 1.0) < 0.5;

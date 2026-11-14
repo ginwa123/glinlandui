@@ -1,6 +1,7 @@
 // Agnostic Clay frame helper: owns the per-frame + init boilerplate every Clay app repeats (measure/error wiring, arena init, pointer + layout sync.
 const std = @import("std");
 const log = @import("log.zig");
+const audit = @import("audit.zig");
 const builtin = @import("builtin");
 const cl = @import("zclay");
 const render = @import("render.zig");
@@ -214,6 +215,12 @@ fn clayMeasure(text_bytes: []const u8, config: *cl.TextElementConfig, _: void) c
 
 fn clayErrorHandler(err: cl.ErrorData) callconv(.c) void {
     const msg = err.error_text.chars[0..@intCast(err.error_text.length)];
+    // A duplicate id is not a warning: `getElementData` resolves ids through a map keyed by the hash, so a second
+    // element with the same id makes every click, hover and cursor lookup land on the OTHER one. In a Debug or test
+    // build that is a bug, so stop where it happens instead of logging it 200 times.
+    if (err.error_type == .duplicate_id and builtin.mode == .Debug) {
+        std.debug.panic("glinlandui: duplicate element id: {s}", .{msg});
+    }
     std.log.err("clay {s}: {s}", .{ @tagName(err.error_type), msg });
 }
 
@@ -335,6 +342,9 @@ pub fn clayFrameWithOptions(
     cl.beginLayout();
     declare(ctx, w, h);
     const commands = cl.endLayout();
+    // The audit runs on the frames a developer actually sees, not only in tests: the caret, hairline and hit-target
+    // failures it catches are invisible to a unit test and obvious here.
+    if (audit.enabled) _ = audit.frame(commands, pixel_scale);
     // Semantics resolve AFTER layout (that is when Clay has bounding boxes) and BEFORE the probe, so a probe that inspects the tree sees resolved geometry.
     if (options.resolve_semantics) {
         semantics.resolve(@floatFromInt(w), @floatFromInt(h));

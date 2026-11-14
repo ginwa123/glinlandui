@@ -3,6 +3,7 @@ const select = @import("select.zig");
 
 /// The resolved backend.
 const native = select.TextBackend;
+const face = @import("text_face.zig");
 
 pub const TextExtent = native.TextExtent;
 pub const ResolveFontError = native.ResolveFontError;
@@ -15,6 +16,12 @@ pub const estimatorExtent = native.estimatorExtent;
 pub const hashMeasureKey = native.hashMeasureKey;
 pub const extentCacheReset = native.extentCacheReset;
 pub const pangoFamily = native.pangoFamily;
-pub const measureText = native.measureText;
+/// Measured with the font that DRAWS the text (see `text_face.zig`), not with an estimate: layout and rendering must
+/// agree, or a box is the wrong width and a caret placed from a measurement drifts off the glyphs.
+pub const measureText = face.measureText;
+/// True when text is measured with real metrics; false on a host with no font file (a bare CI runner, wasm).
+pub const fontAvailable = face.fontAvailable;
+/// The face itself, so a rasteriser draws with the same one the layout measured with.
+pub const face_font = face.font;
 pub const extent_hits = native.extent_hits;
 pub const extent_misses = native.extent_misses;
