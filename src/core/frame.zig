@@ -215,20 +215,79 @@ fn clayMeasure(text_bytes: []const u8, config: *cl.TextElementConfig, _: void) c
 // Receives a duplicate element id instead of the default panic. A test installs one to assert the detection without dying; an app must leave it null.
 pub var duplicate_id_sink: ?*const fn (msg: []const u8) void = null;
 
+// The ids declared so far this frame, open-addressed. A key of 0 is an empty slot (the "no id" case never gets here).
+const id_set_cap = 4096;
+var id_keys: [id_set_cap]u64 = [_]u64{0} ** id_set_cap;
+
+// Keys already reported in a release build, so a duplicate that survives every frame is logged once, not 60 times a second.
+var id_warned: [256]u64 = [_]u64{0} ** 256;
+var id_warned_n: usize = 0;
+
+fn idKey(id: cl.ElementId) u64 {
+    const h = (@as(u64, id.id) << 32) | @as(u64, id.offset);
+    // 0 marks an empty slot, so a real key must never be 0.
+    return if (h == 0) 1 else h;
+}
+
+// Clear the per-frame id set. Called from `zclay.on_begin_frame`, so it runs for every frame however it was started.
+fn resetIds() void {
+    @memset(&id_keys, 0);
+}
+
+// Insert `key`; true when it was already there.
+fn idSeenBefore(key: u64) bool {
+    var i: usize = @intCast(key % id_set_cap);
+    var probes: usize = 0;
+    while (probes < id_set_cap) : (probes += 1) {
+        if (id_keys[i] == 0) {
+            id_keys[i] = key;
+            return false;
+        }
+        if (id_keys[i] == key) return true;
+        i = (i + 1) % id_set_cap;
+    }
+    return false;
+}
+
+// Called for every element that declares an id, through `zclay.on_element`: the one place a duplicate can be NAMED.
+pub fn claimId(id: cl.ElementId) void {
+    const key = idKey(id);
+    if (!idSeenBefore(key)) return;
+
+    const len: usize = if (id.string_id.length > 0) @intCast(id.string_id.length) else 0;
+    const name: []const u8 = if (len > 0) id.string_id.chars[0..len] else "<no name>";
+    // The element's box from the previous frame, when it has one: a name is good, a place on screen is better.
+    const prev = cl.getElementData(id);
+    var buf: [192]u8 = undefined;
+    const msg = if (prev.found)
+        std.fmt.bufPrint(&buf, "\"{s}\" (offset {d}) at {d:.0},{d:.0} {d:.0}x{d:.0}", .{
+            name, id.offset, prev.bounding_box.x, prev.bounding_box.y, prev.bounding_box.width, prev.bounding_box.height,
+        }) catch name
+    else
+        std.fmt.bufPrint(&buf, "\"{s}\" (offset {d})", .{ name, id.offset }) catch name;
+
+    if (duplicate_id_sink) |sink| {
+        sink(msg);
+        return;
+    }
+    if (builtin.mode == .Debug) {
+        std.debug.panic("glinlandui: duplicate element id {s}: declared twice in one frame", .{msg});
+    }
+    for (id_warned[0..id_warned_n]) |k| {
+        if (k == key) return;
+    }
+    if (id_warned_n < id_warned.len) {
+        id_warned[id_warned_n] = key;
+        id_warned_n += 1;
+    }
+    std.log.err("glinlandui: duplicate element id {s}: two elements share it, so a click, hover or cursor lookup can land on the other one", .{msg});
+}
+
 fn clayErrorHandler(err: cl.ErrorData) callconv(.c) void {
     const msg = err.error_text.chars[0..@intCast(err.error_text.length)];
-    // A duplicate id is not a warning: `getElementData` resolves ids through a map keyed by the hash, so a second element with the same id makes every
-
-    // click, hover and cursor lookup land on the OTHER one. In a Debug or test build that is a bug, so stop where it happens instead of logging it 200
-
-    // times.
-    if (err.error_type == .duplicate_id and builtin.mode == .Debug) {
-        if (duplicate_id_sink) |sink| {
-            sink(msg);
-            return;
-        }
-        std.debug.panic("glinlandui: duplicate element id: {s}", .{msg});
-    }
+    // Clay's duplicate message never names the id, and `claimId` already reports it with the string and offset, so this
+    // branch would only add a nameless line per element per frame.
+    if (err.error_type == .duplicate_id) return;
     std.log.err("clay {s}: {s}", .{ @tagName(err.error_type), msg });
 }
 
@@ -240,6 +299,9 @@ pub fn initClay(alloc: std.mem.Allocator, w: u32, h: u32) ![]u8 {
     const arena = cl.Arena.init(clay_mem);
     _ = cl.initialize(arena, .{ .w = @floatFromInt(w), .h = @floatFromInt(h) }, .{ .error_handler_function = clayErrorHandler });
     cl.setMeasureTextFunction(void, {}, clayMeasure);
+    // Every identified element passes through this hook, so a duplicate is caught and named where it happens.
+    cl.on_element = claimId;
+    cl.on_begin_frame = resetIds;
     memo.reset();
     return clay_mem;
 }

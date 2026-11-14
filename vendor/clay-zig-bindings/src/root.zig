@@ -812,6 +812,11 @@ pub inline fn UI() fn (config: ElementDeclaration) callconv(.@"inline") fn (void
         }
 
         inline fn configureOpenElement(config: ElementDeclaration) fn (void) void {
+            // Every identified element passes through here, which makes it the one place a duplicate id can be NAMED:
+            // Clay's own error only says that some id was declared twice, never which one.
+            if (on_element) |hook| {
+                if (config.id.id != 0 or config.id.string_id.length != 0) hook(config.id);
+            }
             cdefs.Clay__ConfigureOpenElement(config);
             return closeElement;
         }
@@ -820,6 +825,10 @@ pub inline fn UI() fn (config: ElementDeclaration) callconv(.@"inline") fn (void
     cdefs.Clay__OpenElement();
     return local.configureOpenElement;
 }
+
+/// Called for every element that declares an id, just before Clay opens it. The toolkit installs a handler here to
+/// catch a duplicate id and say WHICH one it was; null means no checking.
+pub var on_element: ?*const fn (ElementId) void = null;
 
 /// Returns layout data for an element with the given ID
 /// The returned data includes the element's position and size
@@ -884,9 +893,16 @@ pub const updateScrollContainers = cdefs.Clay_UpdateScrollContainers;
 /// Should be called whenever the window is resized
 pub const setLayoutDimensions = cdefs.Clay_SetLayoutDimensions;
 
+/// Called at the start of every layout frame, before Clay begins it. The toolkit resets its per-frame id set here, so
+/// the reset happens for every frame — including a test that drives Clay without going through `clayFrame`.
+pub var on_begin_frame: ?*const fn () void = null;
+
 /// Begins new layout frame - must be called before UI elements
 /// Use endLayout to complete the layout and compute the render commands
-pub const beginLayout = cdefs.Clay_BeginLayout;
+pub fn beginLayout() void {
+    if (on_begin_frame) |hook| hook();
+    cdefs.Clay_BeginLayout();
+}
 
 /// Completes the layout and computes the render commands
 /// Returns an array of render commands to be processed by your renderer

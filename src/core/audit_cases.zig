@@ -92,11 +92,9 @@ test "audit case: two elements with one id are caught where they are declared" {
     try driver.start(.{ .width = 200, .height = 100 });
     driver.frame();
 
-    // Clay's message does not name the id ("An element with this ID was already previously declared"), so the check is that the duplicate is caught at all —
-
-    // the panic stops the build where the second declaration is.
+    // The point of the detector: the message NAMES the id. Clay's own error says only that some id was declared twice.
     try testing.expect(Dups.seen >= 1);
-    try testing.expect(Dups.msg_len > 0);
+    try testing.expect(std.mem.indexOf(u8, Dups.msg[0..Dups.msg_len], "dup.id") != null);
 }
 
 test "audit case: a click target with no element is reported" {
