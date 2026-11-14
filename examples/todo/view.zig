@@ -19,15 +19,12 @@ const text_editor = glinlandui.text_editor;
 
 const state_mod = @import("state.zig");
 const view_model = @import("view_model.zig");
-const composition = @import("composition.zig");
 const theme_mod = @import("theme.zig");
-const modifier = @import("modifier.zig");
 
 const TodoUiState = state_mod.TodoUiState;
 const TodoViewModel = view_model.TodoViewModel;
-const Composition = composition.Composition;
-const Modifier = modifier.Modifier;
-const Theme = theme_mod.Theme;
+const Composition = glinlandui.composition.Composition;
+const Theme = glinlandui.theme.Theme;
 
 pub const field_id = "todo.field";
 const list_id = "todo.list";
@@ -83,7 +80,7 @@ const RowCtx = struct {
 // `@Composable fun TodoScreen(vm: TodoViewModel = viewModel())`
 pub fn TodoScreen(scope: *Scope) void {
     // `val state by vm.state.collectAsState()`
-    const state = scope.comp.collectAsState(TodoUiState, &scope.vm.state);
+    const state = scope.comp.collectAsState(TodoUiState, scope.vm.state.asStateFlow());
 
     // `LaunchedEffect(Unit) { focusRequester.requestFocus() }`: the field owns the keyboard from the first frame.
     scope.comp.effect("todo.focus", 1, scope.field, focusField);
@@ -106,14 +103,15 @@ fn surfaceChildren(screen: *Screen) void {
 // ---- header: TextField + Button --------------------------------------------------------------------------------
 
 fn header(screen: *Screen) void {
-    // `Modifier.padding(16.dp)` on the row that holds the field and the button.
-    const props = (Modifier{}).padding(16).fillMaxWidth().apply(.{
+    // `Modifier.padding(16.dp).fillMaxWidth()` in Compose; here the props struct IS the modifier, so it is two fields.
+    box_mod.box(.{
         .id = "todo.header",
         .direction = .row,
+        .w = .grow,
+        .pad = 16,
         .gap = 8,
         .child_align = .{ .y = .center },
-    }, .column);
-    box_mod.box(props, screen, headerChildren);
+    }, screen, headerChildren);
 }
 
 fn headerChildren(screen: *Screen) void {

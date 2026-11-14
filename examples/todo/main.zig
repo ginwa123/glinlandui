@@ -34,7 +34,7 @@ pub fn main(init: std.process.Init) !void {
     });
 
     // `setContent { ... }`: the composable the window renders. The Host hands it the ctx it was built with.
-    const root = todo.composition.Composition.setContent(todo.app.App.content);
+    const root = glinlandui.composition.Composition.setContent(todo.app.App.content);
     var host = try glinlandui.host.Host.init(gpa, &app, root);
     defer host.deinit();
     host.keys.register(todo.app.App.onKey, &app);

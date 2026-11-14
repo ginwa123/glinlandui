@@ -179,6 +179,73 @@ The two things worth noticing:
 
 ---
 
+## State, MVVM and the composition
+
+An immediate-mode app re-declares its whole tree every frame, so "where does the state live?" has one honest
+answer: in a value that frame reads. The engine ships the four pieces that make that ergonomic — the same
+shapes Jetpack Compose uses, without the runtime.
+
+| module | what it gives you | Compose |
+|---|---|---|
+| `glinlandui.state_flow` | `StateFlow` (read-only) + `MutableStateFlow` (`set`/`update`) | `MutableStateFlow` / `StateFlow` |
+| `glinlandui.composition` | `remember`, `collectAsState`, `effect`, `setContent` | the composition runtime |
+| `glinlandui.view_model` | `Store(T)` — one instance per screen, `onCleared` | `ViewModelStore` + `viewModel()` |
+| `glinlandui.theme` | `Theme` = colour roles + type scale, with `dark`/`light` | `MaterialTheme` |
+
+Two rules carry the whole design:
+
+- **A `StateFlow` publishes only when the value differs.** `T.eql` decides (or `std.meta.eql`), so a state
+  that changes nothing publishes nothing — `add()` on a blank input redraws nothing.
+- **A `Composition` turns a publish into a frame request.** `collectAsState` reads the value and subscribes
+  once; `invalidated` says "the model changed", and the app decides what to do with it.
+
+```zig
+const Vm = struct {
+    state: glinlandui.state_flow.MutableStateFlow(State),
+
+    pub fn add(self: *Vm) void {
+        _ = self.state.update(@as(u32, 1), reduce_add);   // publish only if the result differs
+    }
+
+    // The store calls this when the screen goes away.
+    pub fn onCleared(self: *Vm) void {}
+};
+
+const App = struct {
+    store: glinlandui.view_model.Store(Vm) = .{},
+    comp: glinlandui.composition.Composition = .{},
+
+    fn content(ctx: ?*anyopaque) void {
+        const self: *App = @ptrCast(@alignCast(ctx.?));
+        self.comp.beginFrame();
+        const vm = self.store.getOrCreate(Vm.init);              // `viewModel()`
+        const state = self.comp.collectAsState(State, vm.state.asStateFlow());
+        // ... declare the screen from `state`
+    }
+};
+
+const root = glinlandui.composition.Composition.setContent(App.content);   // `setContent { }`
+```
+
+`StateFlow` is read-only on purpose: the value, the version and the collectors live there, and `set`/`update`
+exist only on `MutableStateFlow`. A view is handed the read-only half, so "the view cannot write the model" is
+a property of the type, not a convention.
+
+Three lifetimes decide whether an app works, and each one is a bug the todo example hit first:
+
+1. **Text handed to Clay must outlive the declare.** A composable returns before the frame is laid out, so a
+   label built from a stack value points at dead memory. Copy it with `frame.formatText` / `frame.claimText`.
+2. **A click callback's `ctx` must outlive the frame.** Clicks are dispatched *after* the declare returns, so a
+   pointer to a local in the composable is already gone. Carry the ViewModel, or a value `remember`ed in the
+   composition.
+3. **Register a row's click target before you declare its box.** `click_registry.topmostAt` lets the later
+   entry win a tie, so a button declared inside the row beats the row's own target — otherwise the row
+   swallows its own Delete button.
+
+`examples/todo/` is the worked example, and its README is the full Compose-to-glinlandui mapping table.
+
+---
+
 ## Colors
 
 Every color-bearing prop is a `glinlandui.Color`. It is the same 32 bits the

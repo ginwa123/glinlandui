@@ -7,14 +7,13 @@ const frame = glinlandui.frame;
 const text_editor = glinlandui.text_editor;
 
 const view = @import("view.zig");
-const composition = @import("composition.zig");
 const view_model = @import("view_model.zig");
 const theme_mod = @import("theme.zig");
 
 pub const App = struct {
     // `ViewModelStoreOwner`: one screen, one store, one ViewModel for the life of the window.
-    store: view_model.Store(view_model.TodoViewModel) = .{},
-    comp: composition.Composition = .{},
+    store: glinlandui.view_model.Store(view_model.TodoViewModel) = .{},
+    comp: glinlandui.composition.Composition = .{},
     // The field the keyboard types into. It is the Activity's, because the Activity is what receives the keys.
     field: view.Field = .{},
     // Asks the window for one more frame when the model publishes outside an input event.

@@ -1,18 +1,23 @@
 // The composition: what survives a frame.
-// In Compose the runtime keeps a slot table; a composable re-runs and `remember` hands it back what it stored
-// last time. An immediate-mode frame has no call stack to walk, so a slot is keyed by the id the element
-// already needs — and its value lives until the composition is thrown away.
-// Nothing here allocates per frame: one arena, sized once, and a slot's address never moves, which is what
-// lets a remembered value hold a pointer to another remembered value.
-const std = @import("std");
-const glinlandui = @import("glinlandui");
-const flow_mod = @import("flow.zig");
 
-// How many remembered values one composition may hold, and the bytes they share.
+// In Compose the runtime keeps a slot table; a composable re-runs and `remember` hands it back what it stored last time.
+
+// An immediate-mode frame has no call stack to walk, so a slot is keyed by the id the element already needs, and its value lives until the composition is thrown away.
+
+// Nothing here allocates per frame: one arena, sized once, and a slot's address never moves — which is what lets a remembered value hold a pointer to another remembered value.
+const std = @import("std");
+const flow_mod = @import("state_flow.zig");
+
+// How many remembered values one composition may hold, and the bytes they share. Raise these for a screen that needs more.
 pub const max_slots: usize = 32;
 pub const slot_bytes: usize = 32 * 1024;
 // A slot key is copied, so it may be a formatted string rather than a literal. Longer keys are a bug.
 pub const max_key_len: usize = 48;
+
+// The shape a `Host` calls every frame — declared here so the state runtime does not drag the renderer in.
+
+// It is the same type as `host.RootFn`, so `Host.init` accepts it without a cast.
+pub const RootFn = *const fn (?*anyopaque, u32, u32) void;
 
 const Slot = struct {
     key: [max_key_len]u8 = undefined,
@@ -38,6 +43,7 @@ pub const Composition = struct {
     invalidate_ctx: ?*anyopaque = null,
 
     // `remember`: the value behind `key`, created on the first call and handed back unchanged afterwards.
+
     // The returned pointer is stable for the life of the composition, so a callback may capture it.
     pub fn remember(self: *Composition, comptime T: type, key: []const u8, initial: T) *T {
         if (self.find(key)) |slot| return @ptrCast(@alignCast(slot.value));
@@ -66,10 +72,11 @@ pub const Composition = struct {
     }
 
     // `collectAsState`: read the value now and subscribe this composition, so a publish asks for a frame.
+
     // Collecting on every frame is the normal case and subscribes once — `collect` is idempotent by context.
-    pub fn collectAsState(self: *Composition, comptime T: type, flow: *flow_mod.MutableStateFlow(T)) T {
+    pub fn collectAsState(self: *Composition, comptime T: type, flow: *flow_mod.StateFlow(T)) T {
         flow.collect(.{ .ctx = self, .on_value = onValue });
-        return flow.value();
+        return flow.get();
     }
 
     fn onValue(ctx: ?*anyopaque) void {
@@ -98,10 +105,8 @@ pub const Composition = struct {
         run(ctx);
     }
 
-    // `setContent { ... }`: hand a composable to a Host as its root function.
-    // The ctx the Host was built with is the ctx the composable receives, exactly as `setContent` sees the
-    // Activity's own fields.
-    pub fn setContent(comptime content: fn (?*anyopaque) void) glinlandui.host.RootFn {
+    // `setContent { ... }`: hand a composable to a Host as its root function. The ctx the Host was built with is the ctx the composable receives.
+    pub fn setContent(comptime content: fn (?*anyopaque) void) RootFn {
         return struct {
             fn root(ctx: ?*anyopaque, w: u32, h: u32) void {
                 _ = w;
@@ -139,7 +144,7 @@ test "a collected flow invalidates the composition on publish, and only on publi
     var comp = Composition{};
     var flow = flow_mod.MutableStateFlow(u32).init(0);
 
-    try std.testing.expectEqual(@as(u32, 0), comp.collectAsState(u32, &flow));
+    try std.testing.expectEqual(@as(u32, 0), comp.collectAsState(u32, flow.asStateFlow()));
     try std.testing.expect(!comp.invalidated);
 
     _ = flow.set(0);
@@ -151,8 +156,8 @@ test "a collected flow invalidates the composition on publish, and only on publi
     comp.beginFrame();
     try std.testing.expect(!comp.invalidated);
     // Collecting again must not subscribe twice: the second publish is still one notification.
-    _ = comp.collectAsState(u32, &flow);
-    try std.testing.expectEqual(@as(usize, 1), flow.collector_count);
+    _ = comp.collectAsState(u32, flow.asStateFlow());
+    try std.testing.expectEqual(@as(usize, 1), flow.state.collector_count);
 }
 
 test "an effect runs once, then again only when its key changes" {
