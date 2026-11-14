@@ -25,12 +25,8 @@ zig build test-todo         # the app's own tests + the E2E suite, headless
 
 | Compose | glinlandui | what it is |
 |---|---|---|
-| `MutableStateFlow<T>` / `StateFlow<T>` | `state_flow.MutableStateFlow(T)` / `.StateFlow(T)` | one value; `set`/`update` publish only when it differs, and a view only gets to read |
+| `MutableStateFlow<T>` | `state_flow.MutableStateFlow(T)` | one value; `set`/`update` publish only when it differs |
 | `_state.update { ... }` | `state.update(arg, reduce)` | the reducer reads the current value and returns the next one |
-| `remember { ... }` | `composition.remember(T, key, initial)` | a value that survives the frame, in a slot keyed by an id |
-| `collectAsState()` | `composition.collectAsState(T, flow)` | read now, subscribe once; a publish sets `invalidated` |
-| `LaunchedEffect(key)` | `composition.effect(key, signature, ctx, run)` | run on the first frame, and again when the signature changes |
-| `setContent { ... }` | `composition.setContent(App.content)` | a composable handed to a `Host` as its root function |
 | `ViewModelStore` / `viewModel()` | `view_model.Store(T)` + `App.vm()` | one instance per screen, created once, `onCleared` on leave |
 | `MaterialTheme { }` | `theme.Theme` (+ `theme.dark` / `theme.light`) | colour roles and a type scale, passed down as a value |
 | `TextField(value, onValueChange)` | `input.liveField(props, &field)` | a field that owns its draft, caret, selection and keyboard |
@@ -51,6 +47,12 @@ zig build test-todo         # the app's own tests + the E2E suite, headless
 ---
 
 ## What has no equivalent, on purpose
+
+**The composition runtime.** There is none: `remember`, `collectAsState`, `LaunchedEffect` and `setContent`
+exist in Compose because a composable may be skipped, cached or re-ordered. Here the frame *is* the
+recomposition — it reads the state and declares the tree, the window repaints after every key and pointer
+event, and view-local state that must survive a frame is simply a field on `App`. The root function is
+`App.content` itself, so `Host.init(gpa, &app, App.content)` is `setContent { }`.
 
 **`Modifier`.** Compose needs it because its composables take no layout parameters. Every widget here takes a
 props struct, and `box.BoxProps` already carries `pad`, `w`, `h`, `gap` and `bg` — so
@@ -90,8 +92,8 @@ label built from a stack value points at dead memory. The state is a value, so a
 frame's scratch with `frame.formatText`. A literal, or the field's own buffer, needs no copy.
 
 **2. A callback's context must outlive the frame.** Clicks are dispatched *after* the declare returns, so a
-`*Scope` on `TodoScreen`'s stack is already gone. Intents carry the ViewModel, or a `RowCtx` remembered in a
-composition slot.
+`*Scope` on `TodoScreen`'s stack is already gone. Intents carry the ViewModel, and the per-row contexts are
+fields on `App` (`add_ctx`, `row_ctxs`) that the view is handed.
 
 ---
 

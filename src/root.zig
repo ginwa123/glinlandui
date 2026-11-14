@@ -33,9 +33,6 @@ pub const table = @import("core/table.zig");
 // The state holder MVVM is built on: `StateFlow` (read-only) and `MutableStateFlow` (the only thing a ViewModel hands out).
 pub const state_flow = @import("core/state_flow.zig");
 
-// The per-frame composition: `remember`, `collectAsState`, `effect`, `setContent`.
-pub const composition = @import("core/composition.zig");
-
 // `Store(T)` — one ViewModel per screen, created on first use and cleared when the screen leaves.
 pub const view_model = @import("core/view_model.zig");
 
@@ -132,9 +129,8 @@ test {
     _ = @import("core/audit_cases.zig");
     _ = @import("core/font_io.zig");
     _ = @import("core/table.zig");
-    // The MVVM runtime: a state holder, the composition that survives a frame, the ViewModel store, and the theme value.
+    // The MVVM runtime: a state holder, the ViewModel store, and the theme value.
     _ = @import("core/state_flow.zig");
-    _ = @import("core/composition.zig");
     _ = @import("core/view_model.zig");
     _ = @import("core/theme.zig");
     _ = @import("core/testing/finders.zig");

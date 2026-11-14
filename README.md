@@ -179,72 +179,62 @@ The two things worth noticing:
 
 ---
 
-## State, MVVM and the composition
+## State and MVVM
 
 An immediate-mode app re-declares its whole tree every frame, so "where does the state live?" has one honest
-answer: in a value that frame reads. The engine ships the four pieces that make that ergonomic — the same
-shapes Jetpack Compose uses, without the runtime.
+answer: in a value that frame reads. Three small pieces make that shape ergonomic.
 
 | module | what it gives you | Compose |
 |---|---|---|
-| `glinlandui.state_flow` | `StateFlow` (read-only) + `MutableStateFlow` (`set`/`update`) | `MutableStateFlow` / `StateFlow` |
-| `glinlandui.composition` | `remember`, `collectAsState`, `effect`, `setContent` | the composition runtime |
-| `glinlandui.view_model` | `Store(T)` — one instance per screen, `onCleared` | `ViewModelStore` + `viewModel()` |
-| `glinlandui.theme` | `Theme` = colour roles + type scale, with `dark`/`light` | `MaterialTheme` |
+| `glinlandui.state_flow` | `MutableStateFlow(T)` — `get`, `set`, `update`; a value equal to the current one is not a publish | `MutableStateFlow` |
+| `glinlandui.view_model` | `Store(T)` — one instance per screen, `onCleared` on leave | `ViewModelStore` + `viewModel()` |
+| `glinlandui.theme` | `Theme` = colour roles + type scale, with `dark` / `light` | `MaterialTheme` |
 
-Two rules carry the whole design:
+There is **no composition runtime**, on purpose. Compose needs one because a composable may be skipped, cached
+or re-ordered; here the frame *is* the recomposition — it reads the state and declares the tree. Two things
+follow, and both simplify an app rather than complicate it:
 
-- **A `StateFlow` publishes only when the value differs.** `T.eql` decides (or `std.meta.eql`), so a state
-  that changes nothing publishes nothing — `add()` on a blank input redraws nothing.
-- **A `Composition` turns a publish into a frame request.** `collectAsState` reads the value and subscribes
-  once; `invalidated` says "the model changed", and the app decides what to do with it.
+- **A publish does not schedule a repaint.** The window repaints after every key and pointer event, and a click
+  is dispatched *before* that repaint, so an intent the user raised is on screen in the next frame. An app that
+  changes state from a timer asks the window for a frame itself (`Window.setAnimating`).
+- **View-local state that must survive a frame is a field.** `remember` would need a slot table keyed by an id;
+  a field on the screen's own struct is typed, inspectable, and needs no key.
 
 ```zig
 const Vm = struct {
     state: glinlandui.state_flow.MutableStateFlow(State),
 
-    pub fn add(self: *Vm) void {
-        _ = self.state.update(@as(u32, 1), reduce_add);   // publish only if the result differs
+    pub fn add(self: *Vm, title: []const u8) bool {
+        return self.state.update(title, reduce_add);   // false when the result equals the current state
     }
 
-    // The store calls this when the screen goes away.
-    pub fn onCleared(self: *Vm) void {}
+    pub fn onCleared(self: *Vm) void {}                // the store calls this when the screen goes away
 };
 
 const App = struct {
     store: glinlandui.view_model.Store(Vm) = .{},
-    comp: glinlandui.composition.Composition = .{},
 
-    fn content(ctx: ?*anyopaque) void {
+    fn content(ctx: ?*anyopaque, w: u32, h: u32) void {
         const self: *App = @ptrCast(@alignCast(ctx.?));
-        self.comp.beginFrame();
-        const vm = self.store.getOrCreate(Vm.init);              // `viewModel()`
-        const state = self.comp.collectAsState(State, vm.state.asStateFlow());
-        // ... declare the screen from `state`
+        const vm = self.store.getOrCreate(Vm.init);     // `viewModel()`
+        // ... declare the screen from `vm.uiState()`
     }
 };
 
-const root = glinlandui.composition.Composition.setContent(App.content);   // `setContent { }`
+var host = try Host.init(gpa, &app, App.content);       // `setContent { }`
 ```
 
-`StateFlow` is read-only on purpose: the value, the version and the collectors live there, and `set`/`update`
-exist only on `MutableStateFlow`. A view is handed the read-only half, so "the view cannot write the model" is
-a property of the type, not a convention.
-
-Three lifetimes decide whether an app works, and each one is a bug the todo example hit first:
+Two lifetimes decide whether an app works, and each one is a bug the todo example hit first:
 
 1. **Text handed to Clay must outlive the declare.** A composable returns before the frame is laid out, so a
    label built from a stack value points at dead memory. Copy it with `frame.formatText` / `frame.claimText`.
 2. **A click callback's `ctx` must outlive the frame.** Clicks are dispatched *after* the declare returns, so a
-   pointer to a local in the composable is already gone. Carry the ViewModel, or a value `remember`ed in the
-   composition.
-3. **A row's click target is registered before its box is declared.** `click_registry.topmostAt` lets the later
-   entry win a tie, so a button declared inside the row must come after the row. `components.list` does this
-   for you — an app that declares its own row must do it itself.
+   pointer to a local is already gone. Own the context on the screen's struct.
 
 Two components already do the plumbing an app would otherwise repeat: `components.input.liveField` takes a
 `FieldCtx` that OWNS the draft (buffer, caret, selection, measure) — declare one and feed it keys — and
-`components.list` owns a list's rows, their ids, hover and per-row clicks.
+`components.list` owns a list's rows, their ids, hover and per-row clicks (registering each row's target
+before its box, so a button inside the row wins the hit test).
 
 `examples/todo/` is the worked example, and its README is the full Compose-to-glinlandui mapping table.
 

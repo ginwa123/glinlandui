@@ -14,7 +14,7 @@ const key_enter: u32 = 28;
 // page_allocator, not testing.allocator: the Clay arena is intentionally leaked for the process's life.
 fn boot(app: *App) !Driver {
     app.start();
-    var driver = try Driver.initOwned(std.heap.page_allocator, app, glinlandui.composition.Composition.setContent(App.content));
+    var driver = try Driver.initOwned(std.heap.page_allocator, app, App.content);
     errdefer driver.deinit();
     // The driver owns a Host of its own, so the event routing `main.zig` installs has to be installed here too.
     driver.host.keys.register(App.onKey, app);

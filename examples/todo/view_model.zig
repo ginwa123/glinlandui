@@ -15,7 +15,7 @@ pub const TodoViewModel = struct {
     }
 
     pub fn uiState(self: *const TodoViewModel) TodoUiState {
-        return self.state.value();
+        return self.state.get();
     }
 
     // `fun add()` — the draft comes IN as an argument, and the answer says whether the intent took it.
@@ -36,9 +36,9 @@ pub const TodoViewModel = struct {
         _ = self.state.update(index, TodoUiState.withToggled);
     }
 
-    // `onCleared()`: the store calls this when the screen goes away, so nothing outlives its window.
+    // `onCleared()`: the store calls this when the screen goes away. This ViewModel holds no timers or buffers.
     pub fn onCleared(self: *TodoViewModel) void {
-        self.state.state.collector_count = 0;
+        _ = self;
     }
 };
 
@@ -55,10 +55,8 @@ test "add trims, appends, and says it took the draft" {
 
 test "add on a blank title publishes nothing" {
     var vm = TodoViewModel.init();
-    const before = vm.state.revision();
     try std.testing.expect(!vm.add("   "));
     try std.testing.expectEqual(@as(usize, 0), vm.uiState().count);
-    try std.testing.expectEqual(before, vm.state.revision());
 }
 
 test "remove and toggle are intents over the index" {

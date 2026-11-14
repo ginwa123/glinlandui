@@ -15,7 +15,6 @@ const view_model = @import("view_model.zig");
 
 const TodoUiState = state_mod.TodoUiState;
 const TodoViewModel = view_model.TodoViewModel;
-const Composition = glinlandui.composition.Composition;
 const Theme = glinlandui.theme.Theme;
 
 pub const field_id = "todo.field";
@@ -23,26 +22,31 @@ const list_id = "todo.list";
 const rows_id = "todo.rows";
 const row_h: u32 = 40;
 
-// What a composable reads from the ambient tree: the composition, the theme, the model, the field, and this frame's state.
+// A click context must outlive the frame, because clicks are dispatched AFTER the declare returns — so these
+// live in the App and are handed to the view, never built on this stack.
+pub const AddCtx = struct {
+    vm: *TodoViewModel,
+    field: *input_mod.FieldCtx,
+};
+
+pub const RowCtx = struct {
+    vm: *TodoViewModel,
+    index: usize,
+};
+
+// What a composable reads: the theme, the model, the field, this frame's state, and the click contexts.
 pub const Scope = struct {
-    comp: *Composition,
     theme: Theme,
     vm: *TodoViewModel,
     // The draft: the engine's field owns the text, the caret and the selection, so the model does not hold a half-typed title.
     field: *input_mod.FieldCtx,
     state: TodoUiState,
-};
-
-// A row's click context. It must outlive the frame, because clicks are dispatched AFTER the declare returns.
-const RowCtx = struct {
-    vm: *TodoViewModel,
-    index: usize,
+    add: *AddCtx,
+    rows: []RowCtx,
 };
 
 // `@Composable fun TodoScreen(vm: TodoViewModel = viewModel())`
 pub fn TodoScreen(scope: *Scope) void {
-    // `LaunchedEffect(Unit) { focusRequester.requestFocus() }`: the field owns the keyboard from the first frame.
-    scope.comp.effect("todo.focus", 1, scope.field, focusField);
     box_mod.box(.{
         .id = "todo.root",
         .w = .grow,
@@ -50,10 +54,6 @@ pub fn TodoScreen(scope: *Scope) void {
         .direction = .column,
         .bg = scope.theme.colors.background,
     }, scope, body);
-}
-
-fn focusField(field: *input_mod.FieldCtx) void {
-    frame.setFocus(field.id);
 }
 
 fn body(scope: *Scope) void {
@@ -93,8 +93,6 @@ fn headerChildren(scope: *Scope) void {
         .max_w = 640,
     }, scope.field);
 
-    // The button's context has to outlive the frame, so it is remembered rather than a local.
-    const ctx = scope.comp.remember(AddCtx, "todo.add", .{ .vm = scope.vm, .field = scope.field });
     button.button(.{
         .id = "todo.add",
         .label = "Add",
@@ -106,14 +104,9 @@ fn headerChildren(scope: *Scope) void {
         .pad_tb = 8,
         .pad_lr = 16,
         .on_click = onAdd,
-        .ctx = ctx,
+        .ctx = scope.add,
     });
 }
-
-const AddCtx = struct {
-    vm: *TodoViewModel,
-    field: *input_mod.FieldCtx,
-};
 
 fn onAdd(raw: ?*anyopaque) void {
     const ctx: *AddCtx = @ptrCast(@alignCast(raw.?));
@@ -165,7 +158,7 @@ fn onRow(raw: ?*anyopaque, index: usize) void {
 // `Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(..); Text(.., Modifier.weight(1f)); TextButton(..) }`
 fn renderRow(scope: *Scope, todo: state_mod.Todo, index: usize) void {
     const t = scope.theme;
-    const ctxs = scope.comp.remember([state_mod.max_todos]RowCtx, "todo.row.ctx", undefined);
+    const ctxs = scope.rows;
     ctxs[index] = .{ .vm = scope.vm, .index = index };
 
     checkbox_mod.checkbox(.{

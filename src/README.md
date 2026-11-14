@@ -35,8 +35,7 @@ src/
 │   ├── select.zig            ← the one bridge from core to platform.zig
 │   ├── render.zig            renderer facade      (consumes select.zig)
 │   ├── color.zig            the Color type: every prop is one, not a u32
-│   ├── state_flow.zig       StateFlow (read-only) + MutableStateFlow — the MVVM state holder
-│   ├── composition.zig      remember · collectAsState · effect · setContent (the frame's memory)
+│   ├── state_flow.zig       MutableStateFlow — a value that publishes only when it changes
 │   ├── view_model.zig       Store(T): one ViewModel per screen, created once, cleared on leave
 │   ├── theme.zig            Theme = colour roles + type scale, with neutral dark/light defaults
 │   ├── render_common.zig     the drawing contract the DRAWING widgets import
