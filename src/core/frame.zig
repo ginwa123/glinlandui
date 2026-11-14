@@ -160,6 +160,13 @@ fn hashColor(h: u64, c: [4]f32) u64 {
 
 // True when this frame's render commands are identical to the previous frame's: nothing on screen changed, so there is nothing to present.
 var commands_repeated: bool = false;
+// How many commands the frame just drawn produced, so a diagnostic can tell "same drawing" from "more rows" at a glance.
+var last_command_count: usize = 0;
+
+// The number of render commands the frame just drawn produced.
+pub fn lastCommandCount() usize {
+    return last_command_count;
+}
 var last_commands_digest: u64 = 0;
 var has_last_digest: bool = false;
 
@@ -459,6 +466,7 @@ pub fn clayFrameWithOptions(
     declare(ctx, w, h);
     const commands = cl.endLayout();
     // A frame that draws exactly what the last one did does not need presenting: the window already shows those pixels.
+    last_command_count = commands.len;
     const digest = hashCommands(@constCast(commands));
     commands_repeated = has_last_digest and digest == last_commands_digest;
     last_commands_digest = digest;

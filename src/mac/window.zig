@@ -73,6 +73,7 @@ pub const Window = struct {
     diff_prev_w: u32 = 0,
     diff_prev_h: u32 = 0,
     diff_prints: u32 = 0,
+    diff_changed: u32 = 0,
 
     pub fn init(alloc: std.mem.Allocator, config: WindowConfig) Window {
         // The allocator is accepted for signature parity with the web backend, which genuinely needs it (`wasm_allocator` is the only allocator that grows a.
@@ -197,28 +198,24 @@ pub const Window = struct {
         const n = sf.pixels.len;
         const comparable = self.diff_prev.len == n and self.diff_prev_w == sf.width and self.diff_prev_h == sf.height;
         // Consecutive frames only: the previous frame is the one to compare against, not the last one that was printed.
-        if (comparable and frame_mod.commandsRepeated() and self.diff_prints < 50) {
-            var count: usize = 0;
-            var min_x: usize = sf.width;
-            var max_x: usize = 0;
-            var min_y: usize = sf.height;
-            var max_y: usize = 0;
-            var y: usize = 0;
-            while (y < sf.height) : (y += 1) {
-                var x: usize = 0;
-                while (x < sf.width) : (x += 1) {
-                    const i = (y * @as(usize, sf.width) + x) * 4;
-                    if (sf.pixels[i] == self.diff_prev[i] and sf.pixels[i + 1] == self.diff_prev[i + 1] and sf.pixels[i + 2] == self.diff_prev[i + 2]) continue;
-                    count += 1;
-                    min_x = @min(min_x, x);
-                    max_x = @max(max_x, x);
-                    min_y = @min(min_y, y);
-                    max_y = @max(max_y, y);
-                }
+        // A frame whose commands CHANGED is the other half of the story: report it, throttled, so a blink names its own box.
+        if (comparable and !frame_mod.commandsRepeated() and self.diff_prints < 50) {
+            self.diff_changed +%= 1;
+            if (self.diff_changed % 12 != 1) {
+                @memcpy(self.diff_prev[0..n], sf.pixels);
+                self.diff_prev_w = sf.width;
+                self.diff_prev_h = sf.height;
+                return;
             }
-            if (count > 0) {
+            const box = self.diffBox(sf);
+            self.diff_prints += 1;
+            std.log.info("FRAME CHANGED {d} px  x {d}..{d}  y {d}..{d}  cmds={d}", .{ box.count, box.min_x, box.max_x, box.min_y, box.max_y, frame_mod.lastCommandCount() });
+        }
+        if (comparable and frame_mod.commandsRepeated() and self.diff_prints < 50) {
+            const box = self.diffBox(sf);
+            if (box.count > 0) {
                 self.diff_prints += 1;
-                std.log.info("FRAME DIFF {d} px  x {d}..{d}  y {d}..{d}  commands identical, pixels not", .{ count, min_x, max_x, min_y, max_y });
+                std.log.info("FRAME DIFF {d} px  x {d}..{d}  y {d}..{d}  commands identical, pixels not", .{ box.count, box.min_x, box.max_x, box.min_y, box.max_y });
             }
         }
         if (!comparable) {
@@ -227,6 +224,27 @@ pub const Window = struct {
         @memcpy(self.diff_prev[0..n], sf.pixels);
         self.diff_prev_w = sf.width;
         self.diff_prev_h = sf.height;
+    }
+
+    // Every pixel that differs from the previous frame, and the box they fall in.
+    const DiffBox = struct { count: usize = 0, min_x: usize = 0, max_x: usize = 0, min_y: usize = 0, max_y: usize = 0 };
+
+    fn diffBox(self: *Window, sf: *soft.Surface) DiffBox {
+        var b: DiffBox = .{ .min_x = sf.width, .max_x = 0, .min_y = sf.height, .max_y = 0 };
+        var y: usize = 0;
+        while (y < sf.height) : (y += 1) {
+            var x: usize = 0;
+            while (x < sf.width) : (x += 1) {
+                const i = (y * @as(usize, sf.width) + x) * 4;
+                if (sf.pixels[i] == self.diff_prev[i] and sf.pixels[i + 1] == self.diff_prev[i + 1] and sf.pixels[i + 2] == self.diff_prev[i + 2]) continue;
+                b.count += 1;
+                b.min_x = @min(b.min_x, x);
+                b.max_x = @max(b.max_x, x);
+                b.min_y = @min(b.min_y, y);
+                b.max_y = @max(b.max_y, y);
+            }
+        }
+        return b;
     }
 
     // Apply the cursor shape the frame resolved, when it changed.
