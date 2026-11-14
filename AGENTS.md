@@ -17,11 +17,13 @@ Rules for anyone (human or agent) changing this repository.
 ## Verify before you report
 
 ```sh
-zig build                  # the library, the demo, and the calculator example
-zig build test             # the cross-platform parity suite (442 tests on macOS)
+zig build                  # the library, the demo, and the examples
+zig build test             # the cross-platform parity suite (847 tests on macOS)
 zig build native-test      # Linux only: the Wayland/EGL/GLES3 backend
 zig build run              # the demo window
 zig build run-calculator   # the calculator example
+zig build run-todo         # the MVVM todo example (see examples/todo/README.md)
+zig build test-todo        # the todo example's own tests, headless
 ```
 
 Plus the CI scripts, which are the real contract:

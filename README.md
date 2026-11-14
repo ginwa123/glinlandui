@@ -60,6 +60,8 @@ git clone <this repo> && cd glinlandui
 
 zig build run               # the demo app  (needs a Wayland display)
 zig build run-calculator    # the calculator example (needs a Wayland display)
+zig build run-todo          # the MVVM todo example — state, ViewModel, view, setContent
+zig build run-lazy-scroll   # 10,000 virtualised rows, with a live frame-rate meter
 
 # No display? Both fall back to headless rendering and report painted pixels:
 env WAYLAND_DISPLAY= ./zig-out/bin/glinlandui-calculator
@@ -915,7 +917,11 @@ src/
 examples/
 ├── calculator.zig            the example app (+ 36 tests)
 ├── file_dialog.zig           ★ the dialog how-to — 3 buttons, 8 tests
-└── calculator_e2e_test.zig   ★ 15 E2E tests driving that app
+├── calculator_e2e_test.zig   ★ 15 E2E tests driving that app
+├── lazy_scroll.zig           10,000 virtualised rows + a frame-rate meter
+└── todo/                     ★ MVVM the way Jetpack Compose does it — state, ViewModel,
+                              composition (remember / collectAsState), view, setContent.
+                              Its README is the Compose → glinlandui mapping table.
 
 ci/
 ├── check_test_parity.sh      the locked cross-platform test count
@@ -938,6 +944,7 @@ vendor/
 | `E2E_TESTING_PLAN.md` | the design of the E2E layer, the immediate-mode constraints it works around, and its execution log |
 | `examples/calculator_e2e_test.zig` | the worked E2E example — read this first if you are writing tests |
 | `examples/calculator.zig` | an app written against the public surface only |
+| `examples/todo/README.md` | MVVM in an immediate-mode toolkit: the Compose mapping, and the three lifetime rules |
 
 ---
 

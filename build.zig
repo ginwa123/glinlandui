@@ -415,6 +415,72 @@ pub fn build(b: *std.Build) void {
         });
     }
 
+    // ---- Example app: the MVVM todo ---- The smallest app that still has the shape a real one has: state, a ViewModel, a view, and a store.
+    var todo_test: ?*std.Build.Step.Compile = null;
+    var todo_e2e_test: ?*std.Build.Step.Compile = null;
+    if (calc_supported) {
+        // The app is a MODULE, so the example's own tests and the E2E suite import the same code the binary runs.
+        const todo_mod = b.createModule(.{
+            .root_source_file = b.path("examples/todo/root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "glinlandui", .module = mod },
+            },
+        });
+        const todo = b.addExecutable(.{
+            .name = "glinlandui-todo",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/todo/main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "glinlandui", .module = mod },
+                    .{ .name = "todo", .module = todo_mod },
+                },
+            }),
+        });
+        b.installArtifact(todo);
+
+        const run_todo_step = b.step("run-todo", "Run the MVVM todo example");
+        const run_todo = b.addRunArtifact(todo);
+        run_todo_step.dependOn(&run_todo.step);
+        run_todo.step.dependOn(b.getInstallStep());
+        if (b.args) |args| {
+            run_todo.addArgs(args);
+        }
+
+        // A separate test root over the same module: `b.addTest` compiles the root as a test binary.
+        todo_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/todo/root.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "glinlandui", .module = mod },
+                },
+            }),
+        });
+
+        // The E2E suite: the real App, driven by the headless driver.
+        todo_e2e_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/todo/todo_test.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "glinlandui", .module = mod },
+                    .{ .name = "todo", .module = todo_mod },
+                },
+            }),
+        });
+
+        // The example's own tests, alone: the CI legs assert these before they build anything else.
+        const todo_test_step = b.step("test-todo", "Run the MVVM todo example's tests only");
+        todo_test_step.dependOn(&b.addRunArtifact(todo_test.?).step);
+        todo_test_step.dependOn(&b.addRunArtifact(todo_e2e_test.?).step);
+    }
+
     // The parity suite is a NATIVE concern: a wasm target has no test runner here, and `-Dtarget=wasm32-freestanding` is for shipping the webapp, not for.
     var run_mod_tests: ?*std.Build.Step.Run = null;
     var run_exe_tests: ?*std.Build.Step.Run = null;
@@ -488,6 +554,12 @@ pub fn build(b: *std.Build) void {
     // The file-dialog example's tests, for the same reason and with the same caveat: they are portable because `platform.zig` picks the PORTABLE dialog.
     if (dlg_test) |dlg| {
         test_step.dependOn(&b.addRunArtifact(dlg).step);
+    }
+    if (todo_test) |t| {
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+    if (todo_e2e_test) |t| {
+        test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
     // `native-test` runs the Linux-only Wayland/EGL/GLES3/Pango tests.
