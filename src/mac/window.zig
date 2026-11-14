@@ -197,8 +197,7 @@ pub const Window = struct {
         const sf = surface orelse return;
         const n = sf.pixels.len;
         const comparable = self.diff_prev.len == n and self.diff_prev_w == sf.width and self.diff_prev_h == sf.height;
-        // Consecutive frames only: the previous frame is the one to compare against, not the last one that was printed.
-        // A frame whose commands CHANGED is the other half of the story: report it, throttled, so a blink names its own box.
+        // Consecutive frames only, and a changed frame is reported too (throttled), so a blink always names its own box.
         if (comparable and !frame_mod.commandsRepeated() and self.diff_prints < 50) {
             self.diff_changed +%= 1;
             if (self.diff_changed % 12 != 1) {
