@@ -17,6 +17,8 @@ pub const frame = @import("core/frame.zig");
 pub const host = @import("core/host.zig");
 // The library's color type.
 pub const Color = @import("core/color.zig").Color;
+// The vocabulary a widget's props are written in: Id, Label, Pad, Border, Radius, Size.
+pub const props = @import("core/props.zig");
 // Portable software rasterizer surface.
 pub const software_render = @import("core/render_software.zig");
 // Reusable, compositor-free UI test harness.
@@ -149,6 +151,8 @@ test {
     _ = @import("core/file_dialog_fake.zig");
     // The Color type every color-bearing prop uses.
     _ = @import("core/color.zig");
+    // The props vocabulary every widget's struct is written in.
+    _ = @import("core/props.zig");
     // The macOS backend's keycode translation.
     _ = @import("mac/keymap.zig");
     // The macOS blit's pixel shuffle (channel order + row order).
