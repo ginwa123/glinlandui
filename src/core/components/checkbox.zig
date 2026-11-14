@@ -13,7 +13,7 @@ pub const ClickFn = ?*const fn (?*anyopaque) void;
 pub const CheckboxProps = struct {
     id: prop.Id,
     checked: bool = false,
-    size: u32 = 20,
+    size: u32 = 16,
     radius: u32 = 4,
     box_bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
     checked_bg: Color = Color.rgb(0x4c, 0xaf, 0x50),
@@ -130,7 +130,7 @@ test "checkbox emits box rectangle and no text; checked adds inner check" {
 test "CheckboxProps carries neutral defaults" {
     const p = CheckboxProps{ .id = .{ .text = "x" } };
     try std.testing.expect(!p.checked);
-    try std.testing.expectEqual(@as(u32, 20), p.size);
+    try std.testing.expectEqual(@as(u32, 16), p.size);
     try std.testing.expectEqual(@as(u32, 4), p.radius);
     try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.box_bg);
     try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50), p.checked_bg);

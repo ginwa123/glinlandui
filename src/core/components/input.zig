@@ -361,9 +361,9 @@ pub const Field = struct {
     caret_fg: ?Color = null,
     // A field grows to the width it is given and fits its text vertically, unless the caller says otherwise.
     w: prop.Size = .grow,
-    h: prop.Size = .fit,
-    pad: prop.Pad = prop.Pad.axes(8, 12),
-    radius: prop.Radius = prop.Radius.all(4),
+    h: prop.Size = .{ .fixed = 32 },
+    pad: prop.Pad = prop.Pad.axes(0, 10),
+    radius: prop.Radius = prop.Radius.all(6),
     border: prop.Border = .{},
     disabled: bool = false,
     disabled_bg: Color = Color.rgb(0x1a, 0x1a, 0x1a),
@@ -740,9 +740,9 @@ test "Field carries neutral dark defaults" {
     try std.testing.expectEqual(@as(u16, 14), p.font_size);
     try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.fg);
     try std.testing.expectEqual(Color.rgb(0x26, 0x26, 0x26), p.bg);
-    try std.testing.expectEqual(@as(u16, 4), p.radius.top_left);
+    try std.testing.expectEqual(@as(u16, 6), p.radius.top_left);
     try std.testing.expect(std.meta.activeTag(p.w) == .grow);
-    try std.testing.expectEqual(@as(u16, 8), p.pad.top);
+    try std.testing.expectEqual(@as(u16, 0), p.pad.top);
 }
 
 // ---- Field: the draft, the value prop, and the intents ----

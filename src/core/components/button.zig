@@ -12,7 +12,7 @@ pub const ClickFn = ?*const fn (?*anyopaque) void;
 /// Toolkit-style button props: a label that carries its own type, a size per axis, padding, a border, a radius, and the tones a pointer can put it in.
 pub const ButtonProps = struct {
     id: prop.Id,
-    label: prop.Label,
+    label: prop.Label = .{},
     bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
     fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
     hover_bg: Color = Color.rgb(0x2d, 0x2d, 0x2d),
@@ -21,9 +21,9 @@ pub const ButtonProps = struct {
     disabled_fg: Color = Color.rgb(0x77, 0x77, 0x77),
     w: prop.Size = .fit,
     h: prop.Size = .fit,
-    pad: prop.Pad = prop.Pad.axes(8, 16),
+    pad: prop.Pad = prop.Pad.axes(6, 12),
     border: prop.Border = .{},
-    radius: prop.Radius = prop.Radius.all(8),
+    radius: prop.Radius = prop.Radius.all(6),
     on_click: ClickFn = null,
     ctx: ?*anyopaque = null,
 };
@@ -160,21 +160,21 @@ test "button emits rectangle + text render commands" {
     try std.testing.expectEqual(@as(usize, 1), texts);
 }
 
-test "ButtonProps carries neutral dark defaults" {
-    const p = ButtonProps{ .id = .{ .text = "x" }, .label = .{ .text = "y" } };
+test "ButtonProps carries neutral dark defaults, and needs only an id" {
+    const p = ButtonProps{ .id = .{ .text = "x" } };
     try std.testing.expectEqual(@as(u16, 14), p.label.size);
     try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.bg);
     try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.fg);
     try std.testing.expectEqual(Color.rgb(0x2d, 0x2d, 0x2d), p.hover_bg);
-    try std.testing.expectEqual(@as(u16, 8), p.radius.top_left);
+    try std.testing.expectEqual(@as(u16, 6), p.radius.top_left);
     try std.testing.expect(std.meta.activeTag(p.w) == .fit);
     try std.testing.expect(std.meta.activeTag(p.h) == .fit);
     try std.testing.expectEqual(@as(u16, 0), p.border.width);
     try std.testing.expect(!p.disabled);
     try std.testing.expectEqual(Color.rgb(0x1a, 0x1a, 0x1a), p.disabled_bg);
     try std.testing.expectEqual(Color.rgb(0x77, 0x77, 0x77), p.disabled_fg);
-    try std.testing.expectEqual(@as(u16, 8), p.pad.top);
-    try std.testing.expectEqual(@as(u16, 16), p.pad.left);
+    try std.testing.expectEqual(@as(u16, 6), p.pad.top);
+    try std.testing.expectEqual(@as(u16, 12), p.pad.left);
     try std.testing.expect(p.on_click == null);
     try std.testing.expect(p.ctx == null);
 }
@@ -227,10 +227,10 @@ test "button fixed size honours w/h props with zero padding" {
 }
 
 test "button padding props grow the fit box" {
-    // "OK" at 14px: stub text w = 2*14*0.6 = 16.8; the default pad is 16 a side.
+    // "OK" at 14px: stub text w = 2*14*0.6 = 16.8; the default pad is 12 a side.
     const wide = try fitWidth(declarePaddedButton, "test-padded-button");
     const narrow = try fitWidth(declareUnpaddedButton, "test-unpadded-button");
-    try std.testing.expectEqual(@as(f32, 32), wide - narrow);
+    try std.testing.expectApproxEqAbs(@as(f32, 24), wide - narrow, 0.01);
 }
 
 test "button without on_click registers nothing; dispatchClick returns false" {

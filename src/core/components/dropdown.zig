@@ -44,8 +44,8 @@ pub fn filter(query: []const u8, items: []const []const u8, out: []usize) usize 
 
 /// Toolkit-style dropdown props.
 pub const DropdownProps = struct {
-    field_id: []const u8,
-    list_id: []const u8,
+    field_id: []const u8 = "",
+    list_id: []const u8 = "",
     /// The search field, when there is one: the app owns it, and the dropdown only paints it. Null draws no field.
     field: ?*input.Field = null,
     font_size: u16 = 14,
@@ -170,7 +170,8 @@ fn dropdownInner(
         field.bg = props.field_bg;
         field.radius = prop.Radius.all(@intCast(props.radius));
         field.w = fieldSize(props.field_w, props.field_min_w, props.field_max_w, true);
-        field.h = fieldSize(props.field_h, props.field_min_h, props.field_max_h, false);
+        // A field with no stated height is a control, not a line of text: the kit's 28, never `.fit`.
+        field.h = fieldSize(props.field_h orelse 28, props.field_min_h, props.field_max_h, false);
         field.border = .{ .width = props.border_width, .color = props.border_color };
         field.disabled = props.disabled;
         field.disabled_bg = props.disabled_bg;
@@ -522,4 +523,10 @@ test "dropdown overlay floats without shifting following rows" {
     try std.testing.expect(cl.getElementData(cl.getElementId("test-overlay-float")).found);
     try std.testing.expect(cl.getElementData(rowId("test-overlay-list", 0)).found);
     try std.testing.expect(cl.getElementData(rowId("test-overlay-list", 1)).found);
+}
+
+test "DropdownProps needs nothing: both ids default to empty" {
+    const p = DropdownProps{};
+    try std.testing.expectEqual(@as(usize, 0), p.field_id.len);
+    try std.testing.expectEqual(@as(usize, 0), p.list_id.len);
 }

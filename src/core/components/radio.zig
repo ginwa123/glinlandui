@@ -13,7 +13,7 @@ pub const ClickFn = ?*const fn (?*anyopaque) void;
 pub const RadioProps = struct {
     id: prop.Id,
     selected: bool = false,
-    size: u32 = 20,
+    size: u32 = 16,
     outer_bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
     selected_border: Color = Color.rgb(0x4c, 0xaf, 0x50),
     border_color: Color = Color.rgb(0x55, 0x55, 0x55),
@@ -127,7 +127,7 @@ test "radio emits outer circle only, plus dot when selected, and no text" {
 test "RadioProps carries neutral defaults" {
     const p = RadioProps{ .id = .{ .text = "x" } };
     try std.testing.expect(!p.selected);
-    try std.testing.expectEqual(@as(u32, 20), p.size);
+    try std.testing.expectEqual(@as(u32, 16), p.size);
     try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.outer_bg);
     try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50), p.selected_border);
     try std.testing.expectEqual(Color.rgb(0x55, 0x55, 0x55), p.border_color);

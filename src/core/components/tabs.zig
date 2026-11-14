@@ -21,14 +21,14 @@ pub const SelectFn = ?*const fn (?*anyopaque, usize) void;
 
 pub const TabsProps = struct {
     id: prop.Id,
-    tabs: []const Tab,
+    tabs: []const Tab = &.{},
     h: u32 = 34,
     bg: Color = Color.rgb(0x1a, 0x1a, 0x1d),
     active_bg: Color = Color.rgb(0x14, 0x14, 0x16),
     fg: Color = Color.rgb(0x8a, 0x8a, 0x94),
     active_fg: Color = Color.rgb(0xf0, 0xf0, 0xf4),
     close_fg: Color = Color.rgb(0x5a, 0x5a, 0x64),
-    pad_lr: u16 = 12,
+    pad_lr: u16 = 11,
     on_select: SelectFn = null,
     on_close: SelectFn = null,
     ctx: ?*anyopaque = null,
@@ -179,4 +179,9 @@ test "an empty bar still declares its container" {
 
 fn declareEmpty() void {
     tabs(.{ .id = .{ .text = "tabs-empty" }, .tabs = &.{} });
+}
+
+test "TabsProps needs only an id" {
+    const p = TabsProps{ .id = .{ .text = "x" } };
+    try std.testing.expectEqual(@as(usize, 0), p.tabs.len);
 }

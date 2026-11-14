@@ -26,10 +26,10 @@ pub const SelectFn = ?*const fn (?*anyopaque, usize) void;
 
 pub const TreeProps = struct {
     id: prop.Id,
-    rows: []const Row,
-    row_h: u32 = 24,
-    indent: u16 = 13,
-    pad_lr: u16 = 6,
+    rows: []const Row = &.{},
+    row_h: u32 = 26,
+    indent: u16 = 17,
+    pad_lr: u16 = 8,
     bg: ?Color = null,
     row_bg: Color = Color.rgb(0x1a, 0x1a, 0x1d),
     selected_bg: Color = Color.rgb(0x2d, 0x3a, 0x52),
@@ -217,4 +217,9 @@ test "selected_bar draws one 2px left border per row, transparent when unselecte
     // Without the prop the rows are unchanged.
     try countCommands(declareSample, &rects, &texts);
     try std.testing.expectEqual(sample_rows.len, rects);
+}
+
+test "TreeProps needs only an id" {
+    const p = TreeProps{ .id = .{ .text = "x" } };
+    try std.testing.expectEqual(@as(usize, 0), p.rows.len);
 }

@@ -24,14 +24,8 @@ const theme = glinlandui.theme;
 const c = theme.dragon.colors;
 const scale = theme.dragon.type_scale;
 
-// The kit's metrics, in one place: the document's reference components.
-const r_badge: u16 = 4;
-const r_control: u16 = 6;
+// No metrics here on purpose: every widget below is drawn with its own defaults, which are the kit's.
 const r_card: u16 = 8;
-const control_h: u16 = 28;
-const control_sm_h: u16 = 24;
-const control_pad_x: u16 = 12;
-const control_sm_pad_x: u16 = 9;
 
 // The screen's state: what the widgets report into.
 pub const App = struct {
@@ -60,10 +54,7 @@ pub const App = struct {
         self.field.sel_fg = c.text;
         self.field.sel_bg = theme.selected;
         self.field.caret_fg = c.primary;
-        self.field.radius = props.Radius.all(r_control);
-        self.field.pad = props.Pad.axes(0, 10);
         self.field.border = .{ .width = 1, .color = c.divider };
-        self.field.h = .{ .fixed = 32 };
         self.field.on_change = onTyped;
         self.field.ctx = self;
 
@@ -72,10 +63,7 @@ pub const App = struct {
         self.dd_field.bg = c.background;
         self.dd_field.sel_bg = theme.selected;
         self.dd_field.caret_fg = c.primary;
-        self.dd_field.radius = props.Radius.all(r_control);
-        self.dd_field.pad = props.Pad.axes(0, 10);
         self.dd_field.border = .{ .width = 1, .color = c.divider };
-        self.dd_field.h = .{ .fixed = control_h };
         self.dd_field.on_change = onDdTyped;
         self.dd_field.ctx = self;
 
@@ -223,66 +211,53 @@ fn rowChildren(ctx: RowCtx) void {
 fn emphasisButtons(self: *App) void {
     button.button(.{
         .id = .{ .text = "catalog.btn.primary" },
-        .label = .{ .text = "Run query", .size = scale.label, .color = c.on_primary },
+        .label = .{ .text = "Run query", .color = c.on_primary },
         .bg = c.primary,
         .fg = c.on_primary,
         .hover_bg = c.primary_hover,
-        .h = .{ .fixed = control_h },
-        .radius = props.Radius.all(r_control),
-        .pad = props.Pad.axes(0, control_pad_x),
         .on_click = onPrimary,
         .ctx = self,
     });
     button.button(.{
         .id = .{ .text = "catalog.btn.secondary" },
-        .label = .{ .text = "Explain", .size = scale.label },
+        .label = .{ .text = "Explain" },
         .bg = c.surface_variant,
         .fg = c.text,
         .hover_bg = c.hover,
-        .h = .{ .fixed = control_h },
-        .radius = props.Radius.all(r_control),
         .border = .{ .width = 1, .color = c.divider },
-        .pad = props.Pad.axes(0, control_pad_x),
         .on_click = onSecondary,
         .ctx = self,
     });
     button.button(.{
         .id = .{ .text = "catalog.btn.quiet" },
-        .label = .{ .text = "Cancel", .size = scale.label },
+        .label = .{ .text = "Cancel" },
         .bg = c.surface,
         .fg = c.text_dim,
         .hover_bg = c.hover,
-        .h = .{ .fixed = control_h },
-        .radius = props.Radius.all(r_control),
-        .pad = props.Pad.axes(0, control_pad_x),
         .on_click = onQuiet,
         .ctx = self,
     });
     button.button(.{
         .id = .{ .text = "catalog.btn.danger" },
-        .label = .{ .text = "Drop table", .size = scale.label },
+        .label = .{ .text = "Drop table" },
         .bg = c.surface,
         .fg = danger,
         .hover_bg = c.hover,
-        .h = .{ .fixed = control_h },
-        .radius = props.Radius.all(r_control),
         .border = .{ .width = 1, .color = danger_edge },
-        .pad = props.Pad.axes(0, control_pad_x),
         .on_click = onDanger,
         .ctx = self,
     });
     button.button(.{
         .id = .{ .text = "catalog.btn.disabled" },
-        .label = .{ .text = "Disabled", .size = scale.label },
+        .label = .{ .text = "Disabled" },
         .disabled = true,
         .disabled_bg = c.surface_variant,
         .disabled_fg = c.text_done,
-        .h = .{ .fixed = control_h },
-        .radius = props.Radius.all(r_control),
-        .pad = props.Pad.axes(0, control_pad_x),
     });
 }
 
+// The one row that states sizes on purpose: a catalog has to show the three variants, and the component
+// has no size enum yet — every other button in this screen takes the defaults.
 fn sizeButtons(self: *App) void {
     button.button(.{
         .id = .{ .text = "catalog.btn.sm" },
@@ -290,9 +265,8 @@ fn sizeButtons(self: *App) void {
         .bg = c.primary,
         .fg = c.on_primary,
         .hover_bg = c.primary_hover,
-        .h = .{ .fixed = control_sm_h },
-        .radius = props.Radius.all(r_control),
-        .pad = props.Pad.axes(0, control_sm_pad_x),
+        .h = .{ .fixed = 24 },
+        .pad = props.Pad.axes(0, 9),
         .on_click = onSmall,
         .ctx = self,
     });
@@ -302,9 +276,8 @@ fn sizeButtons(self: *App) void {
         .bg = c.primary,
         .fg = c.on_primary,
         .hover_bg = c.primary_hover,
-        .h = .{ .fixed = control_h },
-        .radius = props.Radius.all(r_control),
-        .pad = props.Pad.axes(0, control_pad_x),
+        .h = .{ .fixed = 28 },
+        .pad = props.Pad.axes(0, 12),
         .on_click = onMedium,
         .ctx = self,
     });
@@ -315,7 +288,6 @@ fn sizeButtons(self: *App) void {
         .fg = c.on_primary,
         .hover_bg = c.primary_hover,
         .h = .{ .fixed = 32 },
-        .radius = props.Radius.all(r_control),
         .pad = props.Pad.axes(0, 16),
         .on_click = onLarge,
         .ctx = self,
@@ -365,12 +337,9 @@ fn selectionRow(self: *App) void {
     checkbox_mod.checkbox(.{
         .id = .{ .text = "catalog.check" },
         .checked = self.checked,
-        .size = 16,
-        .radius = r_badge,
         .box_bg = c.background,
         .checked_bg = c.primary,
         .check_color = c.on_primary,
-        .border_width = 1,
         .border_color = c.text_done,
         .hover_bg = c.hover,
         .on_click = onCheck,
@@ -383,7 +352,6 @@ fn selectionRow(self: *App) void {
         radio_mod.radio(.{
             .id = props.Id.at("catalog.radio", i),
             .selected = self.radio == i,
-            .size = 16,
             .outer_bg = c.background,
             .selected_border = c.primary,
             .border_color = c.text_done,
@@ -397,9 +365,6 @@ fn selectionRow(self: *App) void {
     toggle_mod.toggle(.{
         .id = .{ .text = "catalog.toggle" },
         .on = self.toggled,
-        .w = 32,
-        .h = 18,
-        .radius = 9,
         .on_bg = c.primary,
         .off_bg = c.surface_variant,
         .knob_color = c.on_primary,
@@ -413,13 +378,8 @@ fn selectionRow(self: *App) void {
         .value = self.slider,
         .min = 0,
         .max = 100,
-        .w = 160,
-        .h = 18,
-        .track_h = 3,
-        .radius = 2,
         .track_bg = c.surface_variant,
         .fill_bg = c.primary,
-        .thumb_size = 12,
         .thumb_color = c.primary,
         .on_change = onSlider,
         .ctx = self,
@@ -458,7 +418,6 @@ fn swatchChildren(s: Swatch) void {
         .h = .{ .fixed = 40 },
         .direction = .row,
         .bg = s.color,
-        .radius = props.Radius.all(r_control),
         .border = .{ .width = 1, .color = c.divider },
     }, {}, noChildren);
     text_mod.label(.{ .label = .{ .text = s.name, .size = scale.caption, .color = c.text_dim } });
@@ -514,7 +473,6 @@ fn tabsBody(self: *App) void {
     tabs_mod.tabs(.{
         .id = .{ .text = "catalog.tabs" },
         .tabs = &demo_tabs,
-        .h = 34,
         .bg = c.surface,
         .active_bg = c.background,
         .fg = c.text_dim,
@@ -534,13 +492,11 @@ const demo_row_slice: []const []const u8 = &demo_rows;
 fn listBody(self: *App) void {
     list_mod.list(.{
         .id = .{ .text = "catalog.list" },
-        .row_h = 32,
         .row_bg = c.surface,
         .selected_bg = theme.selected,
         .row_fg = c.text,
         .selected_fg = c.text,
         .hover_bg = c.hover,
-        .radius = r_control,
         .border_width = 1,
         .border_color = c.divider,
         .selected = self.row,
@@ -574,9 +530,6 @@ fn treeBody(self: *App) void {
     tree_mod.tree(.{
         .id = .{ .text = "catalog.tree" },
         .rows = &demo_tree,
-        .row_h = 26,
-        .indent = 17,
-        .pad_lr = 8,
         .row_bg = c.surface,
         .selected_bg = theme.selected,
         .hover_bg = c.hover,
@@ -585,7 +538,6 @@ fn treeBody(self: *App) void {
         .group_fg = c.text,
         .meta_fg = c.text_dim,
         .caret_fg = c.text_done,
-        .radius = r_badge,
         .selected_bar = c.primary,
         .on_select = onTree,
         .ctx = self,
@@ -618,15 +570,11 @@ fn dropdownWrapChildren(self: *App) void {
         .field_id = "catalog.dd.field",
         .list_id = "catalog.dd.list",
         .field = &self.dd_field,
-        .row_h = 32,
-        .font_size = scale.label,
         .row_bg = c.surface,
         .selected_bg = theme.selected,
         .row_fg = c.text,
         .hover_bg = c.hover,
         .field_bg = c.background,
-        .field_h = 28,
-        .radius = r_control,
         .border_width = 1,
         .border_color = c.divider,
         .on_select = onOption,

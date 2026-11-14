@@ -22,7 +22,7 @@ pub const lock: []const u8 = "\u{F023}";
 
 /// Icon props.
 pub const IconProps = struct {
-    glyph: []const u8,
+    glyph: []const u8 = "",
     font_size: u16 = 14,
     color: Color = Color.rgb(0xe8, 0xe8, 0xe8),
     disabled: bool = false,
@@ -125,4 +125,9 @@ test "status glyphs are non-empty UTF-8 slices" {
     try std.testing.expect(check.len > 0);
     try std.testing.expect(lock.len > 0);
     try std.testing.expect(check.ptr != lock.ptr);
+}
+
+test "IconProps needs nothing: an empty glyph is a valid icon" {
+    const p = IconProps{};
+    try std.testing.expectEqual(@as(usize, 0), p.glyph.len);
 }

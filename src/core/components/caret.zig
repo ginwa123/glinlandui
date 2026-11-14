@@ -24,7 +24,7 @@ pub const Props = struct {
     x: f32,
     // Bar height in points; a caret is usually a little taller than the font.
     height: f32,
-    color: Color,
+    color: Color = Color.rgb(0xd8, 0xd8, 0xdc),
     anchor: Align = .center,
     // Extra offset from the attach point, in points.
     y: f32 = 0,
@@ -49,4 +49,9 @@ pub fn declare(props: Props) void {
         },
         .background_color = props.color.toClay(),
     })({});
+}
+
+test "Props has a default colour, so a caret needs only where it goes" {
+    const p = Props{ .id = .ID("test-caret"), .x = 0, .height = 16 };
+    try @import("std").testing.expectEqual(Color.rgb(0xd8, 0xd8, 0xdc), p.color);
 }

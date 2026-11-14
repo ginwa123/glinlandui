@@ -13,9 +13,9 @@ pub const ClickFn = ?*const fn (?*anyopaque) void;
 pub const ToggleProps = struct {
     id: prop.Id,
     on: bool = false,
-    w: u32 = 44,
-    h: u32 = 24,
-    radius: u32 = 12,
+    w: u32 = 32,
+    h: u32 = 18,
+    radius: u32 = 9,
     on_bg: Color = Color.rgb(0x4c, 0xaf, 0x50),
     off_bg: Color = Color.rgb(0x3a, 0x3a, 0x3a),
     knob_color: Color = Color.rgb(0xff, 0xff, 0xff),
@@ -117,9 +117,9 @@ test "toggle emits pill + knob rectangles and no text" {
 test "ToggleProps carries neutral defaults" {
     const p = ToggleProps{ .id = .{ .text = "x" } };
     try std.testing.expect(!p.on);
-    try std.testing.expectEqual(@as(u32, 44), p.w);
-    try std.testing.expectEqual(@as(u32, 24), p.h);
-    try std.testing.expectEqual(@as(u32, 12), p.radius);
+    try std.testing.expectEqual(@as(u32, 32), p.w);
+    try std.testing.expectEqual(@as(u32, 18), p.h);
+    try std.testing.expectEqual(@as(u32, 9), p.radius);
     try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50), p.on_bg);
     try std.testing.expectEqual(Color.rgb(0x3a, 0x3a, 0x3a), p.off_bg);
     try std.testing.expectEqual(Color.rgb(0xff, 0xff, 0xff), p.knob_color);

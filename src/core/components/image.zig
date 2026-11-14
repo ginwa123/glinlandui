@@ -15,9 +15,9 @@ pub const ClickFn = ?*const fn (?*anyopaque) void;
 /// Toolkit-style image props.
 pub const ImageProps = struct {
     id: prop.Id,
-    path: []const u8,
-    w: u32,
-    h: u32,
+    path: []const u8 = "",
+    w: u32 = 0,
+    h: u32 = 0,
     fit: Fit = .cover,
     max_dim: u16 = 256,
     radius: u32 = 0,
@@ -217,4 +217,10 @@ test "image without on_click registers nothing; dispatchClick returns false" {
     _ = cl.endLayout();
     const bb = cl.getElementData(cl.getElementId("test-noclick-image")).bounding_box;
     try std.testing.expect(!registry.dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
+}
+
+test "ImageProps needs only an id" {
+    const p = ImageProps{ .id = .{ .text = "x" } };
+    try std.testing.expectEqual(@as(u32, 0), p.w);
+    try std.testing.expectEqual(@as(usize, 0), p.path.len);
 }

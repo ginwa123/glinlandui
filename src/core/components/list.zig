@@ -28,7 +28,7 @@ pub const ListProps = struct {
     /// Grid only: fixed cell size in px (see gridCell).
     cell_w: u32 = 140,
     cell_h: u32 = 78,
-    row_h: u32 = 40,
+    row_h: u32 = 34,
     row_bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
     selected_bg: Color = Color.rgb(0x3a, 0x3a, 0x3a),
     row_fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
@@ -413,7 +413,7 @@ test "generic list with string items renders title + trailing per row" {
 
 test "ListProps carries neutral dark defaults + null selection/callbacks" {
     const p = ListProps{ .id = .{ .text = "x" } };
-    try std.testing.expectEqual(@as(u32, 40), p.row_h);
+    try std.testing.expectEqual(@as(u32, 34), p.row_h);
     try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.row_bg);
     try std.testing.expectEqual(Color.rgb(0x3a, 0x3a, 0x3a), p.selected_bg);
     try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.row_fg);
@@ -568,10 +568,10 @@ fn pitchFor(declare_fn: *const fn () void, base: []const u8) !f32 {
 }
 
 test "list gap separates rows by row_h + gap" {
-    // Default row_h 40, no gap: pitch 40.
-    try std.testing.expectEqual(@as(f32, 40), try pitchFor(declareNoGapList, "test-nogap-list"));
-    // gap 8 (content parity): pitch 48.
-    try std.testing.expectEqual(@as(f32, 48), try pitchFor(declareGapList, "test-gap-list"));
+    // Default row_h 34, no gap: pitch 34.
+    try std.testing.expectEqual(@as(f32, 34), try pitchFor(declareNoGapList, "test-nogap-list"));
+    // gap 8 (content parity): pitch 42.
+    try std.testing.expectEqual(@as(f32, 42), try pitchFor(declareGapList, "test-gap-list"));
 }
 
 fn declareRadiusList() void {

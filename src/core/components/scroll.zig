@@ -37,7 +37,7 @@ pub const ScrollProps = struct {
     border_color: Color = Color.rgb(0x00, 0x00, 0x00),
     disabled: bool = false,
     show_scrollbar: bool = true,
-    scrollbar_width: u16 = 8,
+    scrollbar_width: u16 = 9,
     scrollbar_margin: f32 = 4,
     track_bg: ?Color = null,
     thumb_bg: Color = Color.rgb(0x5a, 0x5a, 0x5a),
@@ -396,7 +396,7 @@ test "ScrollProps carries neutral defaults (scrollbar on)" {
     try std.testing.expectEqual(@as(u16, 0), p.border_width);
     try std.testing.expect(!p.disabled);
     try std.testing.expect(p.show_scrollbar);
-    try std.testing.expectEqual(@as(u16, 8), p.scrollbar_width);
+    try std.testing.expectEqual(@as(u16, 9), p.scrollbar_width);
     try std.testing.expect(p.track_bg == null);
     try std.testing.expectEqual(Color.rgb(0x5a, 0x5a, 0x5a), p.thumb_bg);
     try std.testing.expectEqual(Color.rgb(0x7a, 0x7a, 0x7a), p.thumb_hover_bg);
@@ -664,7 +664,7 @@ test "an overflowing container insets its content by the scrollbar gutter" {
     const w2 = cl.getElementData(cl.getElementId("scroll-probe")).bounding_box.width;
 
     try std.testing.expectApproxEqAbs(@as(f32, 200), w1, 0.5);
-    try std.testing.expectApproxEqAbs(@as(f32, 200 - 8 - 4), w2, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f32, 200 - 9 - 4), w2, 0.5);
 }
 
 // ---- Slider-style drag tests: pointer down = scroll down (content up), 1:1 clamped — the scrollbar-slider convention (Clay's built-in drag is.

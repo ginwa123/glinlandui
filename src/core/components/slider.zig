@@ -20,13 +20,13 @@ pub const SliderProps = struct {
     value: f32 = 0.5,
     min: f32 = 0,
     max: f32 = 1,
-    w: u32 = 200,
-    h: u32 = 24,
-    track_h: u32 = 4,
+    w: u32 = 160,
+    h: u32 = 18,
+    track_h: u32 = 3,
     radius: u32 = 2,
     track_bg: Color = Color.rgb(0x3a, 0x3a, 0x3a),
     fill_bg: Color = Color.rgb(0x4c, 0xaf, 0x50),
-    thumb_size: u32 = 16,
+    thumb_size: u32 = 12,
     thumb_color: Color = Color.rgb(0xff, 0xff, 0xff),
     hover_fill: ?Color = null,
     disabled: bool = false,
@@ -175,13 +175,13 @@ test "SliderProps carries neutral defaults" {
     try std.testing.expectEqual(@as(f32, 0.5), p.value);
     try std.testing.expectEqual(@as(f32, 0), p.min);
     try std.testing.expectEqual(@as(f32, 1), p.max);
-    try std.testing.expectEqual(@as(u32, 200), p.w);
-    try std.testing.expectEqual(@as(u32, 24), p.h);
-    try std.testing.expectEqual(@as(u32, 4), p.track_h);
+    try std.testing.expectEqual(@as(u32, 160), p.w);
+    try std.testing.expectEqual(@as(u32, 18), p.h);
+    try std.testing.expectEqual(@as(u32, 3), p.track_h);
     try std.testing.expectEqual(@as(u32, 2), p.radius);
     try std.testing.expectEqual(Color.rgb(0x3a, 0x3a, 0x3a), p.track_bg);
     try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50), p.fill_bg);
-    try std.testing.expectEqual(@as(u32, 16), p.thumb_size);
+    try std.testing.expectEqual(@as(u32, 12), p.thumb_size);
     try std.testing.expectEqual(Color.rgb(0xff, 0xff, 0xff), p.thumb_color);
     try std.testing.expect(p.hover_fill == null);
     try std.testing.expect(!p.disabled);
@@ -248,7 +248,7 @@ test "slider value above max clamps fill to full width" {
     declareClampedSlider();
     _ = cl.endLayout();
     const fill_bb = cl.getElementData(cl.ElementId.IDI("test-slider-clamp", fill_index)).bounding_box;
-    try std.testing.expectEqual(@as(f32, 200), fill_bb.width);
+    try std.testing.expectEqual(@as(f32, 160), fill_bb.width);
 }
 
 const ClickCtx = struct {
