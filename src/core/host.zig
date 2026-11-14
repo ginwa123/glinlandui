@@ -8,6 +8,7 @@ const registry = @import("components/click_registry.zig");
 const image_widgets = @import("components/image.zig");
 const cl = @import("zclay");
 const scroll_mod = @import("components/scroll.zig");
+const input_mod = @import("components/input.zig");
 const semantics = @import("semantics.zig");
 
 /// App declare callback: builds the Clay tree for a w x h window.
@@ -62,6 +63,7 @@ pub const Host = struct {
         // Fresh registries per frame (components self-register during declare; stale boxes must never ghost-fire).
         registry.beginFrame();
         scroll_mod.beginScrollFrame();
+        input_mod.beginFrame();
         image_widgets.beginFrame();
         semantics.beginFrame();
         self.root_fn(self.root_ctx, w, h);
@@ -154,13 +156,18 @@ pub const Host = struct {
         self.scroll_dy += dy;
     }
 
+    /// The return value is CLOSE INTENT, which the window acts on: a key the focused field typed is never one.
     pub fn onKeyEvent(self: *Host, keycode: u32, pressed: bool) bool {
-        return dispatch.handleKey(&self.keys, keycode, pressed);
+        if (dispatch.handleKey(&self.keys, keycode, pressed)) return true;
+        // No app handler asked to close: the focused field takes the key, so typing needs no routing code in the app.
+        if (pressed) _ = input_mod.dispatchKey(self.keys.mods, keycode);
+        return false;
     }
 
     /// Composed text from a backend that has a keyboard layout; typing never goes through the key chain.
     pub fn onTextEvent(self: *Host, text: []const u8) bool {
-        return dispatch.handleText(&self.keys, text);
+        if (dispatch.handleText(&self.keys, text)) return true;
+        return input_mod.dispatchText(text);
     }
 
     pub fn onResizeEvent(self: *Host, w: u32, h: u32) void {

@@ -3,7 +3,6 @@
 const glinlandui = @import("glinlandui");
 const input_mod = glinlandui.components.input;
 const frame = glinlandui.frame;
-const text_editor = glinlandui.text_editor;
 
 const view = @import("view.zig");
 const view_model = @import("view_model.zig");
@@ -12,15 +11,33 @@ const state_mod = @import("state.zig");
 pub const App = struct {
     // `ViewModelStoreOwner`: one screen, one store, one ViewModel for the life of the window.
     store: glinlandui.view_model.Store(view_model.TodoViewModel) = .{},
-    // The field the keyboard types into. It owns its buffer, so there is nothing to bind here.
-    field: input_mod.FieldCtx = .{ .id = view.field_id },
+    // The field the keyboard types into: its look, its intents and its draft all live in it.
+    field: input_mod.Field = .{ .id = .{ .text = view.field_id } },
     // Click contexts, owned here because a callback runs AFTER the frame that declared it.
     add_ctx: view.AddCtx = undefined,
     row_ctxs: [state_mod.max_todos]view.RowCtx = undefined,
 
-    // `onCreate`: the field takes the keyboard, and the contexts point at the one ViewModel.
+    // `onCreate`: the field takes the keyboard, and the click context points at it.
     pub fn start(self: *App) void {
-        self.add_ctx = .{ .vm = self.vm(), .field = &self.field };
+        // The look and the intents are set ONCE: a frame only hands the field the model's value.
+        const t = glinlandui.theme.dark;
+        self.field = .{
+            .id = .{ .text = view.field_id },
+            .font_size = t.type_scale.body,
+            .bg = t.colors.surface,
+            .fg = t.colors.text,
+            .sel_bg = t.colors.surface_variant,
+            .sel_fg = t.colors.text,
+            .caret_fg = t.colors.primary,
+            .radius = glinlandui.props.Radius.all(6),
+            .pad = glinlandui.props.Pad.axes(8, 10),
+            .border = .{ .width = 1, .color = t.colors.divider },
+            .w = .{ .clamp = .{ .min = 120, .max = 640, .grow = true } },
+            .on_change = view.onDraft,
+            .on_submit = view.onSubmit,
+            .ctx = self.vm(),
+        };
+        self.add_ctx = .{ .field = &self.field };
         frame.setFocus(view.field_id);
     }
 
@@ -48,30 +65,5 @@ pub const App = struct {
             .rows = &self.row_ctxs,
         };
         view.TodoScreen(&scope);
-    }
-
-    // `KeyboardActions(onDone = { vm.add(field.text()) })`: the draft goes up as an argument, and the field clears only if it was taken.
-    pub fn submit(self: *App) void {
-        if (self.vm().add(self.field.editor.text())) self.field.editor.setText("");
-    }
-
-    // One key event, and only for the field that owns the keyboard: clicking anywhere else takes it away.
-    pub fn onKey(ctx: ?*anyopaque, mods: input_mod.Mods, keycode: u32) bool {
-        const self: *App = @ptrCast(@alignCast(ctx.?));
-        if (!self.field.editor.focused) return false;
-        // A single-line field commits on Enter instead of inserting a newline.
-        if (keycode == text_editor.KEY_ENTER) {
-            self.submit();
-            return true;
-        }
-        const action = text_editor.handleKey(&self.field.editor, keycode, mods.shift, mods.shortcut());
-        return action != .ignored;
-    }
-
-    // Composed text from the platform: `A` under Caps Lock, `*`, `(`, `é`. macOS sends this INSTEAD of a key for a printable.
-    pub fn onText(ctx: ?*anyopaque, run: []const u8) bool {
-        const self: *App = @ptrCast(@alignCast(ctx.?));
-        if (!self.field.editor.focused) return false;
-        return text_editor.handleText(&self.field.editor, run) != .ignored;
     }
 };

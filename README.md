@@ -234,10 +234,15 @@ Two lifetimes decide whether an app works, and each one is a bug the todo exampl
 2. **A click callback's `ctx` must outlive the frame.** Clicks are dispatched *after* the declare returns, so a
    pointer to a local is already gone. Own the context on the screen's struct.
 
-Two components already do the plumbing an app would otherwise repeat: `components.input.liveField` takes a
-`FieldCtx` that OWNS the draft (buffer, caret, selection, measure) — declare one and feed it keys — and
-`components.list` owns a list's rows, their ids, hover and per-row clicks (registering each row's target
-before its box, so a button inside the row wins the hit test).
+Two components already do the plumbing an app would otherwise repeat: `components.input.TextField` takes a
+`Field` that owns the look, the intents and the draft (buffer, caret, selection, measure) — declare it with
+`TextField(&field)` and the engine types into it, calls `on_change` and `on_submit`, and the app routes no
+key at all — and `components.list` owns a list's rows, their ids, hover and per-row clicks (registering each
+row's target before its box, so a button inside the row wins the hit test).
+
+An app draws with components, never with Clay: `glinlandui` does not re-export the bindings, so a view that
+wants a box, a label or a field uses `components.*`. What an app may need from the engine is on `frame`
+(`elementId`, `clayId`, `bounds`) and `scroll` (`view`).
 
 `examples/todo/` is the worked example, and its README is the full Compose-to-glinlandui mapping table.
 

@@ -1,10 +1,11 @@
 // The screen's state, as a VALUE: everything the view draws is one of these.
 // This is Kotlin's `data class TodoUiState` — a plain value a ViewModel replaces, never mutates in place.
-// A half-typed title is NOT in here: it is an editing draft, it lives in the field, and `add` takes it as an argument.
+// The half-typed title IS in here: the field is driven by `value`, so the state holds the draft, exactly as Compose's does.
 const std = @import("std");
 
 // Capacities. A value type is bounded by its fields, so these are what bound the state's size.
 pub const max_title: usize = 96;
+pub const max_input: usize = 256;
 pub const max_todos: usize = 64;
 
 // A title is a zero-terminated array — Zig's own way to carry a length with the bytes, read back with `std.mem.sliceTo`.
@@ -13,11 +14,19 @@ pub const Title = [max_title:0]u8;
 // An empty title, so a `Todo` needs no initialiser.
 pub const empty_title: Title = .{0} ** max_title;
 
+// The draft's storage: the same shape as a title, sized to the field's buffer.
+pub const Draft = [max_input:0]u8;
+pub const empty_draft: Draft = .{0} ** max_input;
+
 // Copy `s` in, truncating at capacity: a value type cannot fail to allocate, so it truncates instead.
-fn setTitle(dst: *Title, s: []const u8) void {
-    const n = @min(s.len, max_title);
+fn setText(comptime N: usize, dst: *[N:0]u8, s: []const u8) void {
+    const n = @min(s.len, N);
     @memcpy(dst[0..n], s[0..n]);
     dst[n] = 0;
+}
+
+fn setTitle(dst: *Title, s: []const u8) void {
+    setText(max_title, dst, s);
 }
 
 // One todo. The title is owned by the value, so a copy of the state owns its own text.
@@ -30,10 +39,23 @@ pub const Todo = struct {
     }
 };
 
-// `data class TodoUiState(val todos: List<String> = emptyList())`.
+// `data class TodoUiState(val input: String = "", val todos: List<String> = emptyList())`.
 pub const TodoUiState = struct {
+    input: Draft = empty_draft,
     todos: [max_todos]Todo = [_]Todo{.{}} ** max_todos,
     count: usize = 0,
+
+    // The draft the field shows, and the title `add` takes.
+    pub fn draft(self: *const TodoUiState) []const u8 {
+        return std.mem.sliceTo(&self.input, 0);
+    }
+
+    // `it.copy(input = text)`
+    pub fn withInput(self: TodoUiState, text: []const u8) TodoUiState {
+        var next = self;
+        setText(max_input, &next.input, text);
+        return next;
+    }
 
     // The live rows. A slice, so the view iterates what exists rather than the whole capacity.
     pub fn items(self: *const TodoUiState) []const Todo {

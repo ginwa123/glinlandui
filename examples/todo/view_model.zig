@@ -19,6 +19,11 @@ pub const TodoViewModel = struct {
         return self.state;
     }
 
+    // `fun onInputChange(text: String) = _state.update { it.copy(input = text) }`
+    pub fn onInputChange(self: *TodoViewModel, text: []const u8) void {
+        self.state = self.state.withInput(text);
+    }
+
     // `fun add()` — the draft comes IN as an argument, and the answer says whether the intent took it.
     // A blank title is not a todo, and a full list is full: either way the state is not touched and the draft stays.
     pub fn add(self: *TodoViewModel, title: []const u8) bool {
@@ -67,6 +72,13 @@ test "add on a full list is refused, so the draft stays in the field" {
     while (i < state_mod.max_todos) : (i += 1) _ = vm.add("x");
     try std.testing.expect(!vm.add("one more"));
     try std.testing.expectEqual(state_mod.max_todos, vm.uiState().count);
+}
+
+test "onInputChange keeps the draft in the state" {
+    var vm = TodoViewModel.init();
+    vm.onInputChange("buy milk");
+    try std.testing.expectEqualStrings("buy milk", vm.uiState().draft());
+    try std.testing.expectEqual(@as(usize, 0), vm.uiState().count);
 }
 
 test "remove and toggle are intents over the index" {

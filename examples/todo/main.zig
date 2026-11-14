@@ -23,8 +23,6 @@ pub fn main(init: std.process.Init) !void {
     // `setContent { ... }`: the Host hands the composable the ctx it was built with.
     var host = try glinlandui.host.Host.init(gpa, &app, todo.app.App.content);
     defer host.deinit();
-    host.keys.register(todo.app.App.onKey, &app);
-    host.keys.registerText(todo.app.App.onText, &app);
     window.delegate = host.delegate();
     try window.run();
 }

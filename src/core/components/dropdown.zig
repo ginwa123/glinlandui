@@ -11,9 +11,6 @@ const semantics = @import("../semantics.zig");
 /// Selection callback: plain fn pointer + opaque ctx (no closures).
 pub const DropdownSelectFn = ?*const fn (?*anyopaque, usize) void;
 
-/// Caret + keyboard-selection passthrough for the search field (owner-held input.EditState; null = legacy caret-at-end render).
-pub const QueryEdit = ?input.EditState;
-
 /// Dropdown row kinds: info rows are display-only (search results headers, previews), action rows fire on_select, back rows are rendered without the.
 pub const RowKind = enum {
     info,
@@ -49,7 +46,8 @@ pub fn filter(query: []const u8, items: []const []const u8, out: []usize) usize 
 pub const DropdownProps = struct {
     field_id: []const u8,
     list_id: []const u8,
-    show_search: bool = true,
+    /// The search field, when there is one: the app owns it, and the dropdown only paints it. Null draws no field.
+    field: ?*input.Field = null,
     font_size: u16 = 14,
     row_h: u32 = 40,
     row_bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
@@ -81,8 +79,6 @@ pub const DropdownProps = struct {
     /// Overlay card border (defaults to border_* when 0-width + default color).
     overlay_border_width: u16 = 0,
     overlay_border_color: Color = Color.rgb(0x00, 0x00, 0x00),
-    /// Caret + keyboard selection for the search field (owner-held, one per draft).
-    query_edit: ?input.EditState = null,
     on_select: DropdownSelectFn = null,
     ctx: ?*anyopaque = null,
     /// Per-row clicks passthrough (Stage B): forwarded verbatim to the inner list.
@@ -115,7 +111,6 @@ fn fieldSize(fixed: ?f32, min: f32, max: f32, grow: bool) prop.Size {
 
 pub fn dropdown(
     props: DropdownProps,
-    query: []const u8,
     rows: []const []const u8,
     item_ctx: anytype,
     comptime renderItem: fn (@TypeOf(item_ctx), []const u8, usize) void,
@@ -155,39 +150,32 @@ pub fn dropdown(
                 .width = .outside(props.border_width),
             } else .{},
         })({
-            dropdownInner(props, query, rows, item_ctx, renderItem);
+            dropdownInner(props, rows, item_ctx, renderItem);
         });
         return;
     }
-    dropdownInner(props, query, rows, item_ctx, renderItem);
+    dropdownInner(props, rows, item_ctx, renderItem);
 }
 
 fn dropdownInner(
     props: DropdownProps,
-    query: []const u8,
     rows: []const []const u8,
     item_ctx: anytype,
     comptime renderItem: fn (@TypeOf(item_ctx), []const u8, usize) void,
 ) void {
-    if (props.show_search) {
-        const field_props = input.FieldProps{
-            .id = .{ .text = props.field_id },
-            .font_size = props.font_size,
-            .fg = props.row_fg,
-            .bg = props.field_bg,
-            .radius = prop.Radius.all(@intCast(props.radius)),
-            .w = fieldSize(props.field_w, props.field_min_w, props.field_max_w, true),
-            .h = fieldSize(props.field_h, props.field_min_h, props.field_max_h, false),
-            .border = .{ .width = props.border_width, .color = props.border_color },
-            .disabled = props.disabled,
-            .disabled_bg = props.disabled_bg,
-            .disabled_fg = props.disabled_fg,
-        };
-        if (props.query_edit) |st| {
-            input.fieldEdit(field_props, query, st);
-        } else {
-            input.field(field_props, query);
-        }
+    if (props.field) |field| {
+        // The dropdown paints the app's field with its own look; the draft and the caret stay the app's.
+        field.font_size = props.font_size;
+        field.fg = props.row_fg;
+        field.bg = props.field_bg;
+        field.radius = prop.Radius.all(@intCast(props.radius));
+        field.w = fieldSize(props.field_w, props.field_min_w, props.field_max_w, true);
+        field.h = fieldSize(props.field_h, props.field_min_h, props.field_max_h, false);
+        field.border = .{ .width = props.border_width, .color = props.border_color };
+        field.disabled = props.disabled;
+        field.disabled_bg = props.disabled_bg;
+        field.disabled_fg = props.disabled_fg;
+        input.TextField(field);
     }
     list.list(.{
         .id = .{ .text = props.list_id },
@@ -265,7 +253,7 @@ test "filter returns original indices of matches" {
 
 test "DropdownProps carries neutral dark defaults + null callbacks" {
     const p = DropdownProps{ .field_id = "f", .list_id = "l" };
-    try std.testing.expect(p.show_search);
+    try std.testing.expect(p.field == null);
     try std.testing.expectEqual(@as(u16, 14), p.font_size);
     try std.testing.expectEqual(@as(u32, 40), p.row_h);
     try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.row_bg);
@@ -304,15 +292,17 @@ const demo_slice: []const []const u8 = &demo_rows;
 const demo_kinds = [_]RowKind{ .action, .action, .back };
 const demo_kinds_slice: []const RowKind = &demo_kinds;
 
+var dd_ctx: input.Field = .{ .id = .{ .text = "test-dd-field" } };
+
 fn declareDropdown() void {
-    dropdown(.{ .field_id = "test-dd-field", .list_id = "test-dd-list" }, "a", demo_slice, Ctx{
+    dropdown(.{ .field_id = "test-dd-field", .list_id = "test-dd-list", .field = &dd_ctx }, demo_slice, Ctx{
         .kinds = demo_kinds_slice,
         .fg = Color.rgb(0xe8, 0xe8, 0xe8),
     }, renderRow);
 }
 
 fn declareNoSearch() void {
-    dropdown(.{ .field_id = "test-dd-ns-field", .list_id = "test-dd-ns-list", .show_search = false }, "", demo_slice, Ctx{
+    dropdown(.{ .field_id = "test-dd-ns-field", .list_id = "test-dd-ns-list" }, demo_slice, Ctx{
         .kinds = demo_kinds_slice,
         .fg = Color.rgb(0xe8, 0xe8, 0xe8),
     }, renderRow);
@@ -365,10 +355,9 @@ fn declareClickDropdown() void {
     dropdown(.{
         .field_id = "test-dd-click-field",
         .list_id = "test-dd-click-list",
-        .show_search = false,
         .on_select = testOnSelect,
         .ctx = &click_rec,
-    }, "", demo_slice, Ctx{
+    }, demo_slice, Ctx{
         .kinds = demo_kinds_slice,
         .fg = Color.rgb(0xe8, 0xe8, 0xe8),
     }, renderRow);
@@ -417,9 +406,8 @@ fn declareDdClicksPassthrough() void {
     dropdown(.{
         .field_id = "test-dd-clicks-field",
         .list_id = "test-dd-clicks-list",
-        .show_search = false,
         .clicks = &clicks,
-    }, "", demo_slice[0..2], Ctx{
+    }, demo_slice[0..2], Ctx{
         .kinds = demo_kinds_slice,
         .fg = Color.rgb(0xe8, 0xe8, 0xe8),
     }, renderRow);
@@ -498,13 +486,12 @@ fn declareOverlayFrame() void {
         dropdown(.{
             .field_id = "test-overlay-field",
             .list_id = "test-overlay-list",
-            .show_search = false,
             .overlay = true,
             .anchor_id = "test-overlay-anchor",
             .anchor_index = 0,
             .overlay_id = "test-overlay-float",
             .footer = "hint",
-        }, "", demo_slice[0..2], Ctx{
+        }, demo_slice[0..2], Ctx{
             .kinds = demo_kinds_slice,
             .fg = Color.rgb(0xe8, 0xe8, 0xe8),
         }, renderRow);

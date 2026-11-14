@@ -344,19 +344,20 @@ pub fn handleText(buf: []u8, len: *usize, st: *EditState, text: []const u8) Acti
     return if (inserted) .edited else .ignored;
 }
 
-// Toolkit-style field props.
-pub const FieldProps = struct {
-    id: prop.Id,
+// One text field: what it looks like, the intents it raises, and the state it owns.
+pub const Field = struct {
+    // ---- what it looks like ----
+    id: prop.Id = .{ .text = "" },
+    // The text the field shows. It wins whenever it CHANGES, so an app can drive the field from its state.
+    value: []const u8 = "",
     font_size: u16 = 14,
     fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
     bg: Color = Color.rgb(0x26, 0x26, 0x26),
-    // Selected-run text color for fieldEdit (text runs carry color only, no per-run bg at this renderer's fidelity).
+    // A selected run carries a colour only: this renderer has no per-run background at glyph fidelity.
     sel_fg: Color = Color.rgb(0x7a, 0xb8, 0xff),
-    // The selection's background, used by `liveField`.
+    // The selection's background, drawn behind the selected run.
     sel_bg: Color = Color.rgb(0x2d, 0x3a, 0x52),
-    // The caret's colour, or the text colour when null. A caret that matches the text merges with the glyph it touches and reads as a broken character,
-
-    // which is why this is a prop.
+    // The caret's colour, or a neutral one when null: a caret that matches the text merges with the glyph it touches.
     caret_fg: ?Color = null,
     // A field grows to the width it is given and fits its text vertically, unless the caller says otherwise.
     w: prop.Size = .grow,
@@ -367,264 +368,289 @@ pub const FieldProps = struct {
     disabled: bool = false,
     disabled_bg: Color = Color.rgb(0x1a, 0x1a, 0x1a),
     disabled_fg: Color = Color.rgb(0x77, 0x77, 0x77),
-};
-
-// Declare a text field: prompt + query + block cursor on the field bg.
-pub fn field(props: FieldProps, query: []const u8) void {
-    const bg: Color = if (props.disabled) props.disabled_bg else props.bg;
-    const fg: Color = if (props.disabled) props.disabled_fg else props.fg;
-    cl.UI()(.{
-        .id = props.id.clay(),
-        .layout = .{
-            .direction = .left_to_right,
-            .sizing = .{ .w = props.w.clay(), .h = props.h.clay() },
-            .padding = props.pad.clay(),
-            .child_alignment = .{ .x = .left, .y = .center },
-            .child_gap = 0,
-        },
-        .background_color = bg.toClay(),
-        .corner_radius = props.radius.clay(),
-        .border = props.border.clay(),
-    })({
-        const fg_c = fg.toClay();
-        cl.text(">", .{
-            .font_size = props.font_size,
-            .color = fg_c,
-        });
-        cl.text(" ", .{
-            .font_size = props.font_size,
-            .color = fg_c,
-        });
-        if (query.len > 0) {
-            cl.text(query, .{
-                .font_size = props.font_size,
-                .color = fg_c,
-            });
-        }
-        cl.text("_", .{
-            .font_size = props.font_size,
-            .color = fg_c,
-        });
-    });
-    // Semantics: an editable field declares `set_text`, so `Interaction.performTextInput` can refuse to type into a non-editable node and.
-    if (!props.disabled and props.id.str().len > 0) {
-        semantics.register(.{
-            .id = props.id.clay(),
-            .tag = props.id.str(),
-            .role = .text_field,
-            .value = query,
-            .flags = .{ .enabled = true },
-            .actions = .{ .set_text = true },
-        });
-        registry.registerHover(props.id.clay(), .text);
-    }
-}
-
-// Declare a text field with HTML-like caret + selection: prompt, then the query split around the caret (before / "|" / after), with the selected span.
-pub const FieldCtx = struct {
-    // The draft, owned here: a field that only DRAWS takes a `[]const u8`, and this one is the field an app types into.
-    buf: [max_field_len]u8 = undefined,
-    editor: text_editor.Editor = .{ .buf = &.{} },
-    id: []const u8 = "",
-    // Measures a run with the font that draws the field. The engine's text backend is that font.
-    measure: *const fn ([]const u8, u16) f32 = text_backend.runWidth,
-    // Left padding of the field, written by `liveField` each frame so a click and the caret share one origin.
-    pad_lr: f32 = 8,
-    // The field's font size, written by `liveField` each frame, for the same reason.
-    font_size: u16 = 14,
+    // ---- the intents it raises: called with the new text after every edit that changed it.
+    on_change: ChangeFn = null,
+    // Called on Enter with the draft. True means the intent took it, and then the field clears itself.
+    on_submit: SubmitFn = null,
+    ctx: ?*anyopaque = null,
     // Called after a click places the caret, so the app can take focus.
     on_focus: ?*const fn (?*anyopaque) void = null,
     focus_ctx: ?*anyopaque = null,
+    // Measures a run with the font that draws the field. The engine's text backend is that font.
+    measure: *const fn ([]const u8, u16) f32 = text_backend.runWidth,
+
+    // ---- the state it owns ----
+    buf: [max_field_len]u8 = undefined,
+    editor: text_editor.Editor = .{ .buf = &.{} },
+    // The id as text, copied because a click uses it after the frame.
+    name_buf: [96]u8 = undefined,
+    name_len: usize = 0,
+    // Left padding, written by `TextField` each frame so a click and the caret share one origin.
+    pad_lr: f32 = 8,
     // True while this field owns a drag in flight; the field ticks it, so the app never has to.
     dragging: bool = false,
     bound: bool = false,
+    // The value the caller declared last frame: a change there is the model editing, and it wins over the draft.
+    declared: [max_field_len]u8 = undefined,
+    declared_len: usize = 0,
+    declared_known: bool = false,
 
-    // Point the editor at this field's own buffer, once, after the FieldCtx is where it will stay.
-    pub fn bind(self: *FieldCtx) void {
+    // Point the editor at this field's own buffer, once, after the Field is where it will stay.
+    pub fn bind(self: *Field) void {
+        self.bindTo(&self.buf);
+    }
+
+    // Same, for an app that owns a bigger buffer than a single-line field needs.
+    pub fn bindTo(self: *Field, buf: []u8) void {
         if (self.bound) return;
-        self.editor = text_editor.Editor.init(&self.buf);
+        self.editor = text_editor.Editor.init(buf);
         self.bound = true;
+    }
+
+    // The draft, for an app that wants to read it.
+    pub fn text(self: *const Field) []const u8 {
+        return self.editor.text();
+    }
+
+    // Adopt a value from the model: it does NOT report, because the model is where it came from.
+    pub fn setText(self: *Field, value: []const u8) void {
+        self.editor.setText(value);
+    }
+
+    // Empty the draft without reporting it.
+    pub fn clear(self: *Field) void {
+        self.setText("");
+    }
+
+    // Raise the submit intent: Enter, or a button that does the same thing. True when the app took the draft.
+    pub fn submit(self: *Field) bool {
+        const f = self.on_submit orelse return false;
+        if (!f(self.ctx, self.editor.text())) return false;
+        self.editor.setText("");
+        self.report();
+        return true;
+    }
+
+    // The focus and semantics name: the id as text, which is what a click and the keyboard use.
+    pub fn name(self: *const Field) []const u8 {
+        return self.name_buf[0..self.name_len];
+    }
+
+    // Tell the caller the text changed.
+    fn report(self: *Field) void {
+        if (self.on_change) |f| f(self.ctx, self.editor.text());
+    }
+
+    // Copy the declared value, so a change next frame is detectable and a truncation is not a change every frame.
+    fn rememberDeclared(self: *Field, value: []const u8) void {
+        self.declared_len = @min(value.len, self.declared.len);
+        @memcpy(self.declared[0..self.declared_len], value[0..self.declared_len]);
+    }
+
+    // True when `value` is the value this field already declared.
+    fn declaredIs(self: *const Field, value: []const u8) bool {
+        const n = @min(value.len, self.declared.len);
+        if (n != self.declared_len) return false;
+        return std.mem.eql(u8, value[0..n], self.declared[0..n]);
+    }
+
+    // Remember the id as text, so a click that runs after the frame still knows the field's name.
+    fn rememberName(self: *Field) []const u8 {
+        const declared = self.id.str();
+        self.name_len = @min(declared.len, self.name_buf.len);
+        @memcpy(self.name_buf[0..self.name_len], declared[0..self.name_len]);
+        return self.name();
     }
 };
 
-// How much draft a field owns. A single-line input is not a document; an app that needs more uses `liveField` with its own editor.
+// A field reports an edit: `(ctx, new_text)`.
+pub const ChangeFn = ?*const fn (?*anyopaque, []const u8) void;
+
+// A field asks whether Enter was taken: `(ctx, draft)`, true = taken, and then the field clears.
+pub const SubmitFn = ?*const fn (?*anyopaque, []const u8) bool;
+
+// How much draft a field owns. An app that needs more binds a bigger buffer with `bindTo`.
 pub const max_field_len: usize = 256;
 
+// The field that owns the keyboard this frame: the engine types into it, so the app never routes a key.
+var active: ?*Field = null;
+
+// Forget last frame's field: a field that stops being declared must not keep the keyboard.
+pub fn beginFrame() void {
+    active = null;
+}
+
+// Type a composed run into the focused field; false when no field owns the keyboard.
+pub fn dispatchText(text: []const u8) bool {
+    const field = active orelse return false;
+    if (text.len == 0) return false;
+    var before: [max_field_len]u8 = undefined;
+    const before_len = field.editor.len;
+    const n = @min(before_len, before.len);
+    @memcpy(before[0..n], field.editor.text()[0..n]);
+    if (text_editor.handleText(&field.editor, text) == .ignored) return false;
+    if (changed(before[0..n], before_len, field.editor.text())) field.report();
+    return true;
+}
+
+// A key for the focused field: Enter submits, everything else edits. False when no field owns the keyboard.
+pub fn dispatchKey(mods: Mods, keycode: u32) bool {
+    const field = active orelse return false;
+    // A single-line field has no newline: Enter is the submit gesture, and with no handler it is absorbed.
+    if (keycode == text_editor.KEY_ENTER) {
+        _ = field.submit();
+        return true;
+    }
+    var before: [max_field_len]u8 = undefined;
+    const before_len = field.editor.len;
+    const n = @min(before_len, before.len);
+    @memcpy(before[0..n], field.editor.text()[0..n]);
+    if (text_editor.handleKey(&field.editor, keycode, mods.shift, mods.shortcut()) == .ignored) return false;
+    if (changed(before[0..n], before_len, field.editor.text())) field.report();
+    return true;
+}
+
+// True when the text differs from the snapshot taken before the key: an arrow moves the caret, not the text.
+fn changed(before: []const u8, before_len: usize, after: []const u8) bool {
+    if (after.len != before_len) return true;
+    return !std.mem.eql(u8, before, after[0..before.len]);
+}
+
 // Anchor the caret on the press, extend it while the button stays down, and release the drag when it comes up.
-fn dragSelect(ctx: *FieldCtx, id: []const u8) void {
+fn dragSelect(field: *Field) void {
     if (!frame_mod.ptr_down) {
-        ctx.dragging = false;
+        field.dragging = false;
         return;
     }
-    const data = cl.getElementData(cl.getElementId(id));
+    const data = cl.getElementData(cl.getElementId(field.name()));
     if (!data.found) return;
     const bb = data.bounding_box;
     // Only a press that BEGAN inside the field may take the caret, so a drag that wanders in from elsewhere does not steal it.
     const began_here = frame_mod.ptr_press_x >= bb.x and frame_mod.ptr_press_x <= bb.x + bb.width and
         frame_mod.ptr_press_y >= bb.y and frame_mod.ptr_press_y <= bb.y + bb.height;
-    if (!ctx.dragging and !began_here) return;
+    if (!field.dragging and !began_here) return;
     // `extend` is false on the anchoring frame (place the caret) and true after it (grow the selection from that anchor).
-    const x = frame_mod.ptr_x - bb.x - ctx.pad_lr;
-    ctx.editor.setCaret(text_editor.offsetAtX(ctx.editor.text(), x, ctx.font_size, ctx.measure), ctx.dragging);
-    if (!ctx.dragging) {
-        ctx.dragging = true;
-        frame_mod.setFocus(ctx.id);
-        if (ctx.on_focus) |f| f(ctx.focus_ctx);
+    const x = frame_mod.ptr_x - bb.x - field.pad_lr;
+    field.editor.setCaret(text_editor.offsetAtX(field.editor.text(), x, field.font_size, field.measure), field.dragging);
+    if (!field.dragging) {
+        field.dragging = true;
+        frame_mod.setFocus(field.name());
+        if (field.on_focus) |f| f(field.focus_ctx);
     }
 }
 
-// A live text field: selection highlight, a blinking caret, and a click that places the caret.
-pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
-    ctx.bind();
-    const input = &ctx.editor;
+// Declare a text field: the draft, its caret and selection, the blink, the click that places the caret, and the keyboard.
+pub fn TextField(field: *Field) void {
+    field.bind();
+    const input = &field.editor;
+    const name = field.rememberName();
     // The click and drag handlers need the same origin and metrics the text is drawn with.
-    ctx.pad_lr = @floatFromInt(props.pad.left);
-    ctx.font_size = props.font_size;
+    field.pad_lr = @floatFromInt(field.pad.left);
+    // The model's value wins when it CHANGED; an unchanged value leaves the draft and the caret alone.
+    const adopt = if (field.declared_known) !field.declaredIs(field.value) else input.len == 0;
+    if (!field.declared_known or adopt) {
+        field.declared_known = true;
+        field.rememberDeclared(field.value);
+        if (adopt and !std.mem.eql(u8, field.value, input.text())) input.setText(field.value);
+    }
     // Drag-select first, so the caret and the selection this frame draws are the ones the pointer just asked for.
-    dragSelect(ctx, props.id.str());
-    const text = input.text();
+    dragSelect(field);
+    const draft = input.text();
     // Once a click has claimed the keyboard, the toolkit decides who owns it: clicking another component blurs this field.
-    if (frame_mod.focusKnown()) input.focused = frame_mod.isFocused(props.id.str());
+    if (frame_mod.focusKnown()) input.focused = frame_mod.isFocused(name);
+    // The engine types into the focused field, so an app declares a field and never routes a key.
+    if (input.focused and !field.disabled) active = field;
     // The field owns its own animation, and only while it is focused: an unfocused field holds its clock at zero and draws no caret.
     input.tickBlink(frame_mod.delta_s);
-    const fg = (if (props.disabled) props.disabled_fg else props.fg).toClay();
+    const fg = (if (field.disabled) field.disabled_fg else field.fg).toClay();
     // Solid for half a second after the caret moves, then blinking: a caret that blinks while you type is a caret you cannot find.
     const blink_on = text_editor.caretVisible(input);
 
     cl.UI()(.{
-        .id = props.id.clay(),
+        .id = field.id.clay(),
         .layout = .{
             .direction = .left_to_right,
-            .sizing = .{ .w = props.w.clay(), .h = props.h.clay() },
-            .padding = props.pad.clay(),
+            .sizing = .{ .w = field.w.clay(), .h = field.h.clay() },
+            .padding = field.pad.clay(),
             .child_alignment = .{ .x = .left, .y = .center },
             .child_gap = 0,
         },
-        .background_color = (if (props.disabled) props.disabled_bg else props.bg).toClay(),
-        .corner_radius = props.radius.clay(),
-        .border = props.border.clay(),
+        .background_color = (if (field.disabled) field.disabled_bg else field.bg).toClay(),
+        .corner_radius = field.radius.clay(),
+        .border = field.border.clay(),
     })({
         if (input.caret.hasSelection()) {
             const span = input.caret.selection().?;
             const s = span.start;
             const e = span.end;
-            if (s > 0) cl.text(text[0..s], .{ .font_size = props.font_size, .color = fg });
+            if (s > 0) cl.text(draft[0..s], .{ .font_size = field.font_size, .color = fg });
             cl.UI()(.{
-                .id = .IDI(props.id.str(), 1),
+                .id = .IDI(name, 1),
                 .layout = .{
                     .sizing = .{ .w = .fit, .h = .grow },
                     .padding = .{ .top = 1, .bottom = 1 },
                 },
-                .background_color = props.sel_bg.toClay(),
+                .background_color = field.sel_bg.toClay(),
             })({
-                cl.text(text[s..e], .{ .font_size = props.font_size, .color = props.sel_fg.toClay() });
+                cl.text(draft[s..e], .{ .font_size = field.font_size, .color = field.sel_fg.toClay() });
             });
-            if (e < text.len) cl.text(text[e..], .{ .font_size = props.font_size, .color = fg });
+            if (e < draft.len) cl.text(draft[e..], .{ .font_size = field.font_size, .color = fg });
         } else {
-            // One run for the whole value, with the caret floated over it. A caret in the flow takes a pixel of the text, so the tail of the value shifted every
-
-            // time it moved and it sat flush against the next glyph.
-            cl.text(text, .{ .font_size = props.font_size, .color = fg });
-            if (blink_on) caretBar(props, ctx, text);
+            // One run for the whole value, with the caret floated over it: a caret in the flow takes a pixel of the text.
+            cl.text(draft, .{ .font_size = field.font_size, .color = fg });
+            if (blink_on) caretBar(field, draft);
         }
     });
 
-    registry.registerClickDoubleCursor(props.id.clay(), onFieldClick, onFieldDoubleClick, ctx, .text);
+    // Semantics: an editable field declares `set_text`, so a test can type into it by name and a reader can find it.
+    if (!field.disabled and name.len > 0) {
+        semantics.register(.{
+            .id = field.id.clay(),
+            .tag = name,
+            .role = .text_field,
+            .value = draft,
+            .flags = .{ .enabled = true },
+            .actions = .{ .set_text = true },
+        });
+    }
+    registry.registerClickDoubleCursor(field.id.clay(), onFieldClick, onFieldDoubleClick, field, .text);
 }
 
 // Select the word under a double click, which is what every text field does.
 fn onFieldDoubleClick(ctx: ?*anyopaque) void {
-    const c: *FieldCtx = @ptrCast(@alignCast(ctx.?));
-    const data = cl.getElementData(cl.getElementId(c.id));
+    const field: *Field = @ptrCast(@alignCast(ctx.?));
+    const data = cl.getElementData(cl.getElementId(field.name()));
     if (!data.found) return;
-    const x = frame_mod.ptr_x - data.bounding_box.x - c.pad_lr;
-    text_editor.selectWordAt(&c.editor, text_editor.offsetAtX(c.editor.text(), x, c.font_size, c.measure));
-    c.editor.idle = 0;
-    frame_mod.setFocus(c.id);
-    if (c.on_focus) |f| f(c.focus_ctx);
+    const x = frame_mod.ptr_x - data.bounding_box.x - field.pad_lr;
+    text_editor.selectWordAt(&field.editor, text_editor.offsetAtX(field.editor.text(), x, field.font_size, field.measure));
+    field.editor.idle = 0;
+    frame_mod.setFocus(field.name());
+    if (field.on_focus) |f| f(field.focus_ctx);
 }
 
 // The caret, floated at the measured end of the run before it. The primitive snaps it and makes it one device pixel.
-fn caretBar(props: FieldProps, ctx: *FieldCtx, text: []const u8) void {
-    const at = @min(ctx.editor.caret.offset, text.len);
+fn caretBar(field: *Field, text: []const u8) void {
+    const at = @min(field.editor.caret.offset, text.len);
     caret_mod.declare(.{
         // The padding is part of the parent box, so the offset starts from the border box, not the text.
-        .id = .IDI(props.id.str(), 2),
-        .x = @as(f32, @floatFromInt(props.pad.left)) + ctx.measure(text[0..at], props.font_size),
-        .height = @floatFromInt(props.font_size + 4),
-        .color = props.caret_fg orelse Color.rgb(0xd8, 0xd8, 0xdc),
+        .id = .IDI(field.name(), 2),
+        .x = @as(f32, @floatFromInt(field.pad.left)) + field.measure(text[0..at], field.font_size),
+        .height = @floatFromInt(field.font_size + 4),
+        .color = field.caret_fg orelse Color.rgb(0xd8, 0xd8, 0xdc),
         .anchor = .center,
     });
 }
 
 // Place the caret from a click, using the field's own box and the frame's pointer.
 fn onFieldClick(ctx: ?*anyopaque) void {
-    const c: *FieldCtx = @ptrCast(@alignCast(ctx.?));
-    const data = cl.getElementData(cl.getElementId(c.id));
+    const field: *Field = @ptrCast(@alignCast(ctx.?));
+    const data = cl.getElementData(cl.getElementId(field.name()));
     if (!data.found) return;
-    const x = frame_mod.ptr_x - data.bounding_box.x - c.pad_lr;
-    c.editor.setCaret(text_editor.offsetAtX(c.editor.text(), x, c.font_size, c.measure), false);
-    c.editor.idle = 0;
-    frame_mod.setFocus(c.id);
-    if (c.on_focus) |f| f(c.focus_ctx);
-}
-
-pub fn fieldEdit(props: FieldProps, query: []const u8, st: EditState) void {
-    var s = st;
-    clampEdit(&s, query.len);
-    const fg = (if (props.disabled) props.disabled_fg else props.fg).toClay();
-    const sel_fg = (if (props.disabled) props.disabled_fg else props.sel_fg).toClay();
-    cl.UI()(.{
-        .id = props.id.clay(),
-        .layout = .{
-            .direction = .left_to_right,
-            .sizing = .{ .w = props.w.clay(), .h = props.h.clay() },
-            .padding = props.pad.clay(),
-            .child_alignment = .{ .x = .left, .y = .center },
-            .child_gap = 0,
-        },
-        .background_color = (if (props.disabled) props.disabled_bg else props.bg).toClay(),
-        .corner_radius = props.radius.clay(),
-        .border = props.border.clay(),
-    })({
-        cl.text(">", .{ .font_size = props.font_size, .color = fg });
-        cl.text(" ", .{ .font_size = props.font_size, .color = fg });
-        if (selection(s)) |sp| {
-            if (sp.start > 0) {
-                cl.text(query[0..sp.start], .{ .font_size = props.font_size, .color = fg });
-            }
-            if (s.caret == sp.start) {
-                cl.text("|", .{ .font_size = props.font_size, .color = fg });
-            }
-            cl.text(query[sp.start..sp.end], .{ .font_size = props.font_size, .color = sel_fg });
-            if (s.caret == sp.end) {
-                cl.text("|", .{ .font_size = props.font_size, .color = fg });
-            }
-            if (sp.end < query.len) {
-                cl.text(query[sp.end..], .{ .font_size = props.font_size, .color = fg });
-            }
-        } else {
-            if (s.caret > 0) {
-                cl.text(query[0..s.caret], .{ .font_size = props.font_size, .color = fg });
-            }
-            cl.text("|", .{ .font_size = props.font_size, .color = fg });
-            if (s.caret < query.len) {
-                cl.text(query[s.caret..], .{ .font_size = props.font_size, .color = fg });
-            }
-        }
-    });
-    // Same contract as field(): editable, so it declares set_text.
-    if (!props.disabled and props.id.str().len > 0) {
-        semantics.register(.{
-            .id = props.id.clay(),
-            .tag = props.id.str(),
-            .role = .text_field,
-            .value = query,
-            .flags = .{ .enabled = true },
-            .actions = .{ .set_text = true },
-        });
-        registry.registerHover(props.id.clay(), .text);
-    }
+    const x = frame_mod.ptr_x - data.bounding_box.x - field.pad_lr;
+    field.editor.setCaret(text_editor.offsetAtX(field.editor.text(), x, field.font_size, field.measure), false);
+    field.editor.idle = 0;
+    frame_mod.setFocus(field.name());
+    if (field.on_focus) |f| f(field.focus_ctx);
 }
 
 // Stub text estimator for headless tests (no font backend needed).
@@ -709,8 +735,8 @@ test "insert appends until full, backspace drops bytes" {
     try std.testing.expectEqual(@as(usize, 0), len);
 }
 
-test "FieldProps carries neutral dark defaults" {
-    const p = FieldProps{ .id = .{ .text = "x" } };
+test "Field carries neutral dark defaults" {
+    const p = Field{ .id = .{ .text = "x" } };
     try std.testing.expectEqual(@as(u16, 14), p.font_size);
     try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.fg);
     try std.testing.expectEqual(Color.rgb(0x26, 0x26, 0x26), p.bg);
@@ -719,34 +745,115 @@ test "FieldProps carries neutral dark defaults" {
     try std.testing.expectEqual(@as(u16, 8), p.pad.top);
 }
 
-fn declareField() void {
-    field(.{ .id = .{ .text = "test-field" } }, "jak");
+// ---- Field: the draft, the value prop, and the intents ----
+
+var test_field: Field = .{};
+var test_value: []const u8 = "";
+var report_count: usize = 0;
+var report_buf: [max_field_len]u8 = undefined;
+var report_len: usize = 0;
+var submit_taken: bool = true;
+var submit_buf: [max_field_len]u8 = undefined;
+var submit_len: usize = 0;
+
+fn onTestChange(_: ?*anyopaque, text: []const u8) void {
+    report_count += 1;
+    report_len = @min(text.len, report_buf.len);
+    @memcpy(report_buf[0..report_len], text[0..report_len]);
 }
 
-fn declareEmptyField() void {
-    field(.{ .id = .{ .text = "test-empty-field" } }, "");
+fn onTestSubmit(_: ?*anyopaque, text: []const u8) bool {
+    submit_len = @min(text.len, submit_buf.len);
+    @memcpy(submit_buf[0..submit_len], text[0..submit_len]);
+    return submit_taken;
 }
 
-fn countTexts(declare_fn: *const fn () void) !usize {
-    const cmds = try layoutCommands(declare_fn);
-    var t: usize = 0;
-    for (cmds) |c| switch (c.command_type) {
-        .text => t += 1,
-        else => {},
+fn reported() []const u8 {
+    return report_buf[0..report_len];
+}
+
+fn submitted() []const u8 {
+    return submit_buf[0..submit_len];
+}
+
+fn declareTestField() void {
+    TextField(&test_field);
+}
+
+// A fresh field, one declared frame, and the keyboard on it.
+fn startField(value: []const u8) !void {
+    test_field = .{
+        .id = .{ .text = "test-field" },
+        .value = value,
+        .on_change = onTestChange,
+        .on_submit = onTestSubmit,
     };
-    return t;
+    test_value = value;
+    report_count = 0;
+    report_len = 0;
+    submit_len = 0;
+    submit_taken = true;
+    beginFrame();
+    frame_mod.resetFocus();
+    _ = try layoutCommands(declareTestField);
 }
 
-test "field renders prompt, query and cursor texts" {
-    // ">", " ", "jak", "_" — 4 text commands.
-    try std.testing.expectEqual(@as(usize, 4), try countTexts(declareField));
-    // Empty query skips the query text: ">", " ", "_".
-    try std.testing.expectEqual(@as(usize, 3), try countTexts(declareEmptyField));
-}
-
-test "field declares a stable id for hit-testing" {
-    _ = try layoutCommands(declareField);
+test "TextField draws the value, declares its id and takes the keyboard" {
+    try startField("jak");
+    try std.testing.expectEqualStrings("jak", test_field.text());
     try std.testing.expect(cl.getElementData(cl.getElementId("test-field")).found);
+    test_field.editor.setCaret(test_field.editor.len, false);
+    // The engine types into it with no app handler at all.
+    try std.testing.expect(dispatchText("!"));
+    try std.testing.expectEqualStrings("jak!", test_field.text());
+}
+
+test "a value the caller changed replaces the draft, an unchanged one leaves it alone" {
+    try startField("one");
+    test_field.editor.setCaret(3, false);
+    try std.testing.expect(dispatchText("!"));
+    try std.testing.expectEqualStrings("one!", test_field.text());
+    // The caller still declares "one": that is not a change, so the draft survives the next frame.
+    _ = try layoutCommands(declareTestField);
+    try std.testing.expectEqualStrings("one!", test_field.text());
+    // The caller changed it: the model wins over the draft.
+    test_field.value = "two";
+    _ = try layoutCommands(declareTestField);
+    try std.testing.expectEqualStrings("two", test_field.text());
+}
+
+test "an edit reports the new text; an arrow does not" {
+    try startField("abc");
+    test_field.editor.setCaret(3, false);
+    try std.testing.expect(dispatchText("d"));
+    try std.testing.expectEqual(@as(usize, 1), report_count);
+    try std.testing.expectEqualStrings("abcd", reported());
+    try std.testing.expect(dispatchKey(.{}, KEY_LEFT));
+    try std.testing.expectEqual(@as(usize, 1), report_count);
+}
+
+test "Enter submits the draft, and a taken draft clears the field" {
+    try startField("buy milk");
+    try std.testing.expect(dispatchKey(.{}, text_editor.KEY_ENTER));
+    try std.testing.expectEqualStrings("buy milk", submitted());
+    try std.testing.expectEqualStrings("", test_field.text());
+    // The clear is reported, so a controlled model empties with the field.
+    try std.testing.expectEqualStrings("", reported());
+    try std.testing.expectEqual(@as(usize, 1), report_count);
+}
+
+test "a refused submit leaves the draft where it was" {
+    try startField("   ");
+    submit_taken = false;
+    try std.testing.expect(dispatchKey(.{}, text_editor.KEY_ENTER));
+    try std.testing.expectEqualStrings("   ", test_field.text());
+    try std.testing.expectEqual(@as(usize, 0), report_count);
+}
+
+test "with no field declared the engine consumes nothing" {
+    beginFrame();
+    try std.testing.expect(!dispatchText("a"));
+    try std.testing.expect(!dispatchKey(.{}, KEY_A));
 }
 
 // ---- EditState: selection ----
@@ -963,36 +1070,8 @@ test "handleNavKey ctrl+arrows move by word" {
     try std.testing.expectEqual(@as(usize, 7), st.caret);
 }
 
-// ---- fieldEdit render ----
-
-fn declareCaretMid() void {
-    fieldEdit(.{ .id = .{ .text = "test-caret-mid" } }, "jak", .{ .caret = 1 });
-}
-
-fn declareCaretSel() void {
-    fieldEdit(.{ .id = .{ .text = "test-caret-sel" } }, "jak", .{ .caret = 3, .anchor = 1 });
-}
-
-fn declareCaretEmpty() void {
-    fieldEdit(.{ .id = .{ .text = "test-caret-empty" } }, "", .{});
-}
-
-test "fieldEdit splits runs around the caret" {
-    // ">", " ", "j", "|", "ak" — 5 text commands.
-    try std.testing.expectEqual(@as(usize, 5), try countTexts(declareCaretMid));
-    // ">", " ", "j", "ak"(sel), "|" — 5 text commands.
-    try std.testing.expectEqual(@as(usize, 5), try countTexts(declareCaretSel));
-    // ">", " ", "|" — 3 text commands.
-    try std.testing.expectEqual(@as(usize, 3), try countTexts(declareCaretEmpty));
-}
-
-test "fieldEdit declares a stable id for hit-testing" {
-    _ = try layoutCommands(declareCaretMid);
-    try std.testing.expect(cl.getElementData(cl.getElementId("test-caret-mid")).found);
-}
-
-test "FieldProps selection color has a neutral default" {
-    const p = FieldProps{ .id = .{ .text = "x" } };
+test "Field selection color has a neutral default" {
+    const p = Field{ .id = .{ .text = "x" } };
     try std.testing.expectEqual(Color.rgb(0x7a, 0xb8, 0xff), p.sel_fg);
 }
 
@@ -1067,8 +1146,10 @@ test "handleKey ctrl+A selects all, other ctrl combos insert nothing" {
     try std.testing.expectEqualStrings("abc", buf[0..len]);
 }
 
+var disabled_field: Field = .{ .id = .{ .text = "test-disabled-field" }, .value = "hi", .disabled = true };
+
 fn declareDisabledField() void {
-    field(.{ .id = .{ .text = "test-disabled-field" }, .disabled = true }, "hi");
+    TextField(&disabled_field);
 }
 
 test "disabled field dims to disabled_bg" {
@@ -1083,8 +1164,10 @@ test "disabled field dims to disabled_bg" {
     try std.testing.expect(found);
 }
 
+var border_field: Field = .{ .id = .{ .text = "test-border-field" }, .value = "hi", .border = .{ .width = 1, .color = Color.rgb(0xff, 0x00, 0x00) } };
+
 fn declareBorderField() void {
-    field(.{ .id = .{ .text = "test-border-field" }, .border = .{ .width = 1, .color = Color.rgb(0xff, 0x00, 0x00) } }, "hi");
+    TextField(&border_field);
 }
 
 test "field border emits a border command" {

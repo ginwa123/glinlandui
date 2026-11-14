@@ -26,8 +26,7 @@ const row_h: u32 = 40;
 // A click context must outlive the frame, because clicks are dispatched AFTER the declare returns — so these
 // live in the App and are handed to the view, never built on this stack.
 pub const AddCtx = struct {
-    vm: *TodoViewModel,
-    field: *input_mod.FieldCtx,
+    field: *input_mod.Field,
 };
 
 pub const RowCtx = struct {
@@ -39,8 +38,8 @@ pub const RowCtx = struct {
 pub const Scope = struct {
     theme: Theme,
     vm: *TodoViewModel,
-    // The draft: the engine's field owns the text, the caret and the selection, so the model does not hold a half-typed title.
-    field: *input_mod.FieldCtx,
+    // The field: its look, its intents and its draft. The view only hands it the model's value.
+    field: *input_mod.Field,
     state: TodoUiState,
     add: *AddCtx,
     rows: []RowCtx,
@@ -77,19 +76,9 @@ fn header(scope: *Scope) void {
 
 fn headerChildren(scope: *Scope) void {
     const t = scope.theme;
-    input_mod.liveField(.{
-        .id = .{ .text = scope.field.id },
-        .font_size = t.type_scale.body,
-        .bg = t.colors.surface,
-        .fg = t.colors.text,
-        .sel_bg = t.colors.surface_variant,
-        .sel_fg = t.colors.text,
-        .caret_fg = t.colors.primary,
-        .radius = props.Radius.all(6),
-        .pad = props.Pad.axes(8, 10),
-        .border = .{ .width = 1, .color = t.colors.divider },
-        .w = .{ .clamp = .{ .min = 120, .max = 640, .grow = true } },
-    }, scope.field);
+    // `TextField(value = state.input)`: one line of state, and the field reports every edit back through `on_change`.
+    scope.field.value = scope.state.draft();
+    input_mod.TextField(scope.field);
 
     button.button(.{
         .id = .{ .text = "todo.add" },
@@ -103,10 +92,22 @@ fn headerChildren(scope: *Scope) void {
     });
 }
 
+// `onValueChange = vm::onInputChange`: the model takes the draft, and the next frame draws it back.
+pub fn onDraft(raw: ?*anyopaque, text: []const u8) void {
+    const vm: *TodoViewModel = @ptrCast(@alignCast(raw.?));
+    vm.onInputChange(text);
+}
+
+// `KeyboardActions(onDone = { vm.add(field.text()) })`: true = the intent took the draft, so the field clears itself.
+pub fn onSubmit(raw: ?*anyopaque, text: []const u8) bool {
+    const vm: *TodoViewModel = @ptrCast(@alignCast(raw.?));
+    return vm.add(text);
+}
+
+// The button and Enter are the same intent, and the field owns it: the app raises no submit of its own.
 fn onAdd(raw: ?*anyopaque) void {
     const ctx: *AddCtx = @ptrCast(@alignCast(raw.?));
-    // `add` answers whether it took the draft; a blank title leaves it in the field, which is what the user typed it for.
-    if (ctx.vm.add(ctx.field.editor.text())) ctx.field.editor.setText("");
+    _ = ctx.field.submit();
 }
 
 // `LazyColumn { itemsIndexed(todos) { i, todo -> Row { Checkbox; Text; TextButton } } }`

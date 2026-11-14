@@ -32,7 +32,7 @@ theme import and no global palette — the caller passes `bg`, `fg`, `hover_bg` 
 | `box.zig` | the container: direction, sizing, padding, gap, radius, border, background. Also `row`, `column` and `spacer` helpers |
 | `text.zig` | a single text run: size, colour, wrap |
 | `button.zig` | a clickable label with hover, disabled and border states |
-| `input.zig` | text fields: `field`/`fieldEdit` DRAW a value the caller owns, and `liveField` takes a `FieldCtx` that OWNS the draft, the caret and the selection, plus `handleKey`/`handleText` for editing it |
+| `input.zig` | ONE text field: `TextField(&field)` draws a `Field`, which carries its look, its draft, the caret and the selection, and raises `on_change`/`on_submit`. The engine types into the focused one, so an app routes no keys. `value` is the declared text and wins whenever it changes |
 | `list.zig` | rows, cells or a grid, with selection, hover and per-row click targets — registered BEFORE each row, so a widget inside it wins the hit test |
 | `tree.zig` | hierarchical rows: depth indent, caret, expansion state, selection, right-aligned meta |
 | `tabs.zig` | a tab bar: active state, optional accent dot, optional close button |

@@ -27,7 +27,7 @@ zig build test-todo         # the app's own tests + the E2E suite, headless
 |---|---|---|
 | `ViewModelStore` / `viewModel()` | `view_model.Store(T)` + `App.vm()` | one instance per screen, created once, `onCleared` on leave |
 | `MaterialTheme { }` | `theme.Theme` (+ `theme.dark` / `theme.light`) | colour roles and a type scale, passed down as a value |
-| `TextField(value, onValueChange)` | `input.liveField(props, &field)` | a field that owns its draft, caret, selection and keyboard |
+| `TextField(value, onValueChange)` | `input.TextField(&field)` | one struct: the look, the draft, the caret, the keyboard, and `on_change`/`on_submit` |
 | `LazyColumn { itemsIndexed(..) }` | `list.list(props, items, ctx, renderItem)` | rows with ids, hover and per-row clicks |
 
 ### From this app
@@ -40,7 +40,7 @@ zig build test-todo         # the app's own tests + the E2E suite, headless
 | `class TodoViewModel : ViewModel()` | `view_model.zig` → `TodoViewModel` | the only writer. Every public function is an intent: `add`, `remove`, `toggle` |
 | `@Composable fun TodoScreen()` | `view.TodoScreen(scope)` | a function of the state. `*Scope` is the hidden `Composer` + `CompositionLocal` bundle |
 | `Row { Checkbox; Text; TextButton }` | `view.renderRow` | one row: a checkbox, the title, a Delete button |
-| `MainActivity.onCreate` | `app.zig` → `App` | the store, the composition, and the event routing |
+| `MainActivity.onCreate` | `app.zig` → `App` | the store, the composition, and the field |
 | `setContent { ... }` in the Activity | `main.zig` | the window, the `Host`, and the composable it renders |
 
 ---
@@ -57,10 +57,11 @@ event, and view-local state that must survive a frame is simply a field on `App`
 props struct, and `box.BoxProps` already carries `pad`, `w`, `h`, `gap` and `bg` — so
 `Modifier.padding(16.dp).fillMaxWidth()` is just `.pad = 16, .w = .grow`.
 
-**A controlled field.** Compose keeps the half-typed text in the ViewModel because its `TextField` cannot hold
-it. Our field can, and must (it holds the caret and the selection too), so the draft lives there and `add`
-takes it as an argument: `if (vm.add(field.text())) field.clear()`. One writer for the text, no reconciliation,
-and a blank title stays in the field instead of being silently dropped.
+**Nothing to reconcile.** The field holds the caret and the selection; the STATE holds the draft, because
+`value` is a prop. Type a key and the field reports it (`on_change` → `vm.onInputChange`); the next frame
+passes `state.input` back in, and since the value did not change under the field, the caret stays put. Press
+Enter and the field raises `on_submit`: `true` means the intent took the draft, so the field clears itself and
+reports the empty text — a blank title is refused and stays exactly where it was.
 
 **`Surface`.** It is a box painted with a background role, and it reads better where the palette is.
 
@@ -72,7 +73,7 @@ and a blank title stays in the field instead of being silently dropped.
 examples/todo/
 ├── root.zig           the module's surface — `@import("todo")` is the whole app
 ├── main.zig           the entry point: window + host + setContent
-├── app.zig            the Activity: store, composition, key and text routing
+├── app.zig            the Activity: the store, the composition, and the field
 ├── view.zig           the composables: TodoScreen, the header, the list, a row
 ├── view_model.zig     TodoViewModel — the intents, and nothing else
 ├── state.zig          TodoUiState, Todo, Text — the data class and its copy() functions
@@ -101,7 +102,8 @@ fields on `App` (`add_ctx`, `row_ctxs`) that the view is handed.
 `todo_test.zig` drives the real `App` through the real `Host` with `testing.Driver` — no window, no compositor:
 
 - the empty state is **drawn**, not just modelled, and the field owns the keyboard from the first frame;
-- typing reaches the field, Enter adds a row, the frame shows it, and the field is empty again;
+- typing reaches the field through the ENGINE (no key handler is registered anywhere), Enter adds a row,
+  the frame shows it, and the field and the model are both empty again;
 - a blank Enter adds nothing and leaves the draft where it was;
 - clicking the checkbox toggles the row, and the footer counts it;
 - Delete removes its own row and does not toggle it.

@@ -16,9 +16,7 @@ fn boot(app: *App) !Driver {
     app.start();
     var driver = try Driver.initOwned(std.heap.page_allocator, app, App.content);
     errdefer driver.deinit();
-    // The driver owns a Host of its own, so the event routing `main.zig` installs has to be installed here too.
-    driver.host.keys.register(App.onKey, app);
-    driver.host.keys.registerText(App.onText, app);
+    // No key or text handler is registered: the engine types into the focused field on its own.
     try driver.start(.{ .width = 720, .height = 640 });
     return driver;
 }
@@ -30,6 +28,7 @@ test "the empty state is drawn, not just modelled" {
 
     // The field owns the keyboard from the first frame, which is what makes typing reach the model.
     try std.testing.expect(app.field.editor.focused);
+    try std.testing.expectEqualStrings("", app.vm().uiState().draft());
     try std.testing.expect(driver.hasText("No todos yet — type one and press Enter."));
     try std.testing.expect(driver.hasText("0 of 0 done"));
 }
@@ -40,15 +39,18 @@ test "typing and pressing Enter adds a row to the model and to the frame" {
     defer driver.deinit();
 
     try driver.typeText("buy milk");
-    try std.testing.expectEqualStrings("buy milk", app.field.editor.text());
+    // The value prop round-trips: the field reports the edit, the model holds it, the frame draws it back.
+    try std.testing.expectEqualStrings("buy milk", app.field.text());
+    try std.testing.expectEqualStrings("buy milk", app.vm().uiState().draft());
 
     _ = try driver.key(key_enter);
 
     const state = app.vm().uiState();
     try std.testing.expectEqual(@as(usize, 1), state.count);
     try std.testing.expectEqualStrings("buy milk", state.items()[0].text());
-    // The intent took the draft, so the field is empty again.
-    try std.testing.expectEqualStrings("", app.field.editor.text());
+    // The intent took the draft, so the field and the model are both empty again.
+    try std.testing.expectEqualStrings("", app.field.text());
+    try std.testing.expectEqualStrings("", app.vm().uiState().draft());
 
     try std.testing.expect(driver.hasText("buy milk"));
     try std.testing.expect(driver.hasText("0 of 1 done"));
@@ -63,7 +65,8 @@ test "a blank Enter adds nothing, and leaves the draft alone" {
     _ = try driver.key(key_enter);
 
     try std.testing.expectEqual(@as(usize, 0), app.vm().uiState().count);
-    try std.testing.expectEqualStrings("   ", app.field.editor.text());
+    try std.testing.expectEqualStrings("   ", app.field.text());
+    try std.testing.expectEqualStrings("   ", app.vm().uiState().draft());
 }
 
 test "clicking the checkbox toggles the row, and the footer counts it" {
