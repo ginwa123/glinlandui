@@ -561,6 +561,46 @@ fn keyCodeForAscii(byte: u8) ?u32 {
     };
 }
 
+test "a repaint that draws the same commands is reported as repeated, and a change is not" {
+    const App = struct {
+        var show_extra: bool = false;
+        fn root(_: ?*anyopaque, _: u32, _: u32) void {
+            const clay = @import("zclay");
+            clay.UI()(.{
+                .id = .ID("repeat.box"),
+                .layout = .{ .sizing = .{ .w = .fixed(100), .h = .fixed(20) } },
+            })({});
+            if (show_extra) {
+                // A background colour is what turns a declaration into a render command; without one the frame is unchanged.
+                clay.UI()(.{
+                    .id = .ID("repeat.extra"),
+                    .layout = .{ .sizing = .{ .w = .fixed(10), .h = .fixed(10) } },
+                    .background_color = .{ 255, 0, 0, 255 },
+                })({});
+            }
+        }
+    };
+    var driver = try Driver.initOwned(std.heap.page_allocator, null, App.root);
+    defer driver.deinit();
+    try driver.start(.{ .width = 300, .height = 200 });
+
+    const frame_probe = @import("../frame.zig");
+    // `start` renders a settling frame; the comparison starts from a clean slate.
+    frame_probe.resetCommandsDigest();
+    driver.frame();
+    try std.testing.expect(!frame_probe.commandsRepeated());
+    // Same state, same commands: nothing to present.
+    driver.frame();
+    try std.testing.expect(frame_probe.commandsRepeated());
+    // One element more, and the frame must be presented again.
+    App.show_extra = true;
+    driver.frame();
+    try std.testing.expect(!frame_probe.commandsRepeated());
+    App.show_extra = false;
+    driver.frame();
+    try std.testing.expect(!frame_probe.commandsRepeated());
+}
+
 test "driver exposes deterministic viewport and empty root" {
     const root = struct {
         fn declare(_: ?*anyopaque, _: u32, _: u32) void {}

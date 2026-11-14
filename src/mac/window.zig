@@ -65,6 +65,9 @@ pub const Window = struct {
     last_ptr_pressed: bool = false,
     // Frames composited so far.
     diag_frames: u32 = 0,
+    // Size of the last surface handed to the window, so a resize is never skipped.
+    presented_w: u32 = 0,
+    presented_h: u32 = 0,
 
     pub fn init(alloc: std.mem.Allocator, config: WindowConfig) Window {
         // The allocator is accepted for signature parity with the web backend, which genuinely needs it (`wasm_allocator` is the only allocator that grows a.
@@ -169,7 +172,10 @@ pub const Window = struct {
         self.layout_w = w;
         self.layout_h = h;
         self.applyCursor();
-        self.presentFrame();
+        // A repaint that draws exactly the same commands is already on screen: re-presenting it is how a blink gets into a still window.
+        const surface = soft.currentSurface();
+        const same_size = if (surface) |sf| sf.width == self.presented_w and sf.height == self.presented_h else false;
+        if (!frame_mod.commandsRepeated() or !same_size) self.presentFrame();
     }
 
     // Start or stop the frame pump. An app with its own animation calls this with `true` while it is running and `false` when it stops; the pump redraws at
@@ -203,6 +209,8 @@ pub const Window = struct {
         if (self.diag_frames == 1) reportFirstFrame(surface.pixels, surface);
         if (std.c.getenv("GLIN_DUMP_SURFACE")) |p| dumpRaw(p, surface.pixels);
         c.glin_cocoa_present(handle, surface.pixels.ptr, @intCast(surface.width), @intCast(surface.height));
+        self.presented_w = surface.width;
+        self.presented_h = surface.height;
     }
 
     // Apply a coalesced resize.

@@ -41,6 +41,8 @@ pub const Host = struct {
         var self = Host{ .alloc = alloc, .root_ctx = ctx, .root_fn = root_fn };
         self.clay_mem = try frame_mod.initClay(alloc, self.win_w, self.win_h);
         self.clay_ready = true;
+        // Nothing is on screen yet, so the first frame of this host is never "the same as the last".
+        frame_mod.resetCommandsDigest();
         return self;
     }
 
