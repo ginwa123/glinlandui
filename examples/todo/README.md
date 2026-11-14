@@ -37,10 +37,10 @@ zig build test-todo         # the app's own tests + the E2E suite, headless
 | `data class TodoUiState` | `state.zig` → `TodoUiState` | one value: the rows. Replaced by an intent, read by the frame, bounded |
 | `MutableStateFlow<T>` + `_state.update { }` | `view_model.zig` → `state: TodoUiState` | a plain field. An intent assigns it; there is no observable and nothing to collect |
 | `it.copy(todos = ...)` | `withTodo` / `withoutTodo` / `withToggled` | a pure function from a state to the next state |
-| `class TodoViewModel : ViewModel()` | `view_model.zig` → `TodoViewModel` | the only writer. Every public function is an intent: `add`, `remove`, `toggle` |
+| `class TodoViewModel : ViewModel()` | `view_model.zig` → `TodoViewModel` | the only writer. Every public function is an intent: `add`, `remove`, `toggle` — and it owns the screen's own state: the field and the row contexts |
 | `@Composable fun TodoScreen()` | `view.TodoScreen(scope)` | a function of the state. `*Scope` is the hidden `Composer` + `CompositionLocal` bundle |
 | `Row { Checkbox; Text; TextButton }` | `view.renderRow` | one row: a checkbox, the title, a Delete button |
-| `MainActivity.onCreate` | `app.zig` → `App` | the store, the composition, and the field |
+| `MainActivity.onCreate` | `app.zig` → `App` | the store, the theme, and the composition — nothing else |
 | `setContent { ... }` in the Activity | `main.zig` | the window, the `Host`, and the composable it renders |
 
 ---
@@ -50,7 +50,7 @@ zig build test-todo         # the app's own tests + the E2E suite, headless
 **The composition runtime.** There is none: `remember`, `collectAsState`, `LaunchedEffect` and `setContent`
 exist in Compose because a composable may be skipped, cached or re-ordered. Here the frame *is* the
 recomposition — it reads the state and declares the tree, the window repaints after every key and pointer
-event, and view-local state that must survive a frame is simply a field on `App`. The root function is
+event, and view-local state that must survive a frame is simply a field on the ViewModel. The root function is
 `App.content` itself, so `Host.init(gpa, &app, App.content)` is `setContent { }`.
 
 **`Modifier`.** Compose needs it because its composables take no layout parameters. Every widget here takes a
@@ -73,9 +73,9 @@ reports the empty text — a blank title is refused and stays exactly where it w
 examples/todo/
 ├── root.zig           the module's surface — `@import("todo")` is the whole app
 ├── main.zig           the entry point: window + host + setContent
-├── app.zig            the Activity: the store, the composition, and the field
+├── app.zig            the Activity: the store, the theme, and the composition
 ├── view.zig           the composables: TodoScreen, the header, the list, a row
-├── view_model.zig     TodoViewModel — the intents, and nothing else
+├── view_model.zig     TodoViewModel — the intents, and the screen's own state (the field, the row contexts)
 ├── state.zig          TodoUiState, Todo, Text — the data class and its copy() functions
 └── todo_test.zig      the E2E suite: the real App, driven headlessly
 ```
@@ -92,8 +92,9 @@ label built from a stack value points at dead memory. The state is a value, so a
 frame's scratch with `frame.formatText`. A literal, or the field's own buffer, needs no copy.
 
 **2. A callback's context must outlive the frame.** Clicks are dispatched *after* the declare returns, so a
-`*Scope` on `TodoScreen`'s stack is already gone. Intents carry the ViewModel, and the per-row contexts are
-fields on `App` (`add_ctx`, `row_ctxs`) that the view is handed.
+`*Scope` on `TodoScreen`'s stack is already gone. So every context points at the ViewModel instead: the field
+and the per-row contexts (`field`, `row_ctxs`) are its fields, and the ViewModel outlives the frame by design.
+The Add button needs no context of its own — it calls `vm.field.submit()`, the same intent Enter raises.
 
 ---
 

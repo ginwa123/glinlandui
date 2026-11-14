@@ -4,7 +4,7 @@
 //   state.zig        the data class       — what the screen shows
 //   view_model.zig   TodoViewModel        — the only writer of the state
 //   view.zig         @Composable screen   — a function of the state
-//   app.zig          Activity             — store, composition, event routing
+//   app.zig          Activity             — store, theme, composition
 //   main.zig         entry point          — window and `setContent`
 pub const app = @import("app.zig");
 pub const view = @import("view.zig");

@@ -18,31 +18,16 @@ const TodoUiState = state_mod.TodoUiState;
 const TodoViewModel = view_model.TodoViewModel;
 const Theme = glinlandui.theme.Theme;
 
-pub const field_id = "todo.field";
 const list_id = "todo.list";
 const rows_id = "todo.rows";
 const row_h: u32 = 40;
 
-// A click context must outlive the frame, because clicks are dispatched AFTER the declare returns — so these
-// live in the App and are handed to the view, never built on this stack.
-pub const AddCtx = struct {
-    field: *input_mod.Field,
-};
-
-pub const RowCtx = struct {
-    vm: *TodoViewModel,
-    index: usize,
-};
-
-// What a composable reads: the theme, the model, the field, this frame's state, and the click contexts.
+// What a composable reads: the theme, the model, and this frame's snapshot of its state. The field and the click contexts are the model's.
 pub const Scope = struct {
     theme: Theme,
     vm: *TodoViewModel,
-    // The field: its look, its intents and its draft. The view only hands it the model's value.
-    field: *input_mod.Field,
+    // `val state by vm.state.collectAsState()`
     state: TodoUiState,
-    add: *AddCtx,
-    rows: []RowCtx,
 };
 
 // `@Composable fun TodoScreen(vm: TodoViewModel = viewModel())`
@@ -76,9 +61,10 @@ fn header(scope: *Scope) void {
 
 fn headerChildren(scope: *Scope) void {
     const t = scope.theme;
+    const field = &scope.vm.field;
     // `TextField(value = state.input)`: one line of state, and the field reports every edit back through `on_change`.
-    scope.field.value = scope.state.draft();
-    input_mod.textField(scope.field);
+    field.value = scope.state.draft();
+    input_mod.textField(field);
 
     button.button(.{
         .id = .{ .text = "todo.add" },
@@ -87,26 +73,14 @@ fn headerChildren(scope: *Scope) void {
         .hover_bg = t.colors.primary_hover,
         .radius = props.Radius.all(6),
         .pad = props.Pad.axes(8, 16),
-        .on_click = .{ .f = onAdd, .ctx = scope.add },
+        .on_click = .{ .f = onAdd, .ctx = scope.vm },
     });
-}
-
-// `onValueChange = vm::onInputChange`: the model takes the draft, and the next frame draws it back.
-pub fn onDraft(raw: ?*anyopaque, text: []const u8) void {
-    const vm: *TodoViewModel = @ptrCast(@alignCast(raw.?));
-    vm.onInputChange(text);
-}
-
-// `KeyboardActions(onDone = { vm.add(field.text()) })`: true = the intent took the draft, so the field clears itself.
-pub fn onSubmit(raw: ?*anyopaque, text: []const u8) bool {
-    const vm: *TodoViewModel = @ptrCast(@alignCast(raw.?));
-    return vm.add(text);
 }
 
 // The button and Enter are the same intent, and the field owns it: the app raises no submit of its own.
 fn onAdd(raw: ?*anyopaque) void {
-    const ctx: *AddCtx = @ptrCast(@alignCast(raw.?));
-    _ = ctx.field.submit();
+    const vm: *TodoViewModel = @ptrCast(@alignCast(raw.?));
+    _ = vm.field.submit();
 }
 
 // `LazyColumn { itemsIndexed(todos) { i, todo -> Row { Checkbox; Text; TextButton } } }`
@@ -148,7 +122,8 @@ fn onRow(raw: ?*anyopaque, index: usize) void {
 // `Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(..); Text(.., Modifier.weight(1f)); TextButton(..) }`
 fn renderRow(scope: *Scope, todo: state_mod.Todo, index: usize) void {
     const t = scope.theme;
-    const ctxs = scope.rows;
+    // A row's two buttons run after this frame, so each gets a context the model owns.
+    const ctxs = &scope.vm.row_ctxs;
     ctxs[index] = .{ .vm = scope.vm, .index = index };
 
     checkbox_mod.checkbox(.{
@@ -179,12 +154,12 @@ fn renderRow(scope: *Scope, todo: state_mod.Todo, index: usize) void {
 }
 
 fn onToggle(raw: ?*anyopaque) void {
-    const row: *RowCtx = @ptrCast(@alignCast(raw.?));
+    const row: *TodoViewModel.RowCtx = @ptrCast(@alignCast(raw.?));
     row.vm.toggle(row.index);
 }
 
 fn onDelete(raw: ?*anyopaque) void {
-    const row: *RowCtx = @ptrCast(@alignCast(raw.?));
+    const row: *TodoViewModel.RowCtx = @ptrCast(@alignCast(raw.?));
     row.vm.remove(row.index);
 }
 
