@@ -2,7 +2,7 @@
 
 // This is `MaterialTheme`'s shape, not a global palette — the components here take their colours as props, so a theme is something you hand to a screen.
 
-// `dark` and `light` are neutral defaults; an app that wants its own look copies the struct and changes the fields it cares about.
+// `dark` and `light` are neutral defaults; `dragon` is the Kanagawa Dragon kit, and an app may copy any of them.
 const std = @import("std");
 const Color = @import("color.zig").Color;
 
@@ -76,6 +76,27 @@ pub const light = Theme{
     .type_scale = .{ .title = 18, .body = 14, .label = 13, .caption = 12 },
 };
 
+// Kanagawa Dragon: the same eleven roles, ink on paper — the palette the UI kit specifies.
+pub const dragon = Theme{
+    .colors = .{
+        .background = Color.hexC("#0d0c0c"),
+        .surface = Color.hexC("#12120f"),
+        .surface_variant = Color.hexC("#1d1c19"),
+        .primary = Color.hexC("#8ba4b0"),
+        .primary_hover = Color.hexC("#a3b9c3"),
+        .on_primary = Color.hexC("#0d0c0c"),
+        .text = Color.hexC("#c5c9c5"),
+        .text_dim = Color.hexC("#a6a69c"),
+        .text_done = Color.hexC("#625e5a"),
+        .divider = Color.hexC("#393836"),
+        .hover = Color.hexC("#282727"),
+    },
+    .type_scale = .{ .title = 18, .body = 14, .label = 13, .caption = 12 },
+};
+
+// The one tone no role covers: the selected row. A fill is not a cue on its own, so a component draws a bar too.
+pub const selected = Color.hexC("#223249");
+
 // ---- tests ---------------------------------------------------------------------------------------------------
 
 test "both palettes name every role, and the two differ where it matters" {
@@ -89,8 +110,24 @@ test "both palettes name every role, and the two differ where it matters" {
     try std.testing.expect(dark.colors.hover.r() != dark.colors.background.r());
 }
 
+test "dragon is the kit's ink-on-paper palette" {
+    const c = dragon.colors;
+    // Body text on the background is what the kit's 11.7:1 claim rests on.
+    try std.testing.expect(c.text.r() > c.background.r());
+    try std.testing.expect(c.text_dim.r() > c.background.r());
+    // The accent is cooler than the paper, and its label is the background tone, not white.
+    try std.testing.expect(c.primary.b() > c.primary.r());
+    try std.testing.expectEqual(c.background, c.on_primary);
+    // Every surface is a step up from the background, so a panel reads as a panel.
+    try std.testing.expect(c.surface.r() > c.background.r());
+    try std.testing.expect(c.surface_variant.r() > c.surface.r());
+    try std.testing.expect(c.hover.r() > c.surface_variant.r());
+    // The selection tone is a fill, not the accent: it never competes with the one accent a view gets.
+    try std.testing.expect(selected.r() < c.primary.r());
+}
+
 test "the type scale is ordered, so a caption is never larger than a title" {
-    for ([_]Theme{ dark, light }) |t| {
+    for ([_]Theme{ dark, light, dragon }) |t| {
         try std.testing.expect(t.type_scale.title > t.type_scale.body);
         try std.testing.expect(t.type_scale.body >= t.type_scale.label);
         try std.testing.expect(t.type_scale.label > t.type_scale.caption);

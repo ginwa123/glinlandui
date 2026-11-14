@@ -40,6 +40,8 @@ pub const TreeProps = struct {
     meta_fg: Color = Color.rgb(0x5a, 0x5a, 0x64),
     caret_fg: Color = Color.rgb(0x5a, 0x5a, 0x64),
     radius: u32 = 4,
+    /// The selected row's 2px left bar, so selection is a fill AND a mark. Null draws no bar at all.
+    selected_bar: ?Color = null,
     on_select: SelectFn = null,
     ctx: ?*anyopaque = null,
     click_z: i16 = 0,
@@ -100,6 +102,11 @@ fn rowUi(props: TreeProps, row: Row, i: usize) void {
         },
         .background_color = (if (!row.selected and cl.hovered()) props.hover_bg else base_bg).toClay(),
         .corner_radius = .all(@floatFromInt(props.radius)),
+        // Always 2px wide, transparent when the row is not selected, so selecting a row moves nothing.
+        .border = if (props.selected_bar) |bar| .{
+            .color = (if (row.selected) bar else Color.rgb(0x00, 0x00, 0x00)).toClay(),
+            .width = .{ .left = 2 },
+        } else .{},
     })({
         // A fixed-width caret so labels line up whether or not a row expands.
         cl.text(if (!row.has_children) " " else if (row.expanded) "-" else "+", .{
@@ -193,4 +200,21 @@ test "an empty tree still declares its container" {
 
 fn declareEmpty() void {
     tree(.{ .id = .{ .text = "t-empty" }, .rows = &.{} });
+}
+
+const bar_rows = [_]Row{ .{ .label = "a" }, .{ .label = "b", .selected = true } };
+
+fn declareWithBar() void {
+    tree(.{ .id = .{ .text = "t-bar" }, .rows = &bar_rows, .selected_bar = Color.rgb(0x8b, 0xa4, 0xb0) });
+}
+
+test "selected_bar draws one 2px left border per row, transparent when unselected" {
+    var rects: usize = 0;
+    var texts: usize = 0;
+    try countCommands(declareWithBar, &rects, &texts);
+    // The bar rides on the row's own border, so it adds no rectangle and no text.
+    try std.testing.expectEqual(bar_rows.len, rects);
+    // Without the prop the rows are unchanged.
+    try countCommands(declareSample, &rects, &texts);
+    try std.testing.expectEqual(sample_rows.len, rects);
 }
