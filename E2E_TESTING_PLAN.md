@@ -779,7 +779,7 @@ warm build.
 | 6 | Component registration in `button`, `checkbox`, `toggle`, `radio`, `slider`, `image`, `input` (×2), `list` (container + rows), `dropdown`, `scroll`. |
 
 Plus 10 E2E tests inside `testing/root.zig` (synthetic scrollable list) and
-`examples/calculator_e2e_test.zig` (15 tests against the real calculator).
+`examples/calculator/calculator_test.zig` (15 tests against the real calculator).
 
 **Final state:** `zig build test` **425/440 (15 skipped)** · `parity: 440 tests
 (matches tests.lock)` · `layering: ok` (R1–R6) · `zig fmt --check` clean ·

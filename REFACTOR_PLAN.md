@@ -45,7 +45,7 @@ Goal:
 
 - No behaviour change. This is a move-and-rewire refactor.
 - No new public API surface. `glinlandui.*` names stay exactly as they are
-  (consumers: `src/main.zig`, `examples/calculator.zig`, and the upstream
+  (consumers: `src/main.zig`, `examples/calculator/`, and the upstream
   `qs-settings-zig` that imports this as a path dependency).
 - No new features, no renderer changes, no protocol changes.
 
@@ -62,7 +62,7 @@ These are non-negotiable and every phase below has to keep them true.
 | C3 | `zig build native-test` is **Linux-only** and stays a separate, opt-in superset | `build.zig` (`if (native_protocols)` gate), `ci.yml` |
 | C4 | `zclay` must stay a single module identity (never imported by relative path) | `build.zig` `mod.addImport("zclay", zclay_mod)`; comment in `root.zig` explains why |
 | C5 | `build.zig` hardcodes C source paths and include dirs; several are `src/`-relative and will break on move | `build.zig` (`addPangoShim`, `addTabletToolStub`, the macOS block, `makeWaylandTestStep`) |
-| C6 | Public surface `glinlandui.{Window, host, render, text, frame, components, zclay, software_render, testing, keyToClose, …}` is consumed by two in-repo apps and one external repo | `src/main.zig`, `examples/calculator.zig` |
+| C6 | Public surface `glinlandui.{Window, host, render, text, frame, components, zclay, software_render, testing, keyToClose, …}` is consumed by two in-repo apps and one external repo | `src/main.zig`, `examples/calculator/` |
 
 **C2 is the single most important constraint.** Any refactor that changes which
 modules the parity test root reaches will flip the count and fail CI on both
@@ -503,7 +503,7 @@ renders; Linux `zig build test` = 376.
 - Update the stale prose: `root.zig`'s "ZERO ui/* imports" header, `build.zig`'s
   long comments, and the `wayland/`-relative paths in doc comments throughout
   (`render.zig`, `text_backend.zig`, `blit.zig`, `input_macos.zig`).
-- Update `examples/calculator.zig` only if a comment references a path (its
+- Update `examples/calculator/` only if a comment references a path (its
   *code* uses the public surface and must not change).
 
 **Gate:** full CI matrix green, including the Windows `absent` calculator legs
@@ -556,7 +556,7 @@ Copy-paste table. `→` is the destination under the target layout.
 | `src/wayland_api.zig` | `src/platform.zig` (rewritten) | 43 → ~50 | ROOT |
 | — | `src/core/select.zig` (new) | ~20 | CORE |
 
-Unchanged: `src/root.zig`, `src/main.zig`, `examples/calculator.zig`,
+Unchanged: `src/root.zig`, `src/main.zig`, `examples/calculator/`,
 `build.zig.zon`, `tests.lock`, `protocols/*.xml`, `vendor/*`.
 
 ### 8.1 Import-rewrite cheat sheet
@@ -613,7 +613,7 @@ Four things the codebase does not decide for me:
    `pub fn Frame(comptime Renderer: type, comptime Text: type) type`). That
    removes the exception entirely but **changes the public API shape** of
    `glinlandui.host.Host` and `glinlandui.frame`, breaking `main.zig` and
-   `examples/calculator.zig`. **Recommend: the single bridge.**
+   `examples/calculator/`. **Recommend: the single bridge.**
 
 3. **`protocols/*.xml` location.** Moving them to `src/linux/protocols/` makes
    `linux/` self-contained; leaving them at the root keeps `build.zig`'s codegen

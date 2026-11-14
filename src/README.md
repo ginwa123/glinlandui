@@ -215,7 +215,7 @@ run the same tests, which is what makes the macOS and Windows paths
 trustworthy without a Mac or a Windows box.
 
 The count is `482` (`root.zig` aggregate) + `1` (`main.zig`) + `36` (the
-calculator example) + `15` (`examples/calculator_e2e_test.zig`, the E2E suite).
+calculator example) + `15` (`examples/calculator/calculator_test.zig`, the E2E suite).
 It went from 442 to 534 when the Windows backend landed: its pure modules are
 in the aggregate, so a VK→evdev keycode typo is a typo the suite catches on
 every platform rather than one a user finds on Windows.
@@ -259,7 +259,7 @@ third has no tests by design.
   runs the tests of every file it reaches by relative `@import`, but it does not
   descend into `addImport`ed modules — which is why `exe_tests` has never
   re-counted the library. This matters concretely:
-  `examples/calculator_e2e_test.zig` reaches the calculator through an imported
+  `examples/calculator/calculator_test.zig` reaches the calculator through an imported
   module (`@import("calculator")`, wired in `build.zig`), **not** a relative
   `@import("calculator.zig")`. The relative form compiles and passes but makes the
   count 570 instead of 534, by re-running the example's 36 tests in the E2E
@@ -423,7 +423,7 @@ platforms. It is not done yet — do not mistake it for a passing test.
 changes.
 
 **Add something to the public API** — add the export to `root.zig`. Keep the
-existing names stable: `main.zig` and `examples/calculator.zig` compile against
+existing names stable: `main.zig` and `examples/calculator/` compile against
 this surface, and `build.zig`'s comments say a pre-split consumer
 (`qs-settings-zig`) does too. `wayland_lib` is a deprecated alias kept for that
 reason — do not remove it without checking that consumer.
@@ -484,5 +484,5 @@ Deliberate, and each is a good first task:
 6. `core/testing/root.zig` — how to drive the whole stack headlessly in a test.
 7. `core/semantics.zig` — the per-frame node model, and the `register` →
    `endLayout` → `resolve` ordering that immediate mode forces on it.
-8. `examples/calculator_e2e_test.zig` — the worked E2E example. The design
+8. `examples/calculator/calculator_test.zig` — the worked E2E example. The design
    rationale for this layer lives in `../E2E_TESTING_PLAN.md`.

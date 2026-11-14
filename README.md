@@ -421,7 +421,7 @@ Three things about the Linux backend are worth knowing before using it:
 
 ### Run it: `zig build run-file-dialog`
 
-`examples/file_dialog.zig` is all of the above, running: three buttons — one per
+`examples/file_dialog/` is all of the above, running: three buttons — one per
 `Kind` — and a status line that says how the last dialog actually ended. It is
 wired for Linux, macOS and Windows and deliberately **not** for the browser,
 where there is no dialog to show and an example of `error.Unsupported` would
@@ -621,7 +621,7 @@ There is a subtlety about *how* tests get collected, and it bites:
   Adding one import to a test root can raise the count without you writing a test.
 - Test collection **does not cross module boundaries**. `exe_tests` importing
   `glinlandui` as a module has never re-counted the library's tests — which is
-  exactly why `examples/calculator_e2e_test.zig` imports the calculator as a
+  exactly why `examples/calculator/calculator_test.zig` imports the calculator as a
   **module** (`@import("calculator")`, wired in `build.zig`) rather than as a
   file. A relative import there would have run the example's 36 tests twice.
 
@@ -682,8 +682,8 @@ test "the save button applies the change" {
 }
 ```
 
-The complete worked example is **`examples/calculator_e2e_test.zig`** — 15 tests
-driving the real calculator (`examples/calculator.zig`) with no compositor, no GL
+The complete worked example is **`examples/calculator/calculator_test.zig`** — 15 tests
+driving the real calculator (`examples/calculator/`) with no compositor, no GL
 context and no font engine. Run it with:
 
 ```bash
@@ -806,7 +806,7 @@ direction failed.
 
 ### A worked example
 
-From `examples/calculator_e2e_test.zig`:
+From `examples/calculator/calculator_test.zig`:
 
 ```zig
 test "e2e: a keypad click computes 42 the way a user would" {
@@ -983,10 +983,10 @@ src/
 ★ = the file dialog. See "File and folder dialogs" above.
 
 examples/
-├── calculator.zig            the example app (+ 36 tests)
-├── file_dialog.zig           ★ the dialog how-to — 3 buttons, 8 tests
-├── calculator_e2e_test.zig   ★ 15 E2E tests driving that app
-├── lazy_scroll.zig           10,000 virtualised rows + a frame-rate meter
+├── calculator/               the example app (+ 36 tests) — calculator_test.zig is
+                              ★ 15 E2E tests driving that app
+├── file_dialog/              ★ the dialog how-to — 3 buttons, 8 tests
+├── lazy_scroll/              10,000 virtualised rows + a frame-rate meter
 └── todo/                     ★ MVVM the way Jetpack Compose does it — state, ViewModel,
                               composition (remember / collectAsState), view, setContent.
                               Its README is the Compose → glinlandui mapping table.
@@ -1010,8 +1010,8 @@ vendor/
 | `src/README.md` | agent orientation for `src/`: layout, invariants I1–I5, traps, verification recipes, known debt |
 | `REFACTOR_PLAN.md` | the `core/` + `linux/` + `mac/` split, the R1–R6 layering rules, and its execution log |
 | `E2E_TESTING_PLAN.md` | the design of the E2E layer, the immediate-mode constraints it works around, and its execution log |
-| `examples/calculator_e2e_test.zig` | the worked E2E example — read this first if you are writing tests |
-| `examples/calculator.zig` | an app written against the public surface only |
+| `examples/calculator/calculator_test.zig` | the worked E2E example — read this first if you are writing tests |
+| `examples/calculator/` | an app written against the public surface only |
 | `examples/todo/README.md` | MVVM in an immediate-mode toolkit: the Compose mapping, and the three lifetime rules |
 
 ---

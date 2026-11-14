@@ -97,7 +97,7 @@ implement is a clang *warning*, so without it the build passes and the app ships
 
 ## The performance gate
 
-`zig build bench-lazy-scroll` measures `examples/lazy_scroll.zig` headless: 600 frames at 900x640,
+`zig build bench-lazy-scroll` measures `examples/lazy_scroll/` headless: 600 frames at 900x640,
 scale 1, scrolling 10,000 virtualised rows to the bottom. The `lazy-scroll` CI job runs that bench
 on macOS, Linux and Windows and gates it with `ci/check_lazy_scroll_bench.sh`.
 

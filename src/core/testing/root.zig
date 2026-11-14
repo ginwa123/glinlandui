@@ -953,7 +953,7 @@ fn extHit(ctx: ?*anyopaque, _: usize) void {
 
 const ExtApp = struct {
     fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
-        // Exactly what examples/calculator.zig does: `on_click = null` so button() does not self-register, then an indexed registration.
+        // Exactly what examples/calculator/ does: `on_click = null` so button() does not self-register, then an indexed registration.
         button_mod.button(.{
             .id = .{ .text = "ext-key" },
             .label = .{ .text = "7" },

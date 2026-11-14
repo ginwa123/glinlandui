@@ -229,47 +229,26 @@ pub fn build(b: *std.Build) void {
         }
     }
 
-    // ---- Example app: the calculator ---- The example drives the toolkit through its PUBLIC surface (`Window`, `host.Host`, `components.*`), so it is NOT.
+    // ---- Example apps, each a MODULE ---- `examples/<name>/root.zig` is the surface, `main.zig` is the window, and the tests import the same module the binary runs.
     var calc_test: ?*std.Build.Step.Compile = null;
     var calc_e2e_test: ?*std.Build.Step.Compile = null;
-    // The calculator's source, built for the WEB target.
+    // The calculator's module, built for the WEB target too: the same source, a second artifact.
     var calc_mod_for_web: ?*std.Build.Module = null;
     if (calc_supported) {
-        const calc_mod = b.createModule(.{
-            .root_source_file = b.path("examples/calculator.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "glinlandui", .module = mod },
-            },
-        });
-        calc_mod_for_web = b.createModule(.{
-            .root_source_file = b.path("examples/calculator.zig"),
-            .target = web_target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "glinlandui", .module = web_lib },
-            },
-        });
-        const calc = b.addExecutable(.{
-            .name = "glinlandui-calculator",
-            .root_module = calc_mod,
-        });
-        b.installArtifact(calc);
+        const calc_mod = exampleModule(b, "calculator", target, optimize, mod);
+        const calc_web_mod = exampleModule(b, "calculator", web_target, optimize, web_lib);
+        // The wasm entry reads the font through the app, so the module carries the generated font.
+        calc_web_mod.addImport("font_data", font_module);
+        calc_mod_for_web = calc_web_mod;
 
-        // ---- the calculator, for the browser ---- A SECOND wasm artifact, from the SAME source file, sharing the library and the page.
-        const web_calc = b.addExecutable(.{
-            .name = "glinlandui-calculator",
-            // Rooted at `examples/calculator.zig` — the SAME file the native executable uses.
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("examples/calculator.zig"),
-                .target = web_target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "glinlandui", .module = web_lib },
-                },
-            }),
-        });
+        const calc = exampleExe(b, "calculator", target, optimize, mod, calc_mod);
+        b.installArtifact(calc);
+        // The window alone, so a change to `main.zig` is compiled without building the other examples.
+        const build_calc_step = b.step("build-calculator", "Compile the calculator example (no window)");
+        build_calc_step.dependOn(&calc.step);
+
+        // ---- the calculator, for the browser ---- A SECOND wasm artifact from the same module, sharing the library and the page.
+        const web_calc = exampleExe(b, "calculator", web_target, optimize, web_lib, calc_web_mod);
         web_calc.entry = .disabled;
         web_calc.rdynamic = true;
         web_calc.stack_size = 1024 * 1024;
@@ -300,52 +279,25 @@ pub fn build(b: *std.Build) void {
             }
         }
 
-        // A separate test root over the same file: `b.addTest` compiles the root as a test binary, so `pub fn main` is never an entry point and the example's.
-        calc_test = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("examples/calculator.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "glinlandui", .module = mod },
-                },
-            }),
-        });
+        // A separate test root over the same module: `b.addTest` compiles it as a test binary, so `pub fn main` is never an entry point.
+        calc_test = exampleTest(b, calc_mod);
+        calc_e2e_test = exampleE2E(b, "calculator", target, optimize, mod, calc_mod);
 
-        // The E2E suite for the same example.
-        calc_e2e_test = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("examples/calculator_e2e_test.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "glinlandui", .module = mod },
-                    .{ .name = "calculator", .module = calc_mod },
-                },
-            }),
-        });
+        const calc_test_step = b.step("test-calculator", "Run the calculator example's tests only");
+        calc_test_step.dependOn(&b.addRunArtifact(calc_test.?).step);
+        calc_test_step.dependOn(&b.addRunArtifact(calc_e2e_test.?).step);
     }
 
     // ---- Example app: 10,000 rows, virtualised ---- The performance demo: the frame cost of a scroll must depend on the window, not on the data.
     var lazy_test: ?*std.Build.Step.Compile = null;
     if (calc_supported) {
-        const lazy_mod = b.createModule(.{
-            .root_source_file = b.path("examples/lazy_scroll.zig"),
-            .target = target,
-            .optimize = lazy_optimize,
-            .imports = &.{
-                .{ .name = "glinlandui", .module = mod },
-            },
-        });
-        const lazy = b.addExecutable(.{
-            .name = "glinlandui-lazy-scroll",
-            .root_module = lazy_mod,
-        });
-        // The clay archive is built for the dependency's mode (Debug), and a Debug C build is instrumented with UBSan; a ReleaseSafe root must therefore bundle
-
-        // the runtime that satisfies those references.
+        const lazy_mod = exampleModule(b, "lazy_scroll", target, lazy_optimize, mod);
+        const lazy = exampleExe(b, "lazy_scroll", target, lazy_optimize, mod, lazy_mod);
+        // The clay archive is built for the dependency's mode (Debug), and a Debug C build is instrumented with UBSan; a ReleaseSafe root must bundle the runtime that satisfies those references.
         lazy.bundle_compiler_rt = true;
         b.installArtifact(lazy);
+        const build_lazy_step = b.step("build-lazy-scroll", "Compile the lazy-scroll example (no window)");
+        build_lazy_step.dependOn(&lazy.step);
 
         const run_lazy_step = b.step("run-lazy-scroll", "Run the 10,000-row lazy-scroll example");
         const run_lazy = b.addRunArtifact(lazy);
@@ -361,16 +313,7 @@ pub fn build(b: *std.Build) void {
         bench_lazy.addArgs(&.{ "--bench", "600" });
         bench_lazy_step.dependOn(&bench_lazy.step);
 
-        lazy_test = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("examples/lazy_scroll.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "glinlandui", .module = mod },
-                },
-            }),
-        });
+        lazy_test = exampleTest(b, lazy_mod);
 
         // The example's own tests, alone: the CI bench legs assert these before they time anything, and the parity step is far too wide for that.
         const lazy_test_step = b.step("test-lazy-scroll", "Run the lazy-scroll example's tests only");
@@ -380,19 +323,11 @@ pub fn build(b: *std.Build) void {
     // ---- Example app: the file dialog ---- The "how to use" for `glinlandui.file_dialog`, and the only example in this repository whose subject is an API.
     var dlg_test: ?*std.Build.Step.Compile = null;
     if (dlg_supported) {
-        const dlg_mod = b.createModule(.{
-            .root_source_file = b.path("examples/file_dialog.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "glinlandui", .module = mod },
-            },
-        });
-        const dlg = b.addExecutable(.{
-            .name = "glinlandui-file-dialog",
-            .root_module = dlg_mod,
-        });
+        const dlg_mod = exampleModule(b, "file_dialog", target, optimize, mod);
+        const dlg = exampleExe(b, "file_dialog", target, optimize, mod, dlg_mod);
         b.installArtifact(dlg);
+        const build_dlg_step = b.step("build-file-dialog", "Compile the file-dialog example (no window)");
+        build_dlg_step.dependOn(&dlg.step);
 
         const run_dlg_step = b.step("run-file-dialog", "Run the file-dialog example");
         const run_dlg = b.addRunArtifact(dlg);
@@ -402,45 +337,21 @@ pub fn build(b: *std.Build) void {
             run_dlg.addArgs(args);
         }
 
-        // A separate test root over the same file, exactly as the calculator does: `b.addTest` compiles the root as a test binary, so `pub fn main` is never an.
-        dlg_test = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("examples/file_dialog.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "glinlandui", .module = mod },
-                },
-            }),
-        });
+        dlg_test = exampleTest(b, dlg_mod);
+
+        const dlg_test_step = b.step("test-file-dialog", "Run the file-dialog example's tests only");
+        dlg_test_step.dependOn(&b.addRunArtifact(dlg_test.?).step);
     }
 
     // ---- Example app: the MVVM todo ---- The smallest app that still has the shape a real one has: state, a ViewModel, a view, and a store.
     var todo_test: ?*std.Build.Step.Compile = null;
     var todo_e2e_test: ?*std.Build.Step.Compile = null;
     if (calc_supported) {
-        // The app is a MODULE, so the example's own tests and the E2E suite import the same code the binary runs.
-        const todo_mod = b.createModule(.{
-            .root_source_file = b.path("examples/todo/root.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "glinlandui", .module = mod },
-            },
-        });
-        const todo = b.addExecutable(.{
-            .name = "glinlandui-todo",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("examples/todo/main.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "glinlandui", .module = mod },
-                    .{ .name = "todo", .module = todo_mod },
-                },
-            }),
-        });
+        const todo_mod = exampleModule(b, "todo", target, optimize, mod);
+        const todo = exampleExe(b, "todo", target, optimize, mod, todo_mod);
         b.installArtifact(todo);
+        const build_todo_step = b.step("build-todo", "Compile the todo example (no window)");
+        build_todo_step.dependOn(&todo.step);
 
         const run_todo_step = b.step("run-todo", "Run the MVVM todo example");
         const run_todo = b.addRunArtifact(todo);
@@ -450,30 +361,9 @@ pub fn build(b: *std.Build) void {
             run_todo.addArgs(args);
         }
 
-        // A separate test root over the same module: `b.addTest` compiles the root as a test binary.
-        todo_test = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("examples/todo/root.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "glinlandui", .module = mod },
-                },
-            }),
-        });
-
+        todo_test = exampleTest(b, todo_mod);
         // The E2E suite: the real App, driven by the headless driver.
-        todo_e2e_test = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("examples/todo/todo_test.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "glinlandui", .module = mod },
-                    .{ .name = "todo", .module = todo_mod },
-                },
-            }),
-        });
+        todo_e2e_test = exampleE2E(b, "todo", target, optimize, mod, todo_mod);
 
         // The example's own tests, alone: the CI legs assert these before they build anything else.
         const todo_test_step = b.step("test-todo", "Run the MVVM todo example's tests only");
@@ -484,18 +374,11 @@ pub fn build(b: *std.Build) void {
     // ---- Example app: the component catalog ---- Every widget the toolkit ships on one screen, in the kit's palette. It is the executable form of the UI.
     var catalog_test: ?*std.Build.Step.Compile = null;
     if (calc_supported) {
-        const catalog = b.addExecutable(.{
-            .name = "glinlandui-catalog",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("examples/catalog.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "glinlandui", .module = mod },
-                },
-            }),
-        });
+        const catalog_mod = exampleModule(b, "catalog", target, optimize, mod);
+        const catalog = exampleExe(b, "catalog", target, optimize, mod, catalog_mod);
         b.installArtifact(catalog);
+        const build_catalog_step = b.step("build-catalog", "Compile the catalog example (no window)");
+        build_catalog_step.dependOn(&catalog.step);
 
         const run_catalog_step = b.step("run-catalog", "Run the component catalog example");
         const run_catalog = b.addRunArtifact(catalog);
@@ -505,17 +388,10 @@ pub fn build(b: *std.Build) void {
             run_catalog.addArgs(args);
         }
 
-        // A separate test root over the same file, exactly as the calculator does.
-        catalog_test = b.addTest(.{
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("examples/catalog.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "glinlandui", .module = mod },
-                },
-            }),
-        });
+        catalog_test = exampleTest(b, catalog_mod);
+
+        const catalog_test_step = b.step("test-catalog", "Run the component catalog's tests only");
+        catalog_test_step.dependOn(&b.addRunArtifact(catalog_test.?).step);
     }
 
     // The parity suite is a NATIVE concern: a wasm target has no test runner here, and `-Dtarget=wasm32-freestanding` is for shipping the webapp, not for.
@@ -926,4 +802,70 @@ fn addTabletToolStub(b: *std.Build, m: *std.Build.Module) void {
         \\};
         \\
     ) });
+}
+
+// An example's MODULE: `examples/<name>/root.zig` re-exports the app, the view, the ViewModel and the state, so a test imports exactly what the binary runs.
+fn exampleModule(
+    b: *std.Build,
+    name: []const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    lib: *std.Build.Module,
+) *std.Build.Module {
+    return b.createModule(.{
+        .root_source_file = b.path(b.fmt("examples/{s}/root.zig", .{name})),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "glinlandui", .module = lib }},
+    });
+}
+
+// An example's WINDOW: `examples/<name>/main.zig` imports its own module by name, so no file names a path.
+fn exampleExe(
+    b: *std.Build,
+    name: []const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    lib: *std.Build.Module,
+    mod: *std.Build.Module,
+) *std.Build.Step.Compile {
+    return b.addExecutable(.{
+        .name = b.fmt("glinlandui-{s}", .{name}),
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(b.fmt("examples/{s}/main.zig", .{name})),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "glinlandui", .module = lib },
+                .{ .name = name, .module = mod },
+            },
+        }),
+    });
+}
+
+// An example's own tests: every file's `test` blocks, reached through the module's root.
+fn exampleTest(b: *std.Build, mod: *std.Build.Module) *std.Build.Step.Compile {
+    return b.addTest(.{ .root_module = mod });
+}
+
+// An example's E2E suite: `examples/<name>/<name>_test.zig` drives the real App through the module.
+fn exampleE2E(
+    b: *std.Build,
+    name: []const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    lib: *std.Build.Module,
+    mod: *std.Build.Module,
+) *std.Build.Step.Compile {
+    return b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(b.fmt("examples/{s}/{s}_test.zig", .{ name, name })),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "glinlandui", .module = lib },
+                .{ .name = name, .module = mod },
+            },
+        }),
+    });
 }

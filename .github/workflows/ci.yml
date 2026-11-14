@@ -285,7 +285,7 @@ jobs:
           echo "demo painted $painted pixels, upload checksum 0x$sum (presenter: $presenter)"
 
   # ---------------------------------------------------------------------------
-  # Calculator example (examples/calculator.zig)
+  # Calculator example (examples/calculator/)
   #
   # The example is the reference consumer for the toolkit: a 20-key button
   # grid, indexed click dispatch, and real keyboard input through the Host's
@@ -443,7 +443,7 @@ jobs:
           echo "calculator painted $painted pixels"
 
   # ---------------------------------------------------------------------------
-  # File-dialog example (examples/file_dialog.zig)
+  # File-dialog example (examples/file_dialog/)
   #
   # The "how to use" for `glinlandui.file_dialog`, and the one job whose
   # subject is an API rather than a widget — so what it can honestly assert is
@@ -735,7 +735,7 @@ jobs:
           echo "-Dweb: builds, serves, prints the URL"
 
   # ---------------------------------------------------------------------------
-  # Lazy-scroll example (examples/lazy_scroll.zig) — the performance gate.
+  # Lazy-scroll example (examples/lazy_scroll/) — the performance gate.
   #
   # `--bench` opens no window and waits for no vsync: it drives the toolkit's own
   # headless driver for a fixed 600 frames, so the SAME binary measures the same
