@@ -210,7 +210,13 @@ pub const Window = struct {
             // A small change is the interesting one: a whole-area repaint is scrolling, a row or a column is a blink.
             if (box.count * 20 < n) {
                 self.diff_prints += 1;
-                std.log.info("FRAME CHANGED {d} px  x {d}..{d}  y {d}..{d}  cmds={d}", .{ box.count, box.min_x, box.max_x, box.min_y, box.max_y, frame_mod.lastCommandCount() });
+                // The colour the changed box went from and to, which names the state that flipped (base / hover / selected).
+                const cx = (box.min_x + box.max_x) / 2;
+                const cy = (box.min_y + box.max_y) / 2;
+                const ci = (cy * @as(usize, sf.width) + cx) * 4;
+                const was = (@as(u32, self.diff_prev[ci]) << 16) | (@as(u32, self.diff_prev[ci + 1]) << 8) | self.diff_prev[ci + 2];
+                const now = (@as(u32, sf.pixels[ci]) << 16) | (@as(u32, sf.pixels[ci + 1]) << 8) | sf.pixels[ci + 2];
+                std.log.info("FRAME CHANGED {d} px  x {d}..{d}  y {d}..{d}  cmds={d}  colour {x:0>6} -> {x:0>6}", .{ box.count, box.min_x, box.max_x, box.min_y, box.max_y, frame_mod.lastCommandCount(), was, now });
             }
         }
         if (comparable and frame_mod.commandsRepeated() and self.diff_prints < 50) {
