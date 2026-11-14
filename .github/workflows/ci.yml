@@ -92,7 +92,7 @@ jobs:
     # Linux job above, driving the same Clay -> rasterizer -> RGBA8 pipeline
     # through CoreGraphics instead of through a Wayland/EGL swapchain.
     name: macOS / CPU rasterizer / Cocoa window
-    runs-on: macos-14
+    runs-on: macos-15
     # Deliberately shorter than the Linux job's 25. A capped Cocoa run that
     # stops exiting is the one regression this job is most exposed to, and it
     # used to burn the full 25 minutes before failing. Fail in 10 instead.
@@ -311,7 +311,7 @@ jobs:
           - os: ubuntu-24.04
             label: Linux (Wayland/EGL/GLES3/pangocairo)
             expect: present
-          - os: macos-14
+          - os: macos-15
             label: macOS (portable CPU rasterizer)
             expect: present
           - os: windows-2022
@@ -484,7 +484,7 @@ jobs:
           - os: ubuntu-24.04
             label: Linux (XDG portal)
             backend: xdg-desktop-portal
-          - os: macos-14
+          - os: macos-15
             label: macOS (NSOpenPanel)
             backend: NSOpenPanel
           - os: windows-2022
@@ -768,7 +768,7 @@ jobs:
         include:
           - os: ubuntu-24.04
             label: Linux
-          - os: macos-14
+          - os: macos-15
             label: macOS
           - os: windows-2022
             label: Windows
