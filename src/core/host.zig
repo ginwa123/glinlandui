@@ -83,10 +83,12 @@ pub const Host = struct {
         self.clock_s += 0.016;
         frame_mod.setTime(self.clock_s, 0.016);
         // Consume the pending wheel delta exactly once per frame (Clay routes it to the hovered scroll container; zero = no-op).
-        const dx = self.scroll_dx;
-        const dy = self.scroll_dy;
-        self.scroll_dx = 0;
-        self.scroll_dy = 0;
+        // WHOLE pixels only, with the remainder carried to the next frame: a sub-pixel scroll offset re-rasterises every
+        // glyph at a new sub-pixel phase, which reads on screen as the list shimmering or blinking.
+        const dx = @trunc(self.scroll_dx);
+        const dy = @trunc(self.scroll_dy);
+        self.scroll_dx -= dx;
+        self.scroll_dy -= dy;
         // clayFrame resolves the cursor shape AFTER endLayout into frame_mod.currentShape() (it also returns it; void here keeps Delegate.on_frame and all.
         if (options) |opts| {
             return frame_mod.clayFrameWithOptions(
@@ -292,6 +294,17 @@ test "host: pointer press latches down, release clears" {
     try std.testing.expect(h.ptr.down);
     h.onPointerEvent(10, 20, false, 272);
     try std.testing.expect(!h.ptr.down);
+}
+
+test "host: a frame applies whole pixels of scroll and keeps the remainder" {
+    var h: Host = undefined;
+    try testHost(&h, null, noopRoot);
+    // Three small deltas add up to one pixel plus a remainder; the pixel moves now, the remainder waits.
+    h.onScrollEvent(0, -0.4);
+    h.onScrollEvent(0, -0.4);
+    h.onScrollEvent(0, -0.4);
+    h.frame(800, 600);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.2), h.scroll_dy, 0.001);
 }
 
 test "host: a no-op scroll does not make the frame dirty" {

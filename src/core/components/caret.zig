@@ -40,6 +40,9 @@ pub fn declare(props: Props) void {
         .id = props.id,
         .layout = .{ .sizing = .{ .w = .fixed(frame_mod.hairline()), .h = .fixed(props.height) } },
         .floating = .{
+            // A decoration must not be hit-testable: capturing the pointer here makes the pointer-over set change every
+            // time the caret blinks, which can flip the hover state of whatever is underneath it.
+            .pointer_capture_mode = .passthrough,
             .offset = .{ .x = frame_mod.snapX(props.x), .y = props.y },
             .attach_to = .to_parent,
             .attach_points = .{ .element = attach, .parent = attach },
