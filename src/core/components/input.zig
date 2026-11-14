@@ -492,8 +492,8 @@ pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
     // Drag-select first, so the caret and the selection this frame draws are the ones the pointer just asked for.
     dragSelect(ctx, props.id);
     const text = input.text();
-    // The field owns its own animation: advancing the blink here means an app never has to remember to tick a field it declared.
-    input.idle += frame_mod.delta_s;
+    // The field owns its own animation, and only while it is focused: an unfocused field holds its clock at zero and draws no caret.
+    input.tickBlink(frame_mod.delta_s);
     const fg = (if (props.disabled) props.disabled_fg else props.fg).toClay();
     // Solid for half a second after the caret moves, then blinking: a caret that blinks while you type is a caret you cannot find.
     const blink_on = text_editor.caretVisible(input);

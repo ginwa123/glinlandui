@@ -47,6 +47,35 @@ pub var ptr_y: f32 = 0;
 pub var time_s: f32 = 0;
 pub var delta_s: f32 = 0;
 
+// Frame-scoped scratch for strings a draw command points at, reset at the top of every frame: exactly as long as a render command needs them.
+var text_arena: [1024 * 1024]u8 = undefined;
+var text_used: usize = 0;
+
+// Claim `n` bytes of frame scratch. An over-long request gets an empty slice, so a full arena degrades to a missing label, never a panic.
+pub fn claimText(n: usize) []u8 {
+    if (n == 0 or text_used + n > text_arena.len) return &[_]u8{};
+    const start = text_used;
+    text_used += n;
+    return text_arena[start..text_used];
+}
+
+// Format a string into the frame's scratch, e.g. `frame.formatText("{d} rows", .{n})`. Valid until the next frame; sized to fit, never truncated.
+pub fn formatText(comptime fmt: []const u8, args: anytype) []const u8 {
+    const buf = claimText(std.fmt.count(fmt, args));
+    if (buf.len == 0) return "";
+    return std.fmt.bufPrint(buf, fmt, args) catch "";
+}
+
+// A frame-scoped element id, e.g. "grid.cell.3": the id a per-row component needs without building a string by hand.
+pub fn elementId(prefix: []const u8, index: usize) []const u8 {
+    return formatText("{s}.{d}", .{ prefix, index });
+}
+
+// A frame-scoped element id with two indices, e.g. "grid.cell.3.1".
+pub fn elementId2(prefix: []const u8, a: usize, b: usize) []const u8 {
+    return formatText("{s}.{d}.{d}", .{ prefix, a, b });
+}
+
 // Whether the left button is held, and where that press began, so a field can tell a drag that started on it from one that wandered in.
 pub var ptr_down: bool = false;
 pub var ptr_press_x: f32 = 0;
@@ -409,6 +438,8 @@ pub fn clayFrameWithOptions(
         cl.setMeasureTextFunction(void, {}, clayMeasure);
     }
     cl.beginLayout();
+    // The frame's scratch strings are released here, so an app never has to remember to reset them.
+    text_used = 0;
     declare(ctx, w, h);
     const commands = cl.endLayout();
     // The audit runs on the frames a developer actually sees, not only in tests: the caret, hairline and hit-target failures it catches are invisible to a

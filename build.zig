@@ -63,8 +63,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // ---- vendored clay C library (moved from qs build.zig) ---- clay.h is header-only: exactly one TU must define CLAY_IMPLEMENTATION.
-    const clay_lib = makeClay(b, target, optimize);
+    // ---- vendored clay C library: clay.h is header-only (one TU defines CLAY_IMPLEMENTATION) and C, so it is always optimised — Debug buys it nothing.
+    const clay_lib = makeClay(b, target, .ReleaseFast);
     zclay_mod.linkLibrary(clay_lib);
 
     const mod = b.addModule("glinlandui", .{
@@ -153,7 +153,7 @@ pub fn build(b: *std.Build) void {
     mod.linkLibrary(clay_lib);
 
     // ---- WebAssembly / browser webapp ---- Built BEFORE the native executable, because `zig build run --web` depends on these install steps and Zig.
-    const web_lib = makeWebModule(b, web_target, optimize, makeWebZclay(b, web_target, optimize));
+    const web_lib = makeWebModule(b, web_target, optimize, makeWebZclay(b, web_target, .ReleaseFast));
 
     const web = b.addExecutable(.{
         .name = "glinlandui",

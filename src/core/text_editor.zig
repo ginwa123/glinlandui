@@ -74,6 +74,8 @@ pub const Editor = struct {
 
     // Seconds since the caret last moved, which is what a view blinks on.
     idle: f32 = 0,
+    // True while this editor is the one the keyboard goes to. An unfocused editor draws NO caret, so the flag belongs to the model, not to a view.
+    focused: bool = true,
     // Horizontal scroll in pixels, for a line wider than the field.
     scroll_x: f32 = 0,
 
@@ -83,6 +85,15 @@ pub const Editor = struct {
 
     pub fn text(self: *const Editor) []const u8 {
         return self.buf[0..self.len];
+    }
+
+    // Advance the blink clock, but only while this editor is focused: an unfocused field holds its clock at zero, so re-focusing shows a solid caret.
+    pub fn tickBlink(self: *Editor, dt: f32) void {
+        if (!self.focused) {
+            self.idle = 0;
+            return;
+        }
+        self.idle += dt;
     }
 
     // Replace the whole contents.
@@ -497,8 +508,9 @@ pub fn offsetAtX(text: []const u8, x: f32, font_size: u16, measure: *const fn ([
     return lo;
 }
 
-// True when the caret should be drawn: solid for half a second after it moved, then a 1 Hz blink.
+// True when the caret should be drawn: only in the focused field, solid for half a second after it moved, then a 1 Hz blink.
 pub fn caretVisible(editor: *const Editor) bool {
+    if (!editor.focused) return false;
     return editor.idle < 0.5 or @mod(editor.idle, 1.0) < 0.5;
 }
 
@@ -888,6 +900,20 @@ test "the caret is solid right after an edit and blinks after half a second" {
     try testing.expect(!caretVisible(&e));
     // 1.1 s is the bright half again.
     e.idle = 1.1;
+    try testing.expect(caretVisible(&e));
+}
+
+test "an unfocused editor draws no caret and holds its blink clock at zero" {
+    var buf: [32]u8 = undefined;
+    var e = Editor.init(&buf);
+    _ = e.insertSlice("select");
+    try testing.expect(caretVisible(&e));
+    // Losing focus stops the blink AND resets the clock, so coming back shows a solid caret instead of landing mid-blink.
+    e.focused = false;
+    e.tickBlink(0.9);
+    try testing.expect(!caretVisible(&e));
+    try testing.expectEqual(@as(f32, 0), e.idle);
+    e.focused = true;
     try testing.expect(caretVisible(&e));
 }
 

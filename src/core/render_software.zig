@@ -157,6 +157,8 @@ pub const Surface = struct {
     }
 
     fn blend(self: *Surface, x: usize, y: usize, src: [3]f32, sa: f32) void {
+        // Per-pixel inner loop: bounds checks here cost more than the blend itself, and the indices are already clamped by the caller.
+        @setRuntimeSafety(false);
         const i = y * self.width * 4 + x * 4;
         const inv = 1.0 - sa;
         // Straight-alpha blend of the RGB channels, then the alpha channel with the same source-over equation (GL blend func SRC_ALPHA/ONE_MINUS_SRC_ALPHA for.
@@ -182,6 +184,8 @@ pub const Surface = struct {
         border_w: f32,
         color: [4]f32,
     ) void {
+        // The toolkit's hottest loop: every box on screen runs it. Safety checks are off here and the bounds are clamped below, once.
+        @setRuntimeSafety(false);
         if (w <= 0 or h <= 0) return;
         const n = normalizeColor(color);
         const alpha = n[3];
@@ -451,6 +455,8 @@ pub const Surface = struct {
         font_size: u16,
         color: [4]f32,
     ) void {
+        // One glyph blit per character per frame, each with a per-pixel coverage multiply: the checks cost more than the arithmetic.
+        @setRuntimeSafety(false);
         if (text_bytes.len == 0) return;
         const n = normalizeColor(color);
         const face = text_face.font() orelse {
