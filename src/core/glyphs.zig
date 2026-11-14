@@ -181,6 +181,16 @@ pub fn cachedGlyph(font: *const Font, cp: u21, font_size: u16) ?*const CachedGly
     return cache.getPtr(key);
 }
 
+/// The cap box of the font at `font_size`: where an uppercase glyph's ink starts relative to the baseline, and how tall it is.
+pub fn capBox(font: *const Font, font_size: u16) ?struct { top: f32, height: f32 } {
+    for ("HNME") |cp| {
+        const g = cachedGlyph(font, cp, font_size) orelse continue;
+        if (g.h == 0) continue;
+        return .{ .top = g.yoff, .height = @floatFromInt(g.h) };
+    }
+    return null;
+}
+
 /// Drop every cached glyph. Call when the font changes.
 pub fn clearGlyphCache() void {
     var it = cache.iterator();

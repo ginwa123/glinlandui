@@ -464,10 +464,11 @@ pub const Surface = struct {
             self.drawTextRunFallback(bbox_x, bbox_y, text_bytes, font_size, color);
             return;
         }
-        // Centre the font's LINE BOX (ascent..descent) in the box the layout reserved, then drop the baseline a full ascent from the line box's top.
-        const line_h = font.lineHeight(fs);
-        const slack: f32 = if (bbox_h > 0) bbox_h - line_h else 0;
-        const baseline = bbox_y + slack * 0.5 + m.ascent;
+        // Centre the CAP BOX, not the font's line box: a deep descent (Consolas) makes the line box asymmetric, so centring it puts the glyphs visibly high.
+        const baseline = if (glyphs.capBox(font, fs)) |cap|
+            bbox_y + (if (bbox_h > 0) (bbox_h - cap.height) * 0.5 else 0) - cap.top
+        else
+            bbox_y + (if (bbox_h > 0) bbox_h - font.lineHeight(fs) else 0) * 0.5 + m.ascent;
 
         var pen = bbox_x;
         var i: usize = 0;

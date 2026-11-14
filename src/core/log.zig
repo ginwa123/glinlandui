@@ -9,9 +9,16 @@ pub const Level = enum { warn, err };
 /// Where a message goes. The app installs one; the library never assumes a destination.
 pub const Sink = *const fn (level: Level, message: []const u8) void;
 
-/// The default: stderr in production, nothing in a test.
+// Where a message can go: a test has no stderr to speak of, and a wasm module has no stderr at all.
+const can_write_stderr = !builtin.is_test and !builtin.cpu.arch.isWasm();
+
+/// The default: stderr in production, nothing in a test or a browser.
 fn stderrSink(level: Level, message: []const u8) void {
-    if (builtin.is_test) return;
+    if (comptime can_write_stderr) stderrSinkNative(level, message);
+}
+
+// Kept out of `stderrSink` so the wasm build never ANALYSES it: `std.debug.print` reaches `std.Io.Threaded`, which cannot exist for a freestanding target.
+fn stderrSinkNative(level: Level, message: []const u8) void {
     std.debug.print("[glinlandui] {s}: {s}\n", .{ @tagName(level), message });
 }
 
