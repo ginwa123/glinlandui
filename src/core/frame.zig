@@ -72,6 +72,36 @@ pub fn elementId(prefix: []const u8, index: usize) []const u8 {
     return formatText("{s}.{d}", .{ prefix, index });
 }
 
+// The element id Clay hashes from a name, for the calls that need one without naming Clay's type.
+pub fn clayId(name: []const u8) cl.ElementId {
+    return cl.getElementId(name);
+}
+
+// The id of one item of an indexed list, without formatting a string for it.
+pub fn itemId(prefix: []const u8, index: u32) cl.ElementId {
+    return cl.ElementId.IDI(prefix, index);
+}
+
+// A laid-out box, in logical units.
+pub const Bounds = struct {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+};
+
+// The box Clay laid out for an element this frame, or null when it was not declared.
+pub fn bounds(id: cl.ElementId) ?Bounds {
+    const data = cl.getElementData(id);
+    if (!data.found) return null;
+    return .{
+        .x = data.bounding_box.x,
+        .y = data.bounding_box.y,
+        .width = data.bounding_box.width,
+        .height = data.bounding_box.height,
+    };
+}
+
 // A frame-scoped element id with two indices, e.g. "grid.cell.3.1".
 pub fn elementId2(prefix: []const u8, a: usize, b: usize) []const u8 {
     return formatText("{s}.{d}.{d}", .{ prefix, a, b });

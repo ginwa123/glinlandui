@@ -20,6 +20,8 @@ pub const BoxProps = struct {
     w: prop.Size = .fit,
     h: prop.Size = .fit,
     bg: ?Color = null,
+    /// The background while the pointer is over this box, or `bg` when it is not.
+    hover_bg: ?Color = null,
     pad: prop.Pad = .{},
     gap: u16 = 0,
     radius: prop.Radius = .{},
@@ -33,6 +35,7 @@ pub fn box(p: BoxProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void)
         .row => .left_to_right,
         .column => .top_to_bottom,
     };
+    const bg = if (p.hover_bg) |hover| (if (cl.pointerOver(p.id.clay())) hover else p.bg) else p.bg;
     cl.UI()(.{
         .id = p.id.clay(),
         .layout = .{
@@ -42,7 +45,7 @@ pub fn box(p: BoxProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void)
             .child_gap = p.gap,
             .child_alignment = p.child_align,
         },
-        .background_color = if (p.bg) |b| b.toClay() else .{ 0, 0, 0, 0 },
+        .background_color = if (bg) |b| b.toClay() else .{ 0, 0, 0, 0 },
         .corner_radius = p.radius.clay(),
         .border = p.border.clay(),
     })({

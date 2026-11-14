@@ -12,7 +12,8 @@ const cl = @import("zclay");
 const props = @import("../props.zig");
 
 pub const Host = host_mod.Host;
-pub const BoundingBox = cl.BoundingBox;
+// The toolkit's own box type: a test asserts on this, never on Clay's struct.
+pub const BoundingBox = @import("../frame.zig").Bounds;
 pub const Color = cl.Color;
 pub const RenderCommand = cl.RenderCommand;
 pub const RenderCommandType = cl.RenderCommandType;
@@ -210,9 +211,7 @@ pub const Driver = struct {
     /// Return the current geometry for a stable ID.
     pub fn box(self: *Driver, id: []const u8) ?BoundingBox {
         _ = self;
-        const data = cl.getElementData(cl.getElementId(id));
-        if (!data.found) return null;
-        return data.bounding_box;
+        return frame_mod.bounds(frame_mod.clayId(id));
     }
 
     pub fn exists(self: *Driver, id: []const u8) bool {

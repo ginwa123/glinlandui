@@ -42,7 +42,7 @@ const Color = glinlandui.Color;
 const components = glinlandui.components;
 const props = glinlandui.props;
 const registry = components.click_registry;
-const cl = glinlandui.zclay;
+const frame = glinlandui.frame;
 
 // ---- Palette (app-local; components stay theme-neutral) ----
 
@@ -553,7 +553,7 @@ fn rowChildren(ctx: *RowCtx) void {
         });
         // One handler for all 20 keys: dispatch passes the grid index.
         registry.registerZCursor(
-            cl.getElementId(KEY_IDS[i]),
+            frame.clayId(KEY_IDS[i]),
             onKeyPress,
             ctx.app,
             i,
@@ -722,10 +722,10 @@ fn captureCommands(
     w: u32,
     h: u32,
     opt: *glinlandui.frame.FrameOptions,
-) ![]const glinlandui.zclay.RenderCommand {
+) ![]const glinlandui.RenderCommand {
     const Sink = struct {
-        var commands: []const glinlandui.zclay.RenderCommand = &.{};
-        fn probe(_: ?*anyopaque, cmds: []const glinlandui.zclay.RenderCommand, _: u32, _: u32) void {
+        var commands: []const glinlandui.RenderCommand = &.{};
+        fn probe(_: ?*anyopaque, cmds: []const glinlandui.RenderCommand, _: u32, _: u32) void {
             commands = cmds;
         }
     };
@@ -1043,7 +1043,7 @@ test "declaring the app emits the display, every key and the row boxes" {
     const Rec = struct {
         var rects: usize = 0;
         var texts: usize = 0;
-        fn probe(_: ?*anyopaque, cmds: []const glinlandui.zclay.RenderCommand, _: u32, _: u32) void {
+        fn probe(_: ?*anyopaque, cmds: []const glinlandui.RenderCommand, _: u32, _: u32) void {
             for (cmds) |c| switch (c.command_type) {
                 .rectangle => rects += 1,
                 .text => texts += 1,
@@ -1087,10 +1087,7 @@ test "a click on a declared key fires its indexed handler" {
 
     // Click the "7" key (row 1, col 0) at its own center, the same way
     // dispatch.pointerEvent does on a release.
-    const eid = cl.getElementId(KEY_IDS[4]);
-    const data = cl.getElementData(eid);
-    try std.testing.expect(data.found);
-    const bb = data.bounding_box;
+    const bb = frame.bounds(frame.clayId(KEY_IDS[4])) orelse return error.TestUnexpectedResult;
     try std.testing.expect(registry.dispatchClick(
         bb.x + bb.width * 0.5,
         bb.y + bb.height * 0.5,
@@ -1116,9 +1113,7 @@ test "the keypad lays out as five rows of four, without overlap" {
     host.frame(360, 440);
 
     for (KEY_IDS, 0..) |id, i| {
-        const data = cl.getElementData(cl.getElementId(id));
-        try std.testing.expect(data.found);
-        const bb = data.bounding_box;
+        const bb = frame.bounds(frame.clayId(id)) orelse return error.TestUnexpectedResult;
         // Fixed-size keys inside the window.
         try std.testing.expectApproxEqAbs(@as(f32, @floatFromInt(key_w)), bb.width, 1.0);
         try std.testing.expectApproxEqAbs(@as(f32, @floatFromInt(key_h)), bb.height, 1.0);
@@ -1126,7 +1121,7 @@ test "the keypad lays out as five rows of four, without overlap" {
         const col = i % cols;
         const row = i / cols;
         if (col > 0) {
-            const left = cl.getElementData(cl.getElementId(KEY_IDS[i - 1])).bounding_box;
+            const left = frame.bounds(frame.clayId(KEY_IDS[i - 1])).?;
             // Same row, strictly to the right of its left neighbour.
             try std.testing.expect(bb.x > left.x);
             try std.testing.expectApproxEqAbs(left.y, bb.y, 0.01);
@@ -1137,7 +1132,7 @@ test "the keypad lays out as five rows of four, without overlap" {
             );
         }
         if (row > 0) {
-            const above = cl.getElementData(cl.getElementId(KEY_IDS[i - cols])).bounding_box;
+            const above = frame.bounds(frame.clayId(KEY_IDS[i - cols])).?;
             try std.testing.expect(bb.y > above.y);
         }
     }
@@ -1156,9 +1151,9 @@ test "the keypad lays out as five rows of four, without overlap" {
 /// unambiguous inside one frame's command list.
 const render = glinlandui.render;
 
-/// `cl.Color` is `[4]f32`, which has no `==`/`!=` operator, so
+/// `[4]f32` is `[4]f32`, which has no `==`/`!=` operator, so
 /// inequality goes through an element-wise compare.
-fn colorDiffers(a: cl.Color, b: cl.Color) bool {
+fn colorDiffers(a: [4]f32, b: [4]f32) bool {
     for (a, b) |x, y| {
         if (x != y) return true;
     }
@@ -1168,13 +1163,13 @@ fn colorDiffers(a: cl.Color, b: cl.Color) bool {
 const DISPLAY_FONT: u16 = 34;
 const EXPR_FONT: u16 = 14;
 
-fn cmdText(cmd: cl.RenderCommand) ?[]const u8 {
+fn cmdText(cmd: glinlandui.RenderCommand) ?[]const u8 {
     const td = cmd.render_data.text;
     return td.string_contents.chars[0..@intCast(td.string_contents.length)];
 }
 
 /// The big display string as the view emits it (null when absent).
-fn displayString(cmds: []const cl.RenderCommand) ?[]const u8 {
+fn displayString(cmds: []const glinlandui.RenderCommand) ?[]const u8 {
     for (cmds) |c| {
         if (c.command_type != .text) continue;
         const td = c.render_data.text;
@@ -1185,7 +1180,7 @@ fn displayString(cmds: []const cl.RenderCommand) ?[]const u8 {
 
 /// The "12 +" line, which the view omits entirely when no operation is
 /// pending — so its presence is itself a reactive signal.
-fn expressionString(cmds: []const cl.RenderCommand) ?[]const u8 {
+fn expressionString(cmds: []const glinlandui.RenderCommand) ?[]const u8 {
     for (cmds) |c| {
         if (c.command_type != .text) continue;
         const td = c.render_data.text;
@@ -1194,7 +1189,7 @@ fn expressionString(cmds: []const cl.RenderCommand) ?[]const u8 {
     return null;
 }
 
-fn displayColor(cmds: []const cl.RenderCommand) ?cl.Color {
+fn displayColor(cmds: []const glinlandui.RenderCommand) ?[4]f32 {
     for (cmds) |c| {
         if (c.command_type != .text) continue;
         const td = c.render_data.text;
@@ -1203,7 +1198,7 @@ fn displayColor(cmds: []const cl.RenderCommand) ?cl.Color {
     return null;
 }
 
-fn textCount(cmds: []const cl.RenderCommand) usize {
+fn textCount(cmds: []const glinlandui.RenderCommand) usize {
     var n: usize = 0;
     var i: usize = 0;
     while (i < cmds.len) : (i += 1) {
@@ -1213,10 +1208,10 @@ fn textCount(cmds: []const cl.RenderCommand) usize {
 }
 
 /// Fill color of the rectangle belonging to keypad key `index`.
-fn keyFill(cmds: []const cl.RenderCommand, index: usize) ?cl.Color {
+fn keyFill(cmds: []const glinlandui.RenderCommand, index: usize) ?[4]f32 {
     for (cmds) |c| {
         if (c.command_type != .rectangle) continue;
-        if (c.id == cl.getElementId(KEY_IDS[index]).id) {
+        if (c.id == frame.clayId(KEY_IDS[index]).id) {
             return c.render_data.rectangle.background_color;
         }
     }
@@ -1224,9 +1219,9 @@ fn keyFill(cmds: []const cl.RenderCommand, index: usize) ?cl.Color {
 }
 
 const Capture = struct {
-    var cmds: []const cl.RenderCommand = &.{};
+    var cmds: []const glinlandui.RenderCommand = &.{};
 
-    fn probe(_: ?*anyopaque, c: []const cl.RenderCommand, _: u32, _: u32) void {
+    fn probe(_: ?*anyopaque, c: []const glinlandui.RenderCommand, _: u32, _: u32) void {
         cmds = c;
     }
 };
@@ -1234,7 +1229,7 @@ const Capture = struct {
 /// Run one frame through the Host's normal path and return its commands.
 /// NOTE: the returned slice is owned by the Clay arena and stays valid
 /// only until the next frame — assert before calling again.
-fn drawFrame(host: *glinlandui.host.Host) []const cl.RenderCommand {
+fn drawFrame(host: *glinlandui.host.Host) []const glinlandui.RenderCommand {
     var opt = glinlandui.frame.FrameOptions{};
     opt.probe = Capture.probe;
     opt.probe_user_data = null;
@@ -1341,12 +1336,12 @@ test "a keypad click is visible in the next frame" {
     host.frame(360, 440);
 
     // Press "7" the way dispatch.pointerEvent does, then redraw.
-    const bb = cl.getElementData(cl.getElementId(KEY_IDS[4])).bounding_box;
+    const bb = frame.bounds(frame.clayId(KEY_IDS[4])).?;
     try std.testing.expect(registry.dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
     try std.testing.expectEqualStrings("7", displayString(drawFrame(&host)).?);
 
     // Then "8", one column right, on a freshly laid-out frame.
-    const bb8 = cl.getElementData(cl.getElementId(KEY_IDS[5])).bounding_box;
+    const bb8 = frame.bounds(frame.clayId(KEY_IDS[5])).?;
     try std.testing.expect(registry.dispatchClick(bb8.x + bb8.width * 0.5, bb8.y + bb8.height * 0.5));
     try std.testing.expectEqualStrings("78", displayString(drawFrame(&host)).?);
 }
@@ -1365,7 +1360,7 @@ test "the keypad repaints on hover as the pointer moves" {
     try std.testing.expectEqual(COLOR_ACCENT.toClay(), rest_eq);
 
     // Frame 2: pointer over the "8" key, whose box is known from frame 1.
-    const bb8 = cl.getElementData(cl.getElementId(KEY_IDS[5])).bounding_box;
+    const bb8 = frame.bounds(frame.clayId(KEY_IDS[5])).?;
     host.onPointerEvent(bb8.x + bb8.width * 0.5, bb8.y + bb8.height * 0.5, false, 0);
     const hovered = drawFrame(&host);
     // Only the hovered key changes fill; its neighbours do not.

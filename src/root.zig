@@ -4,8 +4,11 @@ const builtin = @import("builtin");
 // The composition root, exposed so an APPLICATION can reach the two things that genuinely differ between platforms: `platform.allocator` and.
 pub const platform = @import("platform.zig");
 
-// Clay bindings re-export: ui consumers must use `glinlandui.zclay` (not a second `@import("zclay")`) so Clay types crossing the library boundary.
-pub const zclay = @import("zclay");
+// The render command a frame emits. An app never builds one: a test probe reads them, and the components do the drawing.
+pub const RenderCommand = @import("zclay").RenderCommand;
+
+// The id a component is declared under. A caller hands one to `frame.bounds`; it never builds one by hand.
+pub const ElementId = @import("zclay").ElementId;
 
 // Core surface.
 pub const Window = platform.Window;

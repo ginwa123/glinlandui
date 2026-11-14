@@ -19,7 +19,6 @@ const box_mod = components.box;
 const text_mod = components.text;
 const button = components.button;
 const scroll_mod = components.scroll;
-const cl = glinlandui.zclay;
 const table = glinlandui.table;
 
 // ---- the data ------------------------------------------------------------------------------------------------
@@ -256,10 +255,9 @@ fn list(self: *App) void {
 
 fn listChildren(self: *App) void {
     // What is on screen decides what is declared. This is the whole trick, and it is four lines.
-    const data = cl.getScrollContainerData(cl.getElementId("lazy.scroll"));
-    const view_h: f32 = if (data.found) data.scroll_container_dimensions.h else 600;
-    // Clay's scroll position is negative going down.
-    const scroll_y: f32 = if (data.found) @max(-data.scroll_position.y, 0) else 0;
+    const v = scroll_mod.view("lazy.scroll");
+    const view_h: f32 = if (v.found) v.height else 600;
+    const scroll_y: f32 = v.y;
 
     const vis = table.visible(.{
         .total_rows = row_count,
@@ -299,26 +297,35 @@ fn listChildren(self: *App) void {
     }
 }
 
-// One row, declared with raw Clay so its id can be `IDI` (numeric) and its two labels sit inside the same element: ten thousand rows would be ten
+// One row: the row box with its hover colour, and the two labels inside it. Only the visible rows are declared.
+const RowCtx = struct {
+    index: usize,
+    name: []const u8,
+    meta: []const u8,
+};
 
-// thousand formatted id strings otherwise.
 fn row(self: *App, index: usize) void {
-    const name = self.label("row {d: >5}", .{index});
-    const meta = self.label("user{d}@example.com   {d}.{d:0>2}", .{ index, index % 977, index % 100 });
-    cl.UI()(.{
-        .id = .IDI("lazy.row", @intCast(index)),
-        .layout = .{
-            .direction = .left_to_right,
-            .sizing = .{ .w = .grow, .h = .fixed(row_h) },
-            .padding = .axes(6, 8),
-            .child_alignment = .{ .x = .left, .y = .center },
-            .child_gap = 16,
-        },
-        .background_color = (if (cl.hovered()) Color.hexC("#22222c") else if (index % 2 == 0) bg_row else bg_row_alt).toClay(),
-    })({
-        cl.text(name, .{ .font_size = 13, .color = fg.toClay() });
-        cl.text(meta, .{ .font_size = 13, .color = fg_dim.toClay() });
-    });
+    const ctx = RowCtx{
+        .index = index,
+        .name = self.label("row {d: >5}", .{index}),
+        .meta = self.label("user{d}@example.com   {d}.{d:0>2}", .{ index, index % 977, index % 100 }),
+    };
+    box_mod.box(.{
+        .id = props.Id.at("lazy.row", index),
+        .direction = .row,
+        .w = .grow,
+        .h = .{ .fixed = row_h },
+        .pad = props.Pad.axes(6, 8),
+        .gap = 16,
+        .child_align = .{ .x = .left, .y = .center },
+        .bg = if (index % 2 == 0) bg_row else bg_row_alt,
+        .hover_bg = Color.hexC("#22222c"),
+    }, ctx, rowChildren);
+}
+
+fn rowChildren(ctx: RowCtx) void {
+    text_mod.label(.{ .label = .{ .text = ctx.name, .size = 13, .color = fg } });
+    text_mod.label(.{ .label = .{ .text = ctx.meta, .size = 13, .color = fg_dim } });
 }
 
 fn noChildren(_: *App) void {}
@@ -492,14 +499,14 @@ fn bench(gpa: std.mem.Allocator, app: *App, frames: usize, width: u32, height: u
     for (steady) |d| total += d;
     const avg_ms = @as(f32, @floatFromInt(@divTrunc(total, @as(i64, @intCast(steady.len))))) / 1_000_000.0;
 
-    const data = cl.getScrollContainerData(cl.getElementId("lazy.scroll"));
-    if (data.found) {
+    const v = scroll_mod.view("lazy.scroll");
+    if (v.found) {
         std.debug.print("  viewport {d:.0} x {d:.0}   content {d:.0}   scroll {d:.0},{d:.0}\n", .{
-            data.scroll_container_dimensions.w,
-            data.scroll_container_dimensions.h,
-            data.content_dimensions.h,
-            data.scroll_position.x,
-            data.scroll_position.y,
+            v.width,
+            v.height,
+            v.content_height,
+            -v.x,
+            -v.y,
         });
     }
     if (ui_row_box(0)) |b| {
@@ -514,7 +521,7 @@ fn bench(gpa: std.mem.Allocator, app: *App, frames: usize, width: u32, height: u
     const max_ms = percentile(steady, 1.0);
     const cold_ms = @as(f32, @floatFromInt(cold_ns)) / 1_000_000.0;
     // The offset the run ended at: the work every CI platform must reproduce, because the scroll path is frame-count driven, not clock driven.
-    const scroll_y: f32 = if (data.found) data.scroll_position.y else 0;
+    const scroll_y: f32 = -v.y;
 
     std.debug.print(
         \\LAZY SCROLL BENCH  {d} rows, {d} frames, {d}x{d} at {d}x scale
@@ -549,10 +556,9 @@ fn bench(gpa: std.mem.Allocator, app: *App, frames: usize, width: u32, height: u
 }
 
 // The box of the first declared row, so a bench can prove the rows are on screen and not only declared.
-fn ui_row_box(index: usize) ?glinlandui.zclay.BoundingBox {
-    const d = glinlandui.zclay.getElementData(glinlandui.zclay.ElementId.IDI("lazy.row", @intCast(index)));
-    if (!d.found) return null;
-    return d.bounding_box;
+fn ui_row_box(index: usize) ?glinlandui.frame.Bounds {
+    const id = glinlandui.frame.elementId("lazy.row", index);
+    return glinlandui.frame.bounds(glinlandui.frame.clayId(id));
 }
 
 fn percentile(sorted: []const i64, p: f64) f32 {

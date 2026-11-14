@@ -97,10 +97,10 @@ fn captureCommands(
     w: u32,
     h: u32,
     opt: *glinlandui.frame.FrameOptions,
-) ![]const glinlandui.zclay.RenderCommand {
+) ![]const glinlandui.RenderCommand {
     const Sink = struct {
-        var commands: []const glinlandui.zclay.RenderCommand = &.{};
-        fn probe(_: ?*anyopaque, cmds: []const glinlandui.zclay.RenderCommand, _: u32, _: u32) void {
+        var commands: []const glinlandui.RenderCommand = &.{};
+        fn probe(_: ?*anyopaque, cmds: []const glinlandui.RenderCommand, _: u32, _: u32) void {
             commands = cmds;
         }
     };

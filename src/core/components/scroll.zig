@@ -85,6 +85,34 @@ pub fn updateScroll(dx: f32, dy: f32, dt: f32) void {
     cl.updateScrollContainers(false, .{ .x = dx / frame_mod.wheel_factor, .y = dy / frame_mod.wheel_factor }, dt);
 }
 
+/// What a scroll container is showing this frame, in logical units.
+pub const View = struct {
+    found: bool = false,
+    /// Scroll offset, positive going right.
+    x: f32 = 0,
+    /// Scroll offset, positive going down.
+    y: f32 = 0,
+    width: f32 = 0,
+    height: f32 = 0,
+    content_width: f32 = 0,
+    content_height: f32 = 0,
+};
+
+/// Read a container's offset, viewport and content, so a virtualised list never touches Clay's own struct.
+pub fn view(id: []const u8) View {
+    const data = cl.getScrollContainerData(cl.getElementId(id));
+    if (!data.found) return .{};
+    return .{
+        .found = true,
+        .x = @max(-data.scroll_position.x, 0),
+        .y = @max(-data.scroll_position.y, 0),
+        .width = data.scroll_container_dimensions.w,
+        .height = data.scroll_container_dimensions.h,
+        .content_width = data.content_dimensions.w,
+        .content_height = data.content_dimensions.h,
+    };
+}
+
 /// Programmatic scroll: nudge the container's scroll position directly (positive dy scrolls down, matching Wayland axis coords — negated internally for.
 pub fn scrollBy(id: []const u8, dx: f32, dy: f32) void {
     nudgeClamped(id, .both, dx, dy);
