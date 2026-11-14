@@ -207,8 +207,11 @@ pub const Window = struct {
                 return;
             }
             const box = self.diffBox(sf);
-            self.diff_prints += 1;
-            std.log.info("FRAME CHANGED {d} px  x {d}..{d}  y {d}..{d}  cmds={d}", .{ box.count, box.min_x, box.max_x, box.min_y, box.max_y, frame_mod.lastCommandCount() });
+            // A small change is the interesting one: a whole-area repaint is scrolling, a row or a column is a blink.
+            if (box.count * 20 < n) {
+                self.diff_prints += 1;
+                std.log.info("FRAME CHANGED {d} px  x {d}..{d}  y {d}..{d}  cmds={d}", .{ box.count, box.min_x, box.max_x, box.min_y, box.max_y, frame_mod.lastCommandCount() });
+            }
         }
         if (comparable and frame_mod.commandsRepeated() and self.diff_prints < 50) {
             const box = self.diffBox(sf);
