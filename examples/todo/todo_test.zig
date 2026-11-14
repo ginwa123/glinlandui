@@ -46,7 +46,7 @@ test "typing and pressing Enter adds a row to the model and to the frame" {
 
     const state = app.vm().uiState();
     try std.testing.expectEqual(@as(usize, 1), state.count);
-    try std.testing.expectEqualStrings("buy milk", state.items()[0].title.slice());
+    try std.testing.expectEqualStrings("buy milk", state.items()[0].text());
     // The intent took the draft, so the field is empty again.
     try std.testing.expectEqualStrings("", app.field.editor.text());
 
@@ -93,7 +93,7 @@ test "Delete removes its own row and does not toggle it" {
 
     const state = app.vm().uiState();
     try std.testing.expectEqual(@as(usize, 1), state.count);
-    try std.testing.expectEqualStrings("one", state.items()[0].title.slice());
+    try std.testing.expectEqualStrings("one", state.items()[0].text());
     // The button won the hit test, so the row underneath it never saw the click.
     try std.testing.expect(!state.items()[0].done);
     try std.testing.expect(!driver.hasText("two"));

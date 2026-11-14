@@ -50,7 +50,7 @@ test "add trims, appends, and says it took the draft" {
 
     const state = vm.uiState();
     try std.testing.expectEqual(@as(usize, 1), state.count);
-    try std.testing.expectEqualStrings("Buy milk", state.items()[0].title.slice());
+    try std.testing.expectEqualStrings("Buy milk", state.items()[0].text());
 }
 
 test "add on a blank title publishes nothing" {
@@ -71,5 +71,5 @@ test "remove and toggle are intents over the index" {
 
     vm.remove(0);
     try std.testing.expectEqual(@as(usize, 1), vm.uiState().count);
-    try std.testing.expectEqualStrings("two", vm.uiState().items()[0].title.slice());
+    try std.testing.expectEqualStrings("two", vm.uiState().items()[0].text());
 }

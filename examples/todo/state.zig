@@ -7,40 +7,30 @@ const std = @import("std");
 pub const max_title: usize = 96;
 pub const max_todos: usize = 64;
 
-// An owned, fixed-capacity string. Kotlin's `String` is immutable and owned by the state; this is its Zig shape.
-pub const Text = struct {
-    bytes: [max_title]u8 = [_]u8{0} ** max_title,
-    len: usize = 0,
+// A title is a zero-terminated array — Zig's own way to carry a length with the bytes, read back with `std.mem.sliceTo`.
+pub const Title = [max_title:0]u8;
 
-    pub fn from(s: []const u8) Text {
-        var t = Text{};
-        t.set(s);
-        return t;
-    }
+// An empty title, so a `Todo` needs no initialiser.
+pub const empty_title: Title = .{0} ** max_title;
 
-    // Copy `s` in, truncating at capacity: a value type cannot fail to allocate, so it truncates instead.
-    pub fn set(self: *Text, s: []const u8) void {
-        const n = @min(s.len, self.bytes.len);
-        @memcpy(self.bytes[0..n], s[0..n]);
-        self.len = n;
-    }
+// Copy `s` in, truncating at capacity: a value type cannot fail to allocate, so it truncates instead.
+fn setTitle(dst: *Title, s: []const u8) void {
+    const n = @min(s.len, max_title);
+    @memcpy(dst[0..n], s[0..n]);
+    dst[n] = 0;
+}
 
-    pub fn slice(self: *const Text) []const u8 {
-        return self.bytes[0..self.len];
-    }
-
-    pub fn eql(a: Text, b: Text) bool {
-        return std.mem.eql(u8, a.slice(), b.slice());
-    }
-};
-
-// One todo. `title` is owned by the value, so a copy of the state owns its own text.
+// One todo. The title is owned by the value, so a copy of the state owns its own text.
 pub const Todo = struct {
-    title: Text = .{},
+    title: Title = empty_title,
     done: bool = false,
 
+    pub fn text(self: *const Todo) []const u8 {
+        return std.mem.sliceTo(&self.title, 0);
+    }
+
     pub fn eql(a: Todo, b: Todo) bool {
-        return a.done == b.done and Text.eql(a.title, b.title);
+        return a.done == b.done and std.mem.eql(u8, a.text(), b.text());
     }
 };
 
@@ -66,7 +56,7 @@ pub const TodoUiState = struct {
     pub fn withTodo(self: TodoUiState, title: []const u8) TodoUiState {
         var next = self;
         if (next.count >= max_todos) return next;
-        next.todos[next.count] = .{ .title = Text.from(title) };
+        setTitle(&next.todos[next.count].title, title);
         next.count += 1;
         return next;
     }
@@ -111,8 +101,15 @@ test "a fresh state is empty, and equals another fresh one" {
 test "adding a todo grows the count and keeps the title" {
     const state = (TodoUiState{}).withTodo("Buy milk");
     try std.testing.expectEqual(@as(usize, 1), state.count);
-    try std.testing.expectEqualStrings("Buy milk", state.items()[0].title.slice());
+    try std.testing.expectEqualStrings("Buy milk", state.items()[0].text());
     try std.testing.expect(!state.items()[0].done);
+}
+
+test "a title is truncated at capacity, and stays terminated" {
+    const long = "x" ** (max_title + 8);
+    const state = (TodoUiState{}).withTodo(long);
+    try std.testing.expectEqual(max_title, state.items()[0].text().len);
+    try std.testing.expectEqual(@as(u8, 0), state.items()[0].title[max_title]);
 }
 
 test "removing a row closes the gap and leaves the rest in order" {
@@ -123,8 +120,8 @@ test "removing a row closes the gap and leaves the rest in order" {
     state = state.withoutTodo(1);
 
     try std.testing.expectEqual(@as(usize, 2), state.count);
-    try std.testing.expectEqualStrings("one", state.items()[0].title.slice());
-    try std.testing.expectEqualStrings("three", state.items()[1].title.slice());
+    try std.testing.expectEqualStrings("one", state.items()[0].text());
+    try std.testing.expectEqualStrings("three", state.items()[1].text());
 }
 
 test "toggling flips exactly one row, and an index out of range is a no-op" {

@@ -181,7 +181,7 @@ fn renderRow(scope: *Scope, todo: state_mod.Todo, index: usize) void {
     });
     // The state is a value and this returns before Clay draws, so the run is copied into the frame's scratch.
     text_mod.label(.{
-        .str = frame.formatText("{s}", .{todo.title.slice()}),
+        .str = frame.formatText("{s}", .{todo.text()}),
         .font_size = t.type_scale.body,
         .color = if (todo.done) t.colors.text_done else t.colors.text,
     });
