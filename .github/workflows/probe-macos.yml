@@ -1,0 +1,28 @@
+name: Probe macOS runners
+
+# TEMPORARY. Every macOS job in ci.yml is cancelled by GitHub before a runner is
+# assigned (0 steps, on push and on dispatch alike), while the Linux and Windows
+# legs run normally. This workflow answers one question: is it ALL macOS labels,
+# or only `macos-14`? Delete it once the answer is known.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: probe ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-13, macos-14, macos-15, macos-latest]
+    steps:
+      - name: Which machine is this
+        run: |
+          sw_vers
+          uname -m
+          echo "runner: ${{ matrix.os }}"
