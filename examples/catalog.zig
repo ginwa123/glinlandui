@@ -605,6 +605,15 @@ fn dropdownBody(self: *App) void {
 }
 
 fn dropdownWrapChildren(self: *App) void {
+    // The field is the filter: the rows are whatever matches what has been typed into it.
+    var shown: [demo_options.len][]const u8 = undefined;
+    var n: usize = 0;
+    for (demo_options) |option| {
+        if (dropdown_mod.matches(self.dd_query[0..self.dd_len], option)) {
+            shown[n] = option;
+            n += 1;
+        }
+    }
     dropdown_mod.dropdown(.{
         .field_id = "catalog.dd.field",
         .list_id = "catalog.dd.list",
@@ -622,7 +631,7 @@ fn dropdownWrapChildren(self: *App) void {
         .border_color = c.divider,
         .on_select = onOption,
         .ctx = self,
-    }, &demo_options, self, optionRow);
+    }, shown[0..n], self, optionRow);
 }
 
 fn optionRow(self: *App, item: []const u8, index: usize) void {
