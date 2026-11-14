@@ -62,6 +62,7 @@ zig build run               # the demo app  (needs a Wayland display)
 zig build run-calculator    # the calculator example (needs a Wayland display)
 zig build run-todo          # the MVVM todo example — state, ViewModel, view, setContent
 zig build run-lazy-scroll   # 10,000 virtualised rows, with a live frame-rate meter
+zig build run-catalog       # every component on one screen, in the kit's palette
 
 # No display? Both fall back to headless rendering and report painted pixels:
 env WAYLAND_DISPLAY= ./zig-out/bin/glinlandui-calculator

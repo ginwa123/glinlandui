@@ -481,6 +481,43 @@ pub fn build(b: *std.Build) void {
         todo_test_step.dependOn(&b.addRunArtifact(todo_e2e_test.?).step);
     }
 
+    // ---- Example app: the component catalog ---- Every widget the toolkit ships on one screen, in the kit's palette. It is the executable form of the UI.
+    var catalog_test: ?*std.Build.Step.Compile = null;
+    if (calc_supported) {
+        const catalog = b.addExecutable(.{
+            .name = "glinlandui-catalog",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/catalog.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "glinlandui", .module = mod },
+                },
+            }),
+        });
+        b.installArtifact(catalog);
+
+        const run_catalog_step = b.step("run-catalog", "Run the component catalog example");
+        const run_catalog = b.addRunArtifact(catalog);
+        run_catalog_step.dependOn(&run_catalog.step);
+        run_catalog.step.dependOn(b.getInstallStep());
+        if (b.args) |args| {
+            run_catalog.addArgs(args);
+        }
+
+        // A separate test root over the same file, exactly as the calculator does.
+        catalog_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/catalog.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "glinlandui", .module = mod },
+                },
+            }),
+        });
+    }
+
     // The parity suite is a NATIVE concern: a wasm target has no test runner here, and `-Dtarget=wasm32-freestanding` is for shipping the webapp, not for.
     var run_mod_tests: ?*std.Build.Step.Run = null;
     var run_exe_tests: ?*std.Build.Step.Run = null;
@@ -556,6 +593,9 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(dlg).step);
     }
     if (todo_test) |t| {
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+    if (catalog_test) |t| {
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
     if (todo_e2e_test) |t| {

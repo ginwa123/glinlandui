@@ -596,8 +596,8 @@ pub fn TextField(field: *Field) void {
             });
             if (e < draft.len) cl.text(draft[e..], .{ .font_size = field.font_size, .color = fg });
         } else {
-            // One run for the whole value, with the caret floated over it: a caret in the flow takes a pixel of the text.
-            cl.text(draft, .{ .font_size = field.font_size, .color = fg });
+            // One run for the value, caret floated over it; an empty one draws a space so `.fit` keeps a line.
+            cl.text(if (draft.len == 0) " " else draft, .{ .font_size = field.font_size, .color = fg });
             if (blink_on) caretBar(field, draft);
         }
     });
