@@ -113,11 +113,41 @@ Two different things are asserted, and they are deliberately not the same thing:
   several times slower than a developer machine, so this is a regression gate rather than a
   144 Hz claim, and it is never compared across platforms.
 
-Pixel checksums are NOT part of it: the three platforms use different fonts, so the glyphs differ
-by design. What is comparable is the layout and the scroll, not the ink.
+The bench's own pixel checksum is NOT part of it — it is a smoke signal, not a contract. The ink is
+gated separately and much more strictly by `golden_test.zig`, which is comparable on every platform
+because the toolkit embeds its own typeface.
 
 Changing the bench — the frame count, the size, the scroll speed — means changing
 `ci/lazy_scroll_bench.expected` in the same commit. Those numbers are contractual.
+
+## Cross-platform parity
+
+The app code is the same everywhere (`main` -> `Window.init` -> `Host.init` -> `content()`). What
+differs is the backend, so parity is enforced at four **seams**, each with its own gate. A backend
+that fails a seam is a bug in that backend, never a reason to fork the app.
+
+| seam | invariant | gate |
+|---|---|---|
+| layout | the Clay command stream | `golden_test.zig` (via the composite scene) |
+| raster | identical RGBA bytes for a fixed command list | `golden_test.zig` + `golden_expected.zig` |
+| scale | a W x H logical window at scale S rasterizes W*S x H*S pixels | `src/core/scale.zig`, `ci/check_render_scale.sh` |
+| present | displayed == written (colour, byte order) | `ci/check_macos_colors.sh`, `ci/check_windows_colors.sh` |
+
+**One typeface.** `src/assets/IBMPlexMono-Regular.ttf` (OFL, license beside it) is embedded via
+`@embedFile` and tried FIRST by `Font.loadDefault`. Without it, every platform measured and drew with
+its own system font and no pixel comparison was meaningful. The system list stays as the fallback for
+a face stb cannot parse. The wasm build embeds the same file (`detectFont()` in `build.zig`).
+
+**The raster gate is the reference a GPU backend must match.** `golden_test.zig` renders four fixed
+scenes at 200x120, 1x, and compares the SHA-256 of every RGBA byte against `golden_expected.zig`. It
+runs inside `zig build test`, so it runs on all three CI legs for free. A mismatch prints the actual
+hash and names the file to re-record it in — re-recording is a deliberate act that belongs in the
+commit that changes the pixels.
+
+**`ci/render_scale.expected` is a ratchet.** It lists the backends that are known NOT to honour the
+display scale. The gate fails both when an unlisted backend stops honouring it (a regression) and
+when a listed backend starts honouring it (a stale entry). So the list can only shrink, and deleting
+a line is the proof a fix landed.
 
 ## Scrolling and repaint
 
