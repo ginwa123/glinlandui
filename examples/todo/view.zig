@@ -9,6 +9,7 @@ const input_mod = glinlandui.components.input;
 const list_mod = glinlandui.components.list;
 const scroll_mod = glinlandui.components.scroll;
 const frame = glinlandui.frame;
+const props = glinlandui.props;
 
 const state_mod = @import("state.zig");
 const view_model = @import("view_model.zig");
@@ -48,7 +49,7 @@ pub const Scope = struct {
 // `@Composable fun TodoScreen(vm: TodoViewModel = viewModel())`
 pub fn TodoScreen(scope: *Scope) void {
     box_mod.box(.{
-        .id = "todo.root",
+        .id = .{ .text = "todo.root" },
         .w = .grow,
         .h = .grow,
         .direction = .column,
@@ -65,10 +66,10 @@ fn body(scope: *Scope) void {
 // `Row(Modifier.padding(16.dp)) { TextField(.., Modifier.weight(1f)); Button { Text("Add") } }`
 fn header(scope: *Scope) void {
     box_mod.box(.{
-        .id = "todo.header",
+        .id = .{ .text = "todo.header" },
         .direction = .row,
         .w = .grow,
-        .pad = 16,
+        .pad = props.Pad.all(16),
         .gap = 8,
         .child_align = .{ .y = .center },
     }, scope, headerChildren);
@@ -77,7 +78,7 @@ fn header(scope: *Scope) void {
 fn headerChildren(scope: *Scope) void {
     const t = scope.theme;
     input_mod.liveField(.{
-        .id = scope.field.id,
+        .id = .{ .text = scope.field.id },
         .font_size = t.type_scale.body,
         .bg = t.colors.surface,
         .fg = t.colors.text,
@@ -94,15 +95,12 @@ fn headerChildren(scope: *Scope) void {
     }, scope.field);
 
     button.button(.{
-        .id = "todo.add",
-        .label = "Add",
-        .font_size = t.type_scale.label,
+        .id = .{ .text = "todo.add" },
+        .label = .{ .text = "Add", .size = t.type_scale.label, .color = t.colors.on_primary },
         .bg = t.colors.primary,
-        .fg = t.colors.on_primary,
         .hover_bg = t.colors.primary_hover,
-        .radius = 6,
-        .pad_tb = 8,
-        .pad_lr = 16,
+        .radius = props.Radius.all(6),
+        .pad = props.Pad.axes(8, 16),
         .on_click = onAdd,
         .ctx = scope.add,
     });
@@ -118,7 +116,7 @@ fn onAdd(raw: ?*anyopaque) void {
 fn todoList(scope: *Scope) void {
     const t = scope.theme;
     scroll_mod.scroll(.{
-        .id = list_id,
+        .id = .{ .text = list_id },
         .direction = .vertical,
         .w = .grow,
         .h = .grow,
@@ -131,16 +129,12 @@ fn todoList(scope: *Scope) void {
 fn listChildren(scope: *Scope) void {
     const t = scope.theme;
     if (scope.state.count == 0) {
-        text_mod.label(.{
-            .str = "No todos yet — type one and press Enter.",
-            .font_size = t.type_scale.body,
-            .color = t.colors.text_dim,
-        });
+        text_mod.label(.{ .label = .{ .text = "No todos yet — type one and press Enter.", .size = t.type_scale.body, .color = t.colors.text_dim } });
         return;
     }
     // The engine's list owns the rows: their ids, their hover, and the click that selects one.
     list_mod.list(.{
-        .id = rows_id,
+        .id = .{ .text = rows_id },
         .row_h = row_h,
         .row_bg = t.colors.background,
         .hover_bg = t.colors.hover,
@@ -162,7 +156,7 @@ fn renderRow(scope: *Scope, todo: state_mod.Todo, index: usize) void {
     ctxs[index] = .{ .vm = scope.vm, .index = index };
 
     checkbox_mod.checkbox(.{
-        .id = frame.elementId("todo.row.check", index),
+        .id = .{ .text = frame.elementId("todo.row.check", index) },
         .checked = todo.done,
         .size = 18,
         .box_bg = t.colors.surface,
@@ -174,21 +168,17 @@ fn renderRow(scope: *Scope, todo: state_mod.Todo, index: usize) void {
     });
     // The state is a value and this returns before Clay draws, so the run is copied into the frame's scratch.
     text_mod.label(.{
-        .str = frame.formatText("{s}", .{todo.text()}),
-        .font_size = t.type_scale.body,
-        .color = if (todo.done) t.colors.text_done else t.colors.text,
+        .label = .{ .text = frame.formatText("{s}", .{todo.text()}), .size = t.type_scale.body, .color = if (todo.done) t.colors.text_done else t.colors.text },
     });
-    box_mod.spacer(frame.elementId("todo.row.spacer", index));
+    box_mod.spacer(props.Id.at("todo.row.spacer", index));
     button.button(.{
-        .id = frame.elementId("todo.row.delete", index),
-        .label = "Delete",
-        .font_size = t.type_scale.label,
+        .id = props.Id.at("todo.row.delete", index),
+        .label = .{ .text = "Delete", .size = t.type_scale.label },
         .bg = t.colors.background,
         .fg = t.colors.text_dim,
         .hover_bg = t.colors.surface_variant,
-        .radius = 6,
-        .pad_tb = 4,
-        .pad_lr = 10,
+        .radius = props.Radius.all(6),
+        .pad = props.Pad.axes(4, 10),
         .on_click = onDelete,
         .ctx = &ctxs[index],
     });
@@ -206,11 +196,11 @@ fn onDelete(raw: ?*anyopaque) void {
 
 fn footer(scope: *Scope) void {
     box_mod.box(.{
-        .id = "todo.footer",
+        .id = .{ .text = "todo.footer" },
         .w = .grow,
         .h = .{ .fixed = 26 },
         .direction = .row,
-        .pad = 8,
+        .pad = props.Pad.all(8),
         .gap = 12,
         .child_align = .{ .y = .center },
     }, scope, footerChildren);
@@ -220,14 +210,10 @@ fn footerChildren(scope: *Scope) void {
     const t = scope.theme;
     const state = &scope.state;
     text_mod.label(.{
-        .str = frame.formatText("{d} of {d} done", .{ state.doneCount(), state.count }),
-        .font_size = t.type_scale.caption,
-        .color = t.colors.text_dim,
+        .label = .{ .text = frame.formatText("{d} of {d} done", .{ state.doneCount(), state.count }), .size = t.type_scale.caption, .color = t.colors.text_dim },
     });
-    box_mod.spacer("todo.footer.spacer");
+    box_mod.spacer(.{ .text = "todo.footer.spacer" });
     text_mod.label(.{
-        .str = "Enter adds  ·  click a row to toggle",
-        .font_size = t.type_scale.caption,
-        .color = t.colors.text_done,
+        .label = .{ .text = "Enter adds  ·  click a row to toggle", .size = t.type_scale.caption, .color = t.colors.text_done },
     });
 }

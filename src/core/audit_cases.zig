@@ -13,6 +13,7 @@ const Host = @import("host.zig");
 const Driver = @import("testing/root.zig").Driver;
 const box_mod = @import("components/box.zig");
 const button = @import("components/button.zig");
+const props = @import("props.zig");
 const text_mod = @import("components/text.zig");
 const registry = @import("components/click_registry.zig");
 
@@ -82,8 +83,8 @@ test "audit case: two elements with one id are caught where they are declared" {
 
     const root = struct {
         fn declare(_: ?*anyopaque, _: u32, _: u32) void {
-            button.button(.{ .id = "dup.id", .label = "one" });
-            button.button(.{ .id = "dup.id", .label = "two" });
+            button.button(.{ .id = .{ .text = "dup.id" }, .label = .{ .text = "one" } });
+            button.button(.{ .id = .{ .text = "dup.id" }, .label = .{ .text = "two" } });
         }
     }.declare;
 
@@ -100,7 +101,7 @@ test "audit case: two elements with one id are caught where they are declared" {
 test "audit case: a click target with no element is reported" {
     const root = struct {
         fn declare(_: ?*anyopaque, _: u32, _: u32) void {
-            button.button(.{ .id = "real", .label = "OK" });
+            button.button(.{ .id = .{ .text = "real" }, .label = .{ .text = "OK" } });
             registry.registerClick(cl.getElementId("never.declared"), noop, null);
         }
         fn noop(_: ?*anyopaque) void {}
@@ -113,7 +114,7 @@ test "audit case: a click target with no element is reported" {
 test "audit case: a click target with an empty box is reported" {
     const root = struct {
         fn declare(_: ?*anyopaque, _: u32, _: u32) void {
-            box_mod.box(.{ .id = "zero", .w = .{ .fixed = 0 }, .h = .{ .fixed = 0 } }, NoCtx{}, noChildren);
+            box_mod.box(.{ .id = .{ .text = "zero" }, .w = .{ .fixed = 0 }, .h = .{ .fixed = 0 } }, NoCtx{}, noChildren);
             registry.registerClick(cl.getElementId("zero"), noop, null);
         }
         fn noop(_: ?*anyopaque) void {}
@@ -127,7 +128,7 @@ test "audit case: a target that loses its own centre to a sibling is reported" {
     const root = struct {
         fn declare(_: ?*anyopaque, _: u32, _: u32) void {
             // Two overlapping targets, neither inside the other, at the same z: the click is ambiguous.
-            box_mod.box(.{ .id = "left", .w = .{ .fixed = 100 }, .h = .{ .fixed = 40 } }, NoCtx{}, noChildren);
+            box_mod.box(.{ .id = .{ .text = "left" }, .w = .{ .fixed = 100 }, .h = .{ .fixed = 40 } }, NoCtx{}, noChildren);
             cl.UI()(.{
                 .id = .ID("right"),
                 .layout = .{ .sizing = .{ .w = .fixed(100), .h = .fixed(40) } },
@@ -150,11 +151,11 @@ test "audit case: a target that loses its own centre to a sibling is reported" {
 test "audit case: a clean frame reports nothing" {
     const root = struct {
         fn declare(_: ?*anyopaque, _: u32, _: u32) void {
-            box_mod.box(.{ .id = "card", .w = .grow, .h = .grow, .direction = .column, .gap = 8, .pad = 8 }, NoCtx{}, children);
+            box_mod.box(.{ .id = .{ .text = "card" }, .w = .grow, .h = .grow, .direction = .column, .gap = 8, .pad = props.Pad.all(8) }, NoCtx{}, children);
         }
         fn children(_: NoCtx) void {
-            button.button(.{ .id = "card.ok", .label = "OK", .on_click = noop, .ctx = null });
-            text_mod.label(.{ .str = "short", .font_size = 14 });
+            button.button(.{ .id = .{ .text = "card.ok" }, .label = .{ .text = "OK" }, .on_click = noop, .ctx = null });
+            text_mod.label(.{ .label = .{ .text = "short", .size = 14 } });
         }
         fn noop(_: ?*anyopaque) void {}
     }.declare;

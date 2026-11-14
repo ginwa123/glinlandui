@@ -1,6 +1,7 @@
 // Agnostic reusable Clay scroll container (toolkit-style, library only).
 const std = @import("std");
 const cl = @import("zclay");
+const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const box_mod = @import("box.zig");
 const click_registry = @import("click_registry.zig");
@@ -20,7 +21,7 @@ pub const hthumb_index: u32 = 2;
 
 /// Toolkit-style scroll props.
 pub const ScrollProps = struct {
-    id: []const u8,
+    id: prop.Id,
     direction: Direction = .vertical,
     w: box_mod.Size = .grow,
     h: box_mod.Size = .grow,
@@ -150,12 +151,13 @@ fn toSizingAxis(s: box_mod.Size, min: f32, max: f32) cl.SizingAxis {
         .grow => if (constrained) .growMinMax(.{ .min = min, .max = max }) else .grow,
         .fixed => |v| .fixed(v),
         .percent => |v| .percent(v),
+        .clamp => |c| if (c.grow) .growMinMax(.{ .min = c.min, .max = c.max }) else .fitMinMax(.{ .min = c.min, .max = c.max }),
     };
 }
 
 /// Declare a scroll container: Clay clip element (.ID(props.id)) with the mapped sizing/padding/gap/radius, `children(ctx)` invoked inside for.
 pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void) void {
-    registerScroll(props.id, props.direction);
+    registerScroll(props.id.str(), props.direction);
     const axes = clipAxes(props.direction);
     // Content flows along the scroll axis: rows overflow horizontally, columns overflow vertically (both => column; wrap rows in a row box for horizontal.
     const dir: cl.LayoutDirection = switch (props.direction) {
@@ -170,7 +172,7 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
         .bottom = props.pad + scrollbarGutter(props, axes.h, false),
     };
     cl.UI()(.{
-        .id = .ID(props.id),
+        .id = props.id.clay(),
         .layout = .{
             .direction = dir,
             .sizing = .{
@@ -181,7 +183,7 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
             .child_gap = props.gap,
         },
         // By ID, not Clay_GetScrollOffset(): that matches the open element by a stale pointer and drops the offset when an earlier element blinks.
-        .clip = .{ .horizontal = axes.h, .vertical = axes.v, .child_offset = cl.getScrollOffsetById(cl.getElementId(props.id)) },
+        .clip = .{ .horizontal = axes.h, .vertical = axes.v, .child_offset = cl.getScrollOffsetById(props.id.clay()) },
         .background_color = if (props.bg) |b| b.toClay() else .{ 0, 0, 0, 0 },
         .corner_radius = .all(@floatFromInt(props.radius)),
         .border = if (props.border_width > 0) .{
@@ -190,9 +192,9 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
         } else .{},
     })({
         // Clip ancestry for the semantics layer: every node registered inside this container records it, so resolve() can compute what is actually visible and.
-        semantics.pushAncestor(cl.getElementId(props.id), true);
+        semantics.pushAncestor(props.id.clay(), true);
         // A target inside a scroll container answers only inside it: a row scrolled under the footer must not swallow the footer's click.
-        const viewport = cl.getElementData(cl.getElementId(props.id));
+        const viewport = cl.getElementData(props.id.clay());
         click_registry.pushClip(if (viewport.found) .{
             .x = viewport.bounding_box.x,
             .y = viewport.bounding_box.y,
@@ -205,8 +207,8 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
     });
     // The container's own node is registered AFTER the pop, so it does not list itself as an ancestor.
     semantics.register(.{
-        .id = cl.getElementId(props.id),
-        .tag = props.id,
+        .id = props.id.clay(),
+        .tag = props.id.str(),
         .role = .scroll,
         .actions = .{ .scroll = true },
         .flags = .{ .enabled = !props.disabled },
@@ -218,7 +220,7 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
 // Width a scrollbar takes out of the content on its axis: the thumb plus the margin it floats by, or zero when nothing overflows.
 fn scrollbarGutter(props: ScrollProps, axis: bool, vertical: bool) u16 {
     if (!axis or !props.show_scrollbar or props.disabled) return 0;
-    const data = cl.getScrollContainerData(cl.getElementId(props.id));
+    const data = cl.getScrollContainerData(props.id.clay());
     if (!data.found) return 0;
     const viewport = if (vertical) data.scroll_container_dimensions.h else data.scroll_container_dimensions.w;
     const content = if (vertical) data.content_dimensions.h else data.content_dimensions.w;
@@ -228,9 +230,9 @@ fn scrollbarGutter(props: ScrollProps, axis: bool, vertical: bool) u16 {
 
 /// Floating scrollbar thumbs for every overflowing scroll axis, attached to the viewport (previous-frame scroll data; first frame declares nothing —.
 fn declareScrollbars(props: ScrollProps) void {
-    const data = cl.getScrollContainerData(cl.getElementId(props.id));
+    const data = cl.getScrollContainerData(props.id.clay());
     if (!data.found) return;
-    const parent_id = cl.getElementId(props.id).id;
+    const parent_id = props.id.clay().id;
     const axes = clipAxes(props.direction);
     if (axes.v) {
         const viewport = data.scroll_container_dimensions.h;
@@ -258,7 +260,7 @@ fn declareScrollbars(props: ScrollProps) void {
                 }
                 // The attach point is the edge the bar sits against, so the margin is the whole offset: subtracting the width pushed it 8 px in.
                 cl.UI()(.{
-                    .id = .IDI(props.id, vthumb_index),
+                    .id = .IDI(props.id.str(), vthumb_index),
                     .floating = .{
                         .attach_to = .to_element_with_id,
                         .parentId = parent_id,
@@ -299,7 +301,7 @@ fn declareScrollbars(props: ScrollProps) void {
                     })({});
                 }
                 cl.UI()(.{
-                    .id = .IDI(props.id, hthumb_index),
+                    .id = .IDI(props.id.str(), hthumb_index),
                     .floating = .{
                         .attach_to = .to_element_with_id,
                         .parentId = parent_id,
@@ -328,7 +330,7 @@ fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions
 fn emptyChildren(_: void) void {}
 
 fn declareEmptyScroll() void {
-    scroll(.{ .id = "test-empty-scroll", .h = .{ .fixed = 100 } }, {}, emptyChildren);
+    scroll(.{ .id = .{ .text = "test-empty-scroll" }, .h = .{ .fixed = 100 } }, {}, emptyChildren);
 }
 
 /// Run one headless Clay frame around `declare_fn`, returning the render commands (valid until the next beginLayout).
@@ -355,7 +357,7 @@ fn countScissors(cmds: []cl.RenderCommand) usize {
 }
 
 test "ScrollProps carries neutral defaults (scrollbar on)" {
-    const p = ScrollProps{ .id = "x" };
+    const p = ScrollProps{ .id = .{ .text = "x" } };
     try std.testing.expect(p.direction == .vertical);
     try std.testing.expect(p.w == .grow);
     try std.testing.expect(p.h == .grow);
@@ -434,7 +436,7 @@ fn hChildren(_: void) void {
 }
 
 fn declareHScroll() void {
-    scroll(.{ .id = "test-h-scroll", .direction = .horizontal, .w = .{ .fixed = 200 }, .h = .{ .fixed = 60 } }, {}, hChildren);
+    scroll(.{ .id = .{ .text = "test-h-scroll" }, .direction = .horizontal, .w = .{ .fixed = 200 }, .h = .{ .fixed = 60 } }, {}, hChildren);
 }
 
 test "horizontal scroll lays content out in a row (x grows)" {
@@ -458,15 +460,15 @@ fn overflowChildren(_: void) void {
 }
 
 fn declareOverflowScroll() void {
-    scroll(.{ .id = "test-scroll", .h = .{ .fixed = 100 }, .w = .{ .fixed = 200 } }, {}, overflowChildren);
+    scroll(.{ .id = .{ .text = "test-scroll" }, .h = .{ .fixed = 100 }, .w = .{ .fixed = 200 } }, {}, overflowChildren);
 }
 
 fn declareOverflowNoBar() void {
-    scroll(.{ .id = "test-scroll-nobar", .h = .{ .fixed = 100 }, .w = .{ .fixed = 200 }, .show_scrollbar = false }, {}, overflowChildren);
+    scroll(.{ .id = .{ .text = "test-scroll-nobar" }, .h = .{ .fixed = 100 }, .w = .{ .fixed = 200 }, .show_scrollbar = false }, {}, overflowChildren);
 }
 
 fn declareFitScroll() void {
-    scroll(.{ .id = "test-scroll-fit", .h = .{ .fixed = 400 }, .w = .{ .fixed = 200 } }, {}, overflowChildren);
+    scroll(.{ .id = .{ .text = "test-scroll-fit" }, .h = .{ .fixed = 400 }, .w = .{ .fixed = 200 } }, {}, overflowChildren);
 }
 
 /// Run TWO headless frames around `declare_fn` in one Clay context and return the second frame's commands (scroll data is previous-frame).
@@ -501,7 +503,7 @@ test "fitting content declares no thumb (nothing to scroll)" {
 }
 
 fn declareOverflowHScroll() void {
-    scroll(.{ .id = "test-scroll-h", .direction = .horizontal, .w = .{ .fixed = 200 }, .h = .{ .fixed = 60 } }, {}, hChildren);
+    scroll(.{ .id = .{ .text = "test-scroll-h" }, .direction = .horizontal, .w = .{ .fixed = 200 }, .h = .{ .fixed = 60 } }, {}, hChildren);
 }
 
 test "overflowing horizontal scroll shows a bottom thumb on the second frame" {
@@ -529,7 +531,7 @@ fn scrollProbeChildren(_: void) void {
 }
 
 fn declareProbeScroll() void {
-    scroll(.{ .id = "test-scroll-probe", .h = .{ .fixed = 100 }, .w = .{ .fixed = 200 } }, {}, scrollProbeChildren);
+    scroll(.{ .id = .{ .text = "test-scroll-probe" }, .h = .{ .fixed = 100 }, .w = .{ .fixed = 200 } }, {}, scrollProbeChildren);
 }
 
 /// Two frames in one context with pointer + wheel control.

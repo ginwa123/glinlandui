@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const cl = @import("zclay");
+const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
@@ -19,7 +20,7 @@ pub const Tab = struct {
 pub const SelectFn = ?*const fn (?*anyopaque, usize) void;
 
 pub const TabsProps = struct {
-    id: []const u8,
+    id: prop.Id,
     tabs: []const Tab,
     h: u32 = 34,
     bg: Color = Color.rgb(0x1a, 0x1a, 0x1d),
@@ -45,14 +46,14 @@ fn innerId(base: []const u8, i: usize, slot: u32) cl.ElementId {
 /// Declare a tab bar.
 pub fn tabs(props: TabsProps) void {
     semantics.register(.{
-        .id = cl.getElementId(props.id),
-        .tag = props.id,
+        .id = props.id.clay(),
+        .tag = props.id.str(),
         .role = .list,
         .flags = .{ .enabled = true },
     });
 
     cl.UI()(.{
-        .id = .ID(props.id),
+        .id = props.id.clay(),
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{ .w = .grow, .h = .fixed(@floatFromInt(props.h)) },
@@ -69,7 +70,7 @@ fn tabUi(props: TabsProps, tab: Tab, i: usize) void {
     const bg = if (tab.active) props.active_bg else props.bg;
 
     cl.UI()(.{
-        .id = .IDI(props.id, @as(u32, @intCast(i + 1))),
+        .id = .IDI(props.id.str(), @as(u32, @intCast(i + 1))),
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{ .w = .fit, .h = .grow },
@@ -81,7 +82,7 @@ fn tabUi(props: TabsProps, tab: Tab, i: usize) void {
     })({
         if (tab.accent) |accent| {
             cl.UI()(.{
-                .id = innerId(props.id, i, 1),
+                .id = innerId(props.id.str(), i, 1),
                 .layout = .{ .sizing = .{ .w = .fixed(5), .h = .fixed(5) } },
                 .background_color = accent.toClay(),
                 .corner_radius = .all(3),
@@ -90,7 +91,7 @@ fn tabUi(props: TabsProps, tab: Tab, i: usize) void {
         cl.text(tab.label, .{ .font_size = 13, .color = fg.toClay() });
         if (tab.closable) {
             cl.UI()(.{
-                .id = innerId(props.id, i, 2),
+                .id = innerId(props.id.str(), i, 2),
                 .layout = .{
                     .sizing = .{ .w = .fixed(16), .h = .fixed(16) },
                     .child_alignment = .{ .x = .center, .y = .center },
@@ -104,16 +105,16 @@ fn tabUi(props: TabsProps, tab: Tab, i: usize) void {
     });
 
     semantics.register(.{
-        .id = tabId(props.id, i),
+        .id = tabId(props.id.str(), i),
         .role = .list_item,
         .flags = .{ .enabled = true, .selected = tab.active },
     });
     if (props.on_select) |cb| {
-        registry.registerZCursor(tabId(props.id, i), cb, props.ctx, i, props.click_z, .pointer);
+        registry.registerZCursor(tabId(props.id.str(), i), cb, props.ctx, i, props.click_z, .pointer);
     }
     if (tab.closable) {
         if (props.on_close) |cb| {
-            registry.registerZCursor(innerId(props.id, i, 2), cb, props.ctx, i, props.click_z, .pointer);
+            registry.registerZCursor(innerId(props.id.str(), i, 2), cb, props.ctx, i, props.click_z, .pointer);
         }
     }
 }
@@ -155,7 +156,7 @@ const sample_tabs = [_]Tab{
 };
 
 fn declareSample() void {
-    tabs(.{ .id = "tabs", .tabs = &sample_tabs });
+    tabs(.{ .id = .{ .text = "tabs" }, .tabs = &sample_tabs });
 }
 
 test "a tab bar draws a box per tab plus the container" {
@@ -177,5 +178,5 @@ test "an empty bar still declares its container" {
 }
 
 fn declareEmpty() void {
-    tabs(.{ .id = "tabs-empty", .tabs = &.{} });
+    tabs(.{ .id = .{ .text = "tabs-empty" }, .tabs = &.{} });
 }

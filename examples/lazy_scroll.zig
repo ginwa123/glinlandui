@@ -12,6 +12,7 @@
 const std = @import("std");
 const glinlandui = @import("glinlandui");
 const Color = glinlandui.Color;
+const props = glinlandui.props;
 
 const components = glinlandui.components;
 const box_mod = components.box;
@@ -160,7 +161,7 @@ const App = struct {
         }
 
         box_mod.box(.{
-            .id = "root",
+            .id = .{ .text = "root" },
             .w = .grow,
             .h = .grow,
             .direction = .column,
@@ -180,54 +181,50 @@ const App = struct {
 
 fn header(self: *App) void {
     box_mod.box(.{
-        .id = "header",
+        .id = .{ .text = "header" },
         .w = .grow,
         .h = .{ .fixed = 44 },
         .direction = .row,
         .bg = bg_head,
-        .pad = 10,
+        .pad = props.Pad.all(10),
         .gap = 12,
     }, self, headerChildren);
 }
 
 fn headerChildren(self: *App) void {
     const s = self.meter.stats();
-    text_mod.label(.{ .str = "10,000 rows", .font_size = 14, .color = fg });
+    text_mod.label(.{ .label = .{ .text = "10,000 rows", .size = 14, .color = fg } });
     text_mod.label(.{
-        .str = self.label("fps {d: >6.1}   frame {d: >5.2} ms   avg {d: >5.2}   max {d: >6.2}", .{
-            s.fps, s.last_ms, s.avg_ms, s.max_ms,
-        }),
-        .font_size = 14,
-        // Red the moment the last frame misses a 144 Hz budget, so a regression is visible at a glance.
-        .color = if (s.last_ms > budget_144_ms) fg_bad else fg_ok,
+        .label = .{
+            .text = self.label("fps {d: >6.1}   frame {d: >5.2} ms   avg {d: >5.2}   max {d: >6.2}", .{
+                s.fps, s.last_ms, s.avg_ms, s.max_ms,
+            }),
+            .size = 14,
+            // Red the moment the last frame misses a 144 Hz budget, so a regression is visible at a glance.
+            .color = if (s.last_ms > budget_144_ms) fg_bad else fg_ok,
+        },
     });
     text_mod.label(.{
-        .str = self.label("declared {d} of {d}", .{ self.declared, row_count }),
-        .font_size = 14,
-        .color = fg_dim,
+        .label = .{ .text = self.label("declared {d} of {d}", .{ self.declared, row_count }), .size = 14, .color = fg_dim },
     });
-    box_mod.spacer("header.spacer");
+    box_mod.spacer(.{ .text = "header.spacer" });
     button.button(.{
-        .id = "header.auto",
-        .label = if (self.auto) "Stop" else "Scroll",
-        .font_size = 14,
+        .id = .{ .text = "header.auto" },
+        .label = .{ .text = if (self.auto) "Stop" else "Scroll", .size = 14 },
         .bg = if (self.auto) accent else bg_button,
         .fg = fg,
         .hover_bg = bg_button_hover,
-        .pad_tb = 4,
-        .pad_lr = 14,
+        .pad = props.Pad.axes(4, 14),
         .on_click = onToggleAuto,
         .ctx = self,
     });
     button.button(.{
-        .id = "header.bottom",
-        .label = "End",
-        .font_size = 14,
+        .id = .{ .text = "header.bottom" },
+        .label = .{ .text = "End", .size = 14 },
         .bg = bg_button,
         .fg = fg,
         .hover_bg = bg_button_hover,
-        .pad_tb = 4,
-        .pad_lr = 14,
+        .pad = props.Pad.axes(4, 14),
         .on_click = onJumpBottom,
         .ctx = self,
     });
@@ -247,7 +244,7 @@ fn onJumpBottom(ctx: ?*anyopaque) void {
 
 fn list(self: *App) void {
     scroll_mod.scroll(.{
-        .id = "lazy.scroll",
+        .id = .{ .text = "lazy.scroll" },
         .direction = .vertical,
         .w = .grow,
         .h = .grow,
@@ -280,7 +277,7 @@ fn listChildren(self: *App) void {
     // scrollbar still knows how long the list is.
     if (vis.first_row > 0) {
         box_mod.box(.{
-            .id = "lazy.pad.top",
+            .id = .{ .text = "lazy.pad.top" },
             .w = .grow,
             .h = .{ .fixed = @as(f32, @floatFromInt(vis.first_row)) * row_h },
             .direction = .column,
@@ -294,7 +291,7 @@ fn listChildren(self: *App) void {
     const after = vis.first_row + vis.row_count;
     if (after < row_count) {
         box_mod.box(.{
-            .id = "lazy.pad.bottom",
+            .id = .{ .text = "lazy.pad.bottom" },
             .w = .grow,
             .h = .{ .fixed = @as(f32, @floatFromInt(row_count - after)) * row_h },
             .direction = .column,
@@ -330,12 +327,12 @@ fn noChildren(_: *App) void {}
 
 fn footer(self: *App) void {
     box_mod.box(.{
-        .id = "footer",
+        .id = .{ .text = "footer" },
         .w = .grow,
         .h = .{ .fixed = 26 },
         .direction = .row,
         .bg = bg_head,
-        .pad = 8,
+        .pad = props.Pad.all(8),
         .gap = 12,
     }, self, footerChildren);
 }
@@ -343,9 +340,7 @@ fn footer(self: *App) void {
 fn footerChildren(self: *App) void {
     _ = self;
     text_mod.label(.{
-        .str = "Space scrolls  ·  End jumps  ·  only the visible rows are declared",
-        .font_size = 12,
-        .color = fg_dim,
+        .label = .{ .text = "Space scrolls  ·  End jumps  ·  only the visible rows are declared", .size = 12, .color = fg_dim },
     });
 }
 

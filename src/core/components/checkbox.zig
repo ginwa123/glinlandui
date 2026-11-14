@@ -1,6 +1,7 @@
 // Agnostic reusable Clay checkbox (toolkit-style, library only).
 const std = @import("std");
 const cl = @import("zclay");
+const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
@@ -10,7 +11,7 @@ pub const ClickFn = ?*const fn (?*anyopaque) void;
 
 /// Toolkit-style checkbox props.
 pub const CheckboxProps = struct {
-    id: []const u8,
+    id: prop.Id,
     checked: bool = false,
     size: u32 = 20,
     radius: u32 = 4,
@@ -32,7 +33,7 @@ pub fn checkbox(props: CheckboxProps) void {
     const box_f: f32 = @floatFromInt(props.size);
     const inner_f: f32 = box_f * 0.6;
     cl.UI()(.{
-        .id = .ID(props.id),
+        .id = props.id.clay(),
         .layout = .{
             .sizing = .{
                 .w = .fixed(box_f),
@@ -62,15 +63,15 @@ pub fn checkbox(props: CheckboxProps) void {
     });
     // Semantics: `checked` is the state a test asserts on, and the node is registered even when disabled so `assertIsDisabled` can find it.
     semantics.register(.{
-        .id = cl.getElementId(props.id),
-        .tag = props.id,
+        .id = props.id.clay(),
+        .tag = props.id.str(),
         .role = .checkbox,
         .flags = .{ .enabled = !props.disabled, .checked = props.checked },
     });
     if (!props.disabled) {
         if (props.on_click) |cb| {
             // Pointer cursor: clickable checkbox.
-            registry.registerClickCursor(cl.getElementId(props.id), cb, props.ctx, .pointer);
+            registry.registerClickCursor(props.id.clay(), cb, props.ctx, .pointer);
         }
     }
 }
@@ -84,11 +85,11 @@ fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions
 }
 
 fn declareCheckbox() void {
-    checkbox(.{ .id = "test-checkbox" });
+    checkbox(.{ .id = .{ .text = "test-checkbox" } });
 }
 
 fn declareCheckedCheckbox() void {
-    checkbox(.{ .id = "test-checkbox-checked", .checked = true });
+    checkbox(.{ .id = .{ .text = "test-checkbox-checked" }, .checked = true });
 }
 
 /// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
@@ -127,7 +128,7 @@ test "checkbox emits box rectangle and no text; checked adds inner check" {
 }
 
 test "CheckboxProps carries neutral defaults" {
-    const p = CheckboxProps{ .id = "x" };
+    const p = CheckboxProps{ .id = .{ .text = "x" } };
     try std.testing.expect(!p.checked);
     try std.testing.expectEqual(@as(u32, 20), p.size);
     try std.testing.expectEqual(@as(u32, 4), p.radius);
@@ -158,7 +159,7 @@ fn boxColor(checked: bool) !cl.Color {
     cl.setMeasureTextFunction(void, {}, stubMeasure);
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
-    checkbox(.{ .id = "test-checkbox-bg", .checked = checked });
+    checkbox(.{ .id = .{ .text = "test-checkbox-bg" }, .checked = checked });
     const cmds = cl.endLayout();
     const bg = rectColorForId(cmds, cl.getElementId("test-checkbox-bg").id);
     try std.testing.expect(bg != null);
@@ -185,7 +186,7 @@ fn testOnClick(ctx: ?*anyopaque) void {
 var click_rec = ClickCtx{};
 
 fn declareClickCheckbox() void {
-    checkbox(.{ .id = "test-click-checkbox", .on_click = testOnClick, .ctx = &click_rec });
+    checkbox(.{ .id = .{ .text = "test-click-checkbox" }, .on_click = testOnClick, .ctx = &click_rec });
 }
 
 test "checkbox self-registers on_click; dispatchClick at center fires once" {
@@ -208,7 +209,7 @@ test "checkbox self-registers on_click; dispatchClick at center fires once" {
 }
 
 fn declareDisabledCheckbox() void {
-    checkbox(.{ .id = "test-disabled-checkbox", .disabled = true, .on_click = testOnClick, .ctx = &click_rec });
+    checkbox(.{ .id = .{ .text = "test-disabled-checkbox" }, .disabled = true, .on_click = testOnClick, .ctx = &click_rec });
 }
 
 test "disabled checkbox uses disabled_bg and registers no click" {

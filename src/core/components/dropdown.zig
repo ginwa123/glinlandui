@@ -164,7 +164,7 @@ fn dropdownInner(
 ) void {
     if (props.show_search) {
         const field_props = input.FieldProps{
-            .id = props.field_id,
+            .id = .{ .text = props.field_id },
             .font_size = props.font_size,
             .fg = props.row_fg,
             .bg = props.field_bg,
@@ -188,7 +188,7 @@ fn dropdownInner(
         }
     }
     list.list(.{
-        .id = props.list_id,
+        .id = .{ .text = props.list_id },
         .row_h = props.row_h,
         .row_bg = props.row_bg,
         .selected_bg = props.selected_bg,

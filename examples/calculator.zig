@@ -40,6 +40,7 @@ const glinlandui = @import("glinlandui");
 const Color = glinlandui.Color;
 
 const components = glinlandui.components;
+const props = glinlandui.props;
 const registry = components.click_registry;
 const cl = glinlandui.zclay;
 
@@ -469,12 +470,12 @@ pub const App = struct {
     pub fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
         const self: *App = @ptrCast(@alignCast(ctx.?));
         components.box.box(.{
-            .id = "calc-root",
+            .id = .{ .text = "calc-root" },
             .direction = .column,
             .w = .grow,
             .h = .grow,
             .bg = COLOR_BG,
-            .pad = 12,
+            .pad = props.Pad.all(12),
             .gap = 10,
         }, self, App.children);
     }
@@ -483,22 +484,20 @@ pub const App = struct {
         const expr = self.m.expression();
         if (expr.len > 0) {
             components.text.label(.{
-                .str = expr,
-                .font_size = 14,
-                .color = COLOR_DIM,
+                .label = .{ .text = expr, .size = 14, .color = COLOR_DIM },
             });
         }
         components.box.box(.{
-            .id = "calc-display",
+            .id = .{ .text = "calc-display" },
             .w = .grow,
             .h = .{ .fixed = DISPLAY_H },
             .bg = COLOR_PANEL,
-            .radius = 10,
-            .pad = 12,
+            .radius = props.Radius.all(10),
+            .pad = props.Pad.all(12),
             .child_align = .{ .x = .right, .y = .center },
         }, self, App.displayChildren);
         components.box.column(.{
-            .id = "calc-keys",
+            .id = .{ .text = "calc-keys" },
             .w = .grow,
             .h = .grow,
             .gap = @intCast(key_gap),
@@ -507,9 +506,7 @@ pub const App = struct {
 
     fn displayChildren(self: *App) void {
         components.text.label(.{
-            .str = self.m.display(),
-            .font_size = 34,
-            .color = if (self.m.err) COLOR_ERR else COLOR_FG,
+            .label = .{ .text = self.m.display(), .size = 34, .color = if (self.m.err) COLOR_ERR else COLOR_FG },
         });
     }
 
@@ -520,7 +517,7 @@ pub const App = struct {
             // so ctx must be a pointer for the type to dedupe at comptime.
             var rc = RowCtx{ .app = self, .row = r };
             components.box.row(.{
-                .id = ROW_IDS[r],
+                .id = .{ .text = ROW_IDS[r] },
                 .w = .grow,
                 .h = .{ .fixed = @floatFromInt(key_h) },
                 .gap = @intCast(key_gap),
@@ -543,14 +540,12 @@ fn rowChildren(ctx: *RowCtx) void {
         const key = KEYS_BY_INDEX[i];
         const fill = tint(key);
         components.button.button(.{
-            .id = KEY_IDS[i],
-            .label = KEY_LABELS[i],
-            .font_size = 18,
-            .w = key_w,
-            .h = key_h,
-            .radius = 10,
-            .pad_tb = 0,
-            .pad_lr = 0,
+            .id = .{ .text = KEY_IDS[i] },
+            .label = .{ .text = KEY_LABELS[i], .size = 18 },
+            .w = .{ .fixed = @floatFromInt(key_w) },
+            .h = .{ .fixed = @floatFromInt(key_h) },
+            .radius = props.Radius.all(10),
+            .pad = .{},
             .bg = fill.bg,
             .hover_bg = fill.hover_bg,
             // on_click stays null so button() does not self-register: the

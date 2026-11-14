@@ -395,7 +395,7 @@ fn hostScrollProbeChildren(_: void) void {
 }
 
 fn hostScrollProbeRoot(_: ?*anyopaque, _: u32, _: u32) void {
-    scroll_mod.scroll(.{ .id = "host-scroll", .h = .{ .fixed = 100 }, .w = .{ .fixed = 200 } }, {}, hostScrollProbeChildren);
+    scroll_mod.scroll(.{ .id = .{ .text = "host-scroll" }, .h = .{ .fixed = 100 }, .w = .{ .fixed = 200 } }, {}, hostScrollProbeChildren);
 }
 
 test "host: wheel-down (Wayland positive dy) scrolls content down" {

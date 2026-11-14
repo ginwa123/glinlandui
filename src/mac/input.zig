@@ -185,7 +185,7 @@ const App = struct {
     fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
         const self: *App = @ptrCast(@alignCast(ctx.?));
         box_widget.box(.{
-            .id = "test-hit-box",
+            .id = .{ .text = "test-hit-box" },
             .direction = .column,
             .w = .grow,
             .h = .grow,

@@ -1,6 +1,7 @@
 // Agnostic reusable Clay slider (toolkit-style, library only).
 const std = @import("std");
 const cl = @import("zclay");
+const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
@@ -15,7 +16,7 @@ pub const thumb_index: u32 = 3;
 
 /// Toolkit-style slider props.
 pub const SliderProps = struct {
-    id: []const u8,
+    id: prop.Id,
     value: f32 = 0.5,
     min: f32 = 0,
     max: f32 = 1,
@@ -56,7 +57,7 @@ pub fn slider(props: SliderProps) void {
     const fill_w: f32 = w_f * frac;
     const thumb_f: f32 = @floatFromInt(props.thumb_size);
     cl.UI()(.{
-        .id = .ID(props.id),
+        .id = props.id.clay(),
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{
@@ -68,7 +69,7 @@ pub fn slider(props: SliderProps) void {
         .background_color = .{ 0, 0, 0, 0 },
     })({
         cl.UI()(.{
-            .id = .IDI(props.id, track_index),
+            .id = .IDI(props.id.str(), track_index),
             .layout = .{
                 .direction = .left_to_right,
                 .sizing = .{
@@ -81,7 +82,7 @@ pub fn slider(props: SliderProps) void {
             .corner_radius = .all(@floatFromInt(props.radius)),
         })({
             cl.UI()(.{
-                .id = .IDI(props.id, fill_index),
+                .id = .IDI(props.id.str(), fill_index),
                 .layout = .{
                     .direction = .left_to_right,
                     .sizing = .{
@@ -95,7 +96,7 @@ pub fn slider(props: SliderProps) void {
                 .corner_radius = .all(@floatFromInt(props.radius)),
             })({
                 cl.UI()(.{
-                    .id = .IDI(props.id, thumb_index),
+                    .id = .IDI(props.id.str(), thumb_index),
                     .layout = .{
                         .sizing = .{
                             .w = .fixed(thumb_f),
@@ -110,8 +111,8 @@ pub fn slider(props: SliderProps) void {
     });
     // Semantics: a slider is draggable, so it reports `drag` rather than a plain click.
     semantics.register(.{
-        .id = cl.getElementId(props.id),
-        .tag = props.id,
+        .id = props.id.clay(),
+        .tag = props.id.str(),
         .role = .slider,
         .flags = .{ .enabled = !props.disabled },
         .actions = .{ .drag = true },
@@ -119,7 +120,7 @@ pub fn slider(props: SliderProps) void {
     if (!props.disabled) {
         if (props.on_change) |cb| {
             // Horizontal-resize cursor: draggable slider track.
-            registry.registerClickCursor(cl.getElementId(props.id), cb, props.ctx, .ew_resize);
+            registry.registerClickCursor(props.id.clay(), cb, props.ctx, .ew_resize);
         }
     }
 }
@@ -133,7 +134,7 @@ fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions
 }
 
 fn declareSlider() void {
-    slider(.{ .id = "test-slider" });
+    slider(.{ .id = .{ .text = "test-slider" } });
 }
 
 /// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
@@ -170,7 +171,7 @@ test "slider emits outer + track + fill + thumb rectangles and no text" {
 }
 
 test "SliderProps carries neutral defaults" {
-    const p = SliderProps{ .id = "x" };
+    const p = SliderProps{ .id = .{ .text = "x" } };
     try std.testing.expectEqual(@as(f32, 0.5), p.value);
     try std.testing.expectEqual(@as(f32, 0), p.min);
     try std.testing.expectEqual(@as(f32, 1), p.max);
@@ -218,7 +219,7 @@ fn layoutSlider(props: SliderProps) ![]cl.RenderCommand {
 }
 
 test "slider track/fill/thumb colors match props" {
-    const cmds = try layoutSlider(.{ .id = "test-slider-color" });
+    const cmds = try layoutSlider(.{ .id = .{ .text = "test-slider-color" } });
     const track_id = cl.getElementId("test-slider-color").id;
     _ = track_id;
     const track_c = rectColorForId(cmds, cl.ElementId.IDI("test-slider-color", track_index).id);
@@ -233,7 +234,7 @@ test "slider track/fill/thumb colors match props" {
 }
 
 fn declareClampedSlider() void {
-    slider(.{ .id = "test-slider-clamp", .value = 2.0, .min = 0, .max = 1 });
+    slider(.{ .id = .{ .text = "test-slider-clamp" }, .value = 2.0, .min = 0, .max = 1 });
 }
 
 test "slider value above max clamps fill to full width" {
@@ -262,11 +263,11 @@ fn testOnChange(ctx: ?*anyopaque) void {
 var click_rec = ClickCtx{};
 
 fn declareClickSlider() void {
-    slider(.{ .id = "test-click-slider", .on_change = testOnChange, .ctx = &click_rec });
+    slider(.{ .id = .{ .text = "test-click-slider" }, .on_change = testOnChange, .ctx = &click_rec });
 }
 
 fn declareNoClickSlider() void {
-    slider(.{ .id = "test-noclick-slider" });
+    slider(.{ .id = .{ .text = "test-noclick-slider" } });
 }
 
 test "slider without on_change registers nothing; dispatchClick returns false" {
@@ -304,7 +305,7 @@ test "slider self-registers on_change; dispatchClick at center fires once" {
 }
 
 fn declareDisabledSlider() void {
-    slider(.{ .id = "test-disabled-slider", .disabled = true, .on_change = testOnChange, .ctx = &click_rec });
+    slider(.{ .id = .{ .text = "test-disabled-slider" }, .disabled = true, .on_change = testOnChange, .ctx = &click_rec });
 }
 
 test "disabled slider uses disabled_bg and registers no click" {

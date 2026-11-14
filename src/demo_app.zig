@@ -4,6 +4,7 @@ const glinlandui = @import("glinlandui");
 
 const components = glinlandui.components;
 const Color = glinlandui.Color;
+const props = glinlandui.props;
 
 pub const App = struct {
     clicks: u32 = 0,
@@ -28,43 +29,39 @@ pub const App = struct {
     fn declare(self: *App) void {
         const Self = @This();
         components.box.box(.{
-            .id = "root",
+            .id = .{ .text = "root" },
             .direction = .column,
             .w = .grow,
             .h = .grow,
             .bg = Color.rgb(0x1e, 0x1e, 0x1e),
-            .pad = 16,
+            .pad = props.Pad.all(16),
             .gap = 12,
         }, self, Self.children);
     }
 
     fn children(self: *App) void {
         components.text.label(.{
-            .str = "glinlandui",
-            .font_size = 24,
-            .color = Color.rgb(0xf0, 0xf0, 0xf0),
+            .label = .{ .text = "glinlandui", .size = 24, .color = Color.rgb(0xf0, 0xf0, 0xf0) },
         });
         components.text.label(.{
-            .str = "real pixels, identical tests on Linux, macOS and the web",
-            .font_size = 14,
-            .color = Color.rgb(0x9a, 0x9a, 0x9a),
+            .label = .{ .text = "real pixels, identical tests on Linux, macOS and the web", .size = 14, .color = Color.rgb(0x9a, 0x9a, 0x9a) },
         });
         components.button.button(.{
-            .id = "click-me",
-            .label = "Click me",
-            .w = 180,
-            .h = 40,
+            .id = .{ .text = "click-me" },
+            .label = .{ .text = "Click me" },
+            .w = .{ .fixed = 180 },
+            .h = .{ .fixed = 40 },
             .on_click = onClick,
             .ctx = self,
         });
         components.toggle.toggle(.{
-            .id = "toggle",
+            .id = .{ .text = "toggle" },
             .on = self.toggled,
             .on_click = onToggle,
             .ctx = self,
         });
         components.slider.slider(.{
-            .id = "slider",
+            .id = .{ .text = "slider" },
             .w = 220,
             .h = 24,
             .value = self.slider_frac,
@@ -72,38 +69,32 @@ pub const App = struct {
             .ctx = self,
         });
         components.text.label(.{
-            .str = self.statusText(),
-            .font_size = 13,
-            .color = Color.rgb(0x7a, 0xb8, 0xff),
+            .label = .{ .text = self.statusText(), .size = 13, .color = Color.rgb(0x7a, 0xb8, 0xff) },
         });
 
         // The file dialog, on the platforms that have one.
         if (glinlandui.file_dialog.available()) {
             components.text.label(.{
-                .str = "XDG portal file dialog",
-                .font_size = 14,
-                .color = Color.rgb(0xf0, 0xf0, 0xf0),
+                .label = .{ .text = "XDG portal file dialog", .size = 14, .color = Color.rgb(0xf0, 0xf0, 0xf0) },
             });
             components.button.button(.{
-                .id = "open-file",
-                .label = "Open a file...",
-                .w = 220,
-                .h = 40,
+                .id = .{ .text = "open-file" },
+                .label = .{ .text = "Open a file..." },
+                .w = .{ .fixed = 220 },
+                .h = .{ .fixed = 40 },
                 .on_click = onOpenFile,
                 .ctx = self,
             });
             components.button.button(.{
-                .id = "open-folder",
-                .label = "Choose a folder...",
-                .w = 220,
-                .h = 40,
+                .id = .{ .text = "open-folder" },
+                .label = .{ .text = "Choose a folder..." },
+                .w = .{ .fixed = 220 },
+                .h = .{ .fixed = 40 },
                 .on_click = onOpenFolder,
                 .ctx = self,
             });
             components.text.label(.{
-                .str = self.pickText(),
-                .font_size = 13,
-                .color = Color.rgb(0x9a, 0x9a, 0x9a),
+                .label = .{ .text = self.pickText(), .size = 13, .color = Color.rgb(0x9a, 0x9a, 0x9a) },
             });
         }
     }

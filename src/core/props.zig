@@ -20,11 +20,11 @@ pub const Id = union(enum) {
         return .{ .indexed = .{ .prefix = prefix, .index = @intCast(index) } };
     }
 
+    // The Clay element id. Both shapes go through the string form, so `clay()` and `str()` always agree.
+
+    // An element that cannot be named by a string cannot be clicked by a test, focused, or found in semantics.
     pub fn clay(self: Id) cl.ElementId {
-        return switch (self) {
-            .text => |s| cl.getElementId(s),
-            .indexed => |i| cl.ElementId.IDI(i.prefix, i.index),
-        };
+        return cl.getElementId(self.str());
     }
 
     // The id as text, for the two places that need one: the semantics tag and keyboard focus.
@@ -186,10 +186,11 @@ test "an Id is either a string or a prefix and an index, and both name one Clay 
     try std.testing.expect(!Id.eql(Id.at("row", 3), Id.at("row", 4)));
     // A string id and an indexed id never collide, even with the same prefix.
     try std.testing.expect(!Id.eql(.{ .text = "row.3" }, Id.at("row", 3)));
-    try std.testing.expectEqualStrings("row", switch ((Id.at("row", 3))) {
-        .indexed => |i| i.prefix,
-        else => "",
-    });
+    // An indexed id formats to `prefix.index`, and its Clay id is that string's hash.
+
+    // So a test that clicks "row.3" hits the element `Id.at("row", 3)` declared.
+    try std.testing.expectEqualStrings("row.3", Id.at("row", 3).str());
+    try std.testing.expectEqual(cl.getElementId("row.3").id, Id.at("row", 3).clay().id);
 }
 
 test "a Label carries its own size and colour" {

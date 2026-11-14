@@ -9,6 +9,7 @@ const finders = @import("finders.zig");
 const assertions = @import("assertions.zig");
 const action_plan = @import("actions.zig");
 const cl = @import("zclay");
+const props = @import("../props.zig");
 
 pub const Host = host_mod.Host;
 pub const BoundingBox = cl.BoundingBox;
@@ -668,10 +669,10 @@ test "driver captures a real component frame" {
         fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
             const app: *@This() = @ptrCast(@alignCast(ctx.?));
             button.button(.{
-                .id = "testkit-button",
-                .label = "OK",
-                .w = 100,
-                .h = 40,
+                .id = .{ .text = "testkit-button" },
+                .label = .{ .text = "OK" },
+                .w = .{ .fixed = 100 },
+                .h = .{ .fixed = 40 },
                 .on_click = onClick,
                 .ctx = &app.state,
             });
@@ -734,7 +735,7 @@ const E2eApp = struct {
 
     fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
         box_mod.box(.{
-            .id = "e2e-root",
+            .id = .{ .text = "e2e-root" },
             .direction = .column,
             .w = .grow,
             .h = .grow,
@@ -744,19 +745,18 @@ const E2eApp = struct {
     fn appChildren(ctx: ?*anyopaque) void {
         // 10 rows of 40px in a 120px viewport: rows 0..2 are visible, the rest are clipped out until something scrolls them in.
         scroll_mod.scroll(.{
-            .id = "e2e-scroll",
+            .id = .{ .text = "e2e-scroll" },
             .w = .{ .fixed = 200 },
             .h = .{ .fixed = 120 },
             .show_scrollbar = false,
         }, ctx, scrollChildren);
         // A disabled control OUTSIDE the scroller: on screen, not clickable.
         button_mod.button(.{
-            .id = "e2e-disabled",
-            .label = "Disabled",
-            .w = 180,
-            .h = 40,
-            .pad_tb = 0,
-            .pad_lr = 0,
+            .id = .{ .text = "e2e-disabled" },
+            .label = .{ .text = "Disabled" },
+            .w = .{ .fixed = 180 },
+            .h = .{ .fixed = 40 },
+            .pad = props.Pad.axes(0, 0),
             .disabled = true,
             .on_click = bump,
             .ctx = ctx,
@@ -766,12 +766,11 @@ const E2eApp = struct {
     fn scrollChildren(ctx: ?*anyopaque) void {
         for (e2e_rows) |tag| {
             button_mod.button(.{
-                .id = tag,
-                .label = tag,
-                .w = 180,
-                .h = 40,
-                .pad_tb = 0,
-                .pad_lr = 0,
+                .id = .{ .text = tag },
+                .label = .{ .text = tag },
+                .w = .{ .fixed = 180 },
+                .h = .{ .fixed = 40 },
+                .pad = props.Pad.axes(0, 0),
                 .on_click = bump,
                 .ctx = ctx,
             });
@@ -960,12 +959,11 @@ const ExtApp = struct {
     fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
         // Exactly what examples/calculator.zig does: `on_click = null` so button() does not self-register, then an indexed registration.
         button_mod.button(.{
-            .id = "ext-key",
-            .label = "7",
-            .w = 60,
-            .h = 40,
-            .pad_tb = 0,
-            .pad_lr = 0,
+            .id = .{ .text = "ext-key" },
+            .label = .{ .text = "7" },
+            .w = .{ .fixed = 60 },
+            .h = .{ .fixed = 40 },
+            .pad = .{},
         });
         registry.registerZCursor(cl.getElementId("ext-key"), extHit, ctx, 0, 0, .pointer);
     }

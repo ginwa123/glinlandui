@@ -41,6 +41,7 @@ const std = @import("std");
 const glinlandui = @import("glinlandui");
 
 const Color = glinlandui.Color;
+const props = glinlandui.props;
 const components = glinlandui.components;
 const dialog = glinlandui.file_dialog;
 
@@ -428,21 +429,19 @@ pub const App = struct {
     pub fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
         const self: *App = @ptrCast(@alignCast(ctx.?));
         components.box.box(.{
-            .id = "dlg-root",
+            .id = .{ .text = "dlg-root" },
             .direction = .column,
             .w = .grow,
             .h = .grow,
             .bg = COLOR_BG,
-            .pad = 16,
+            .pad = props.Pad.all(16),
             .gap = 12,
         }, self, App.children);
     }
 
     fn children(self: *App) void {
         components.text.label(.{
-            .str = "glinlandui.file_dialog — the system file picker",
-            .font_size = 15,
-            .color = COLOR_FG,
+            .label = .{ .text = "glinlandui.file_dialog — the system file picker", .size = 15, .color = COLOR_FG },
         });
 
         // Gate the buttons on `available()`. A browser is the one host with no
@@ -450,30 +449,30 @@ pub const App = struct {
         // user finds out by clicking it.
         if (dialog.available()) {
             components.box.row(.{
-                .id = "dlg-actions",
+                .id = .{ .text = "dlg-actions" },
                 .w = .grow,
                 .h = .{ .fixed = 40 },
                 .gap = 8,
             }, self, actionRow);
         } else {
             components.box.box(.{
-                .id = "dlg-unavailable",
+                .id = .{ .text = "dlg-unavailable" },
                 .w = .grow,
                 .h = .{ .fixed = 40 },
                 .bg = COLOR_PANEL,
-                .radius = 8,
-                .pad = 12,
+                .radius = props.Radius.all(8),
+                .pad = props.Pad.all(12),
                 .child_align = .{ .x = .left, .y = .center },
             }, self, unavailableChild);
         }
 
         components.box.box(.{
-            .id = "dlg-status",
+            .id = .{ .text = "dlg-status" },
             .w = .grow,
             .h = .{ .fixed = 76 },
             .bg = COLOR_PANEL,
-            .radius = 8,
-            .pad = 12,
+            .radius = props.Radius.all(8),
+            .pad = props.Pad.all(12),
             .gap = 4,
         }, self, statusChildren);
     }
@@ -481,9 +480,7 @@ pub const App = struct {
     fn unavailableChild(self: *App) void {
         _ = self;
         components.text.label(.{
-            .str = "No file dialog on this platform (the browser has none).",
-            .font_size = 13,
-            .color = COLOR_WARN,
+            .label = .{ .text = "No file dialog on this platform (the browser has none).", .size = 13, .color = COLOR_WARN },
         });
     }
 
@@ -492,10 +489,9 @@ pub const App = struct {
         while (i < ACTIONS.len) : (i += 1) {
             var ctx = ActionCtx{ .app = self, .index = i };
             components.button.button(.{
-                .id = ACTIONS[i].id,
-                .label = ACTIONS[i].label,
-                .font_size = 14,
-                .h = 40,
+                .id = .{ .text = ACTIONS[i].id },
+                .label = .{ .text = ACTIONS[i].label, .size = 14 },
+                .h = .{ .fixed = 40 },
                 .bg = Color.hexC("#2f6df6"),
                 .hover_bg = Color.hexC("#4a82ff"),
                 .on_click = actionOnClick,
@@ -507,17 +503,12 @@ pub const App = struct {
     fn statusChildren(self: *App) void {
         const outcome = self.m.outcome;
         components.text.label(.{
-            .str = "Last answer",
-            .font_size = 11,
-            .color = COLOR_DIM,
+            .label = .{ .text = "Last answer", .size = 11, .color = COLOR_DIM },
         });
+        // Green for an answer, red for a problem, and NOT red for a cancellation — `isProblem` is the same
+        // function the test holds the line on, so the two cannot drift apart.
         components.text.label(.{
-            .str = self.m.line(),
-            .font_size = 14,
-            // Green for an answer, red for a problem, and NOT red for a
-            // cancellation — `isProblem` is the same function the test holds
-            // the line on, so the two cannot drift apart.
-            .color = if (outcome.isProblem()) COLOR_ERR else COLOR_OK,
+            .label = .{ .text = self.m.line(), .size = 14, .color = if (outcome.isProblem()) COLOR_ERR else COLOR_OK },
         });
     }
 };

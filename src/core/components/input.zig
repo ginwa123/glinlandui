@@ -1,6 +1,7 @@
 // Agnostic reusable Clay text field (toolkit-style, library only).
 const std = @import("std");
 const cl = @import("zclay");
+const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const caret_mod = @import("caret.zig");
@@ -345,7 +346,7 @@ pub fn handleText(buf: []u8, len: *usize, st: *EditState, text: []const u8) Acti
 
 // Toolkit-style field props.
 pub const FieldProps = struct {
-    id: []const u8,
+    id: prop.Id,
     font_size: u16 = 14,
     fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
     bg: Color = Color.rgb(0x26, 0x26, 0x26),
@@ -397,7 +398,7 @@ pub fn field(props: FieldProps, query: []const u8) void {
     const bg: Color = if (props.disabled) props.disabled_bg else props.bg;
     const fg: Color = if (props.disabled) props.disabled_fg else props.fg;
     cl.UI()(.{
-        .id = .ID(props.id),
+        .id = props.id.clay(),
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{ .w = fieldSizingW(props), .h = fieldSizingH(props) },
@@ -430,16 +431,16 @@ pub fn field(props: FieldProps, query: []const u8) void {
         });
     });
     // Semantics: an editable field declares `set_text`, so `Interaction.performTextInput` can refuse to type into a non-editable node and.
-    if (!props.disabled and props.id.len > 0) {
+    if (!props.disabled and props.id.str().len > 0) {
         semantics.register(.{
-            .id = cl.getElementId(props.id),
-            .tag = props.id,
+            .id = props.id.clay(),
+            .tag = props.id.str(),
             .role = .text_field,
             .value = query,
             .flags = .{ .enabled = true },
             .actions = .{ .set_text = true },
         });
-        registry.registerHover(cl.getElementId(props.id), .text);
+        registry.registerHover(props.id.clay(), .text);
     }
 }
 
@@ -504,10 +505,10 @@ pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
     ctx.pad_lr = @floatFromInt(props.pad_lr);
     ctx.font_size = props.font_size;
     // Drag-select first, so the caret and the selection this frame draws are the ones the pointer just asked for.
-    dragSelect(ctx, props.id);
+    dragSelect(ctx, props.id.str());
     const text = input.text();
     // Once a click has claimed the keyboard, the toolkit decides who owns it: clicking another component blurs this field.
-    if (frame_mod.focusKnown()) input.focused = frame_mod.isFocused(props.id);
+    if (frame_mod.focusKnown()) input.focused = frame_mod.isFocused(props.id.str());
     // The field owns its own animation, and only while it is focused: an unfocused field holds its clock at zero and draws no caret.
     input.tickBlink(frame_mod.delta_s);
     const fg = (if (props.disabled) props.disabled_fg else props.fg).toClay();
@@ -515,7 +516,7 @@ pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
     const blink_on = text_editor.caretVisible(input);
 
     cl.UI()(.{
-        .id = .ID(props.id),
+        .id = props.id.clay(),
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{ .w = fieldSizingW(props), .h = fieldSizingH(props) },
@@ -533,7 +534,7 @@ pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
             const e = span.end;
             if (s > 0) cl.text(text[0..s], .{ .font_size = props.font_size, .color = fg });
             cl.UI()(.{
-                .id = .IDI(props.id, 1),
+                .id = .IDI(props.id.str(), 1),
                 .layout = .{
                     .sizing = .{ .w = .fit, .h = .grow },
                     .padding = .{ .top = 1, .bottom = 1 },
@@ -552,7 +553,7 @@ pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
         }
     });
 
-    registry.registerClickDoubleCursor(cl.getElementId(props.id), onFieldClick, onFieldDoubleClick, ctx, .text);
+    registry.registerClickDoubleCursor(props.id.clay(), onFieldClick, onFieldDoubleClick, ctx, .text);
 }
 
 // Select the word under a double click, which is what every text field does.
@@ -572,7 +573,7 @@ fn caretBar(props: FieldProps, ctx: *FieldCtx, text: []const u8) void {
     const at = @min(ctx.editor.caret.offset, text.len);
     caret_mod.declare(.{
         // The padding is part of the parent box, so the offset starts from the border box, not the text.
-        .id = .IDI(props.id, 2),
+        .id = .IDI(props.id.str(), 2),
         .x = @as(f32, @floatFromInt(props.pad_lr)) + ctx.measure(text[0..at], props.font_size),
         .height = @floatFromInt(props.font_size + 4),
         .color = props.caret_fg orelse Color.rgb(0xd8, 0xd8, 0xdc),
@@ -598,7 +599,7 @@ pub fn fieldEdit(props: FieldProps, query: []const u8, st: EditState) void {
     const fg = (if (props.disabled) props.disabled_fg else props.fg).toClay();
     const sel_fg = (if (props.disabled) props.disabled_fg else props.sel_fg).toClay();
     cl.UI()(.{
-        .id = .ID(props.id),
+        .id = props.id.clay(),
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{ .w = fieldSizingW(props), .h = fieldSizingH(props) },
@@ -637,16 +638,16 @@ pub fn fieldEdit(props: FieldProps, query: []const u8, st: EditState) void {
         }
     });
     // Same contract as field(): editable, so it declares set_text.
-    if (!props.disabled and props.id.len > 0) {
+    if (!props.disabled and props.id.str().len > 0) {
         semantics.register(.{
-            .id = cl.getElementId(props.id),
-            .tag = props.id,
+            .id = props.id.clay(),
+            .tag = props.id.str(),
             .role = .text_field,
             .value = query,
             .flags = .{ .enabled = true },
             .actions = .{ .set_text = true },
         });
-        registry.registerHover(cl.getElementId(props.id), .text);
+        registry.registerHover(props.id.clay(), .text);
     }
 }
 
@@ -733,7 +734,7 @@ test "insert appends until full, backspace drops bytes" {
 }
 
 test "FieldProps carries neutral dark defaults" {
-    const p = FieldProps{ .id = "x" };
+    const p = FieldProps{ .id = .{ .text = "x" } };
     try std.testing.expectEqual(@as(u16, 14), p.font_size);
     try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.fg);
     try std.testing.expectEqual(Color.rgb(0x26, 0x26, 0x26), p.bg);
@@ -741,11 +742,11 @@ test "FieldProps carries neutral dark defaults" {
 }
 
 fn declareField() void {
-    field(.{ .id = "test-field" }, "jak");
+    field(.{ .id = .{ .text = "test-field" } }, "jak");
 }
 
 fn declareEmptyField() void {
-    field(.{ .id = "test-empty-field" }, "");
+    field(.{ .id = .{ .text = "test-empty-field" } }, "");
 }
 
 fn countTexts(declare_fn: *const fn () void) !usize {
@@ -987,15 +988,15 @@ test "handleNavKey ctrl+arrows move by word" {
 // ---- fieldEdit render ----
 
 fn declareCaretMid() void {
-    fieldEdit(.{ .id = "test-caret-mid" }, "jak", .{ .caret = 1 });
+    fieldEdit(.{ .id = .{ .text = "test-caret-mid" } }, "jak", .{ .caret = 1 });
 }
 
 fn declareCaretSel() void {
-    fieldEdit(.{ .id = "test-caret-sel" }, "jak", .{ .caret = 3, .anchor = 1 });
+    fieldEdit(.{ .id = .{ .text = "test-caret-sel" } }, "jak", .{ .caret = 3, .anchor = 1 });
 }
 
 fn declareCaretEmpty() void {
-    fieldEdit(.{ .id = "test-caret-empty" }, "", .{});
+    fieldEdit(.{ .id = .{ .text = "test-caret-empty" } }, "", .{});
 }
 
 test "fieldEdit splits runs around the caret" {
@@ -1013,7 +1014,7 @@ test "fieldEdit declares a stable id for hit-testing" {
 }
 
 test "FieldProps selection color has a neutral default" {
-    const p = FieldProps{ .id = "x" };
+    const p = FieldProps{ .id = .{ .text = "x" } };
     try std.testing.expectEqual(Color.rgb(0x7a, 0xb8, 0xff), p.sel_fg);
 }
 
@@ -1089,7 +1090,7 @@ test "handleKey ctrl+A selects all, other ctrl combos insert nothing" {
 }
 
 fn declareDisabledField() void {
-    field(.{ .id = "test-disabled-field", .disabled = true }, "hi");
+    field(.{ .id = .{ .text = "test-disabled-field" }, .disabled = true }, "hi");
 }
 
 test "disabled field dims to disabled_bg" {
@@ -1105,7 +1106,7 @@ test "disabled field dims to disabled_bg" {
 }
 
 fn declareBorderField() void {
-    field(.{ .id = "test-border-field", .border_width = 1, .border_color = Color.rgb(0xff, 0x00, 0x00) }, "hi");
+    field(.{ .id = .{ .text = "test-border-field" }, .border_width = 1, .border_color = Color.rgb(0xff, 0x00, 0x00) }, "hi");
 }
 
 test "field border emits a border command" {

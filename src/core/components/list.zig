@@ -1,6 +1,7 @@
 // Agnostic reusable Clay list (toolkit-style, library only).
 const std = @import("std");
 const cl = @import("zclay");
+const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
@@ -20,7 +21,7 @@ pub const Direction = enum {
 
 /// List props.
 pub const ListProps = struct {
-    id: []const u8,
+    id: prop.Id,
     direction: Direction = .vertical,
     /// Grid only: fixed column count for this frame (see gridCols).
     cols: usize = 3,
@@ -93,7 +94,7 @@ pub fn gridCell(content_w: u32, cols: usize, gap: u16) [2]u32 {
     return .{ @max(w, 1), h };
 }
 
-/// Declare a list over any slice: container (.ID(props.id)) + one cell per item (.IDI(props.id, index + 1)).
+/// Declare a list over any slice: container (.ID(props.id)) + one cell per item (.IDI(props.id.str(), index + 1)).
 pub fn list(
     props: ListProps,
     items: anytype,
@@ -105,8 +106,8 @@ pub fn list(
     if (ti != .pointer or ti.pointer.size != .slice) @compileError("list: items must be a slice");
     // Semantics: the container is a list; each cell registers itself below.
     semantics.register(.{
-        .id = cl.getElementId(props.id),
-        .tag = props.id,
+        .id = props.id.clay(),
+        .tag = props.id.str(),
         .role = .list,
         .flags = .{ .enabled = !props.disabled },
     });
@@ -121,7 +122,7 @@ pub fn list(
 fn registerCell(props: ListProps, i: usize) void {
     // Semantics FIRST, before the disabled early-return: a disabled row must still be discoverable so `assertIsDisabled` has something to assert on.
     semantics.register(.{
-        .id = rowId(props.id, i),
+        .id = rowId(props.id.str(), i),
         .role = .list_item,
         .flags = .{
             .enabled = !props.disabled,
@@ -131,10 +132,10 @@ fn registerCell(props: ListProps, i: usize) void {
     if (props.disabled) return;
     if (props.clicks) |clicks| {
         if (i < clicks.len) {
-            registry.registerZCursor(rowId(props.id, i), clicks[i].on_click, clicks[i].ctx, i, props.click_z, .pointer);
+            registry.registerZCursor(rowId(props.id.str(), i), clicks[i].on_click, clicks[i].ctx, i, props.click_z, .pointer);
         }
     } else if (props.on_select) |cb| {
-        registry.registerZCursor(rowId(props.id, i), cb, props.ctx, i, props.click_z, .pointer);
+        registry.registerZCursor(rowId(props.id.str(), i), cb, props.ctx, i, props.click_z, .pointer);
     }
 }
 
@@ -145,7 +146,7 @@ fn listVertical(
     comptime renderItem: fn (@TypeOf(item_ctx), std.meta.Child(@TypeOf(items)), usize) void,
 ) void {
     cl.UI()(.{
-        .id = .ID(props.id),
+        .id = props.id.clay(),
         .layout = .{
             .direction = .top_to_bottom,
             .sizing = .{ .w = listSizingW(props), .h = .fit },
@@ -160,7 +161,7 @@ fn listVertical(
             // NOTE: cl.hovered() must be evaluated INSIDE this row's UI() config literal (while the row element is open) so it queries this row — calling it.
             cl.UI()(.{
                 // +1: CLAY_ID(base) == CLAY_IDI(base, 0) — row i takes IDI(base, i + 1) so row 0 never collides with the container .ID(props.id) above.
-                .id = .IDI(props.id, @as(u32, @intCast(i + 1))),
+                .id = .IDI(props.id.str(), @as(u32, @intCast(i + 1))),
                 .layout = .{
                     .direction = .left_to_right,
                     .sizing = .{ .w = .grow, .h = .fixed(rowHeight(props)) },
@@ -188,7 +189,7 @@ fn listHorizontal(
     comptime renderItem: fn (@TypeOf(item_ctx), std.meta.Child(@TypeOf(items)), usize) void,
 ) void {
     cl.UI()(.{
-        .id = .ID(props.id),
+        .id = props.id.clay(),
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{ .w = listSizingW(props), .h = .fit },
@@ -199,7 +200,7 @@ fn listHorizontal(
             const is_sel: bool = if (props.selected) |sel| sel == i else false;
             const base_bg: Color = if (props.disabled) props.disabled_bg else if (is_sel) props.selected_bg else props.row_bg;
             cl.UI()(.{
-                .id = .IDI(props.id, @as(u32, @intCast(i + 1))),
+                .id = .IDI(props.id.str(), @as(u32, @intCast(i + 1))),
                 .layout = .{
                     .direction = .left_to_right,
                     .sizing = .{ .w = .fit, .h = .fixed(rowHeight(props)) },
@@ -228,7 +229,7 @@ fn listGrid(
 ) void {
     const cols = @max(props.cols, 1);
     cl.UI()(.{
-        .id = .ID(props.id),
+        .id = props.id.clay(),
         .layout = .{
             .direction = .top_to_bottom,
             .sizing = .{ .w = listSizingW(props), .h = .fit },
@@ -253,7 +254,7 @@ fn listGrid(
                     const is_sel: bool = if (props.selected) |sel| sel == i else false;
                     registerCell(props, i);
                     cl.UI()(.{
-                        .id = .IDI(props.id, @as(u32, @intCast(i + 1))),
+                        .id = .IDI(props.id.str(), @as(u32, @intCast(i + 1))),
                         .layout = .{
                             .direction = .left_to_right,
                             .sizing = .{ .w = .fixed(@floatFromInt(props.cell_w)), .h = .fixed(@floatFromInt(props.cell_h)) },
@@ -322,7 +323,7 @@ const demo_items = [_]TitleItem{
 const demo_slice: []const TitleItem = &demo_items;
 
 fn declareList() void {
-    list(.{ .id = "test-list" }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-list" } }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 const sub_items = [_]TitleItem{
@@ -333,7 +334,7 @@ const sub_items = [_]TitleItem{
 const sub_slice: []const TitleItem = &sub_items;
 
 fn declareSubList() void {
-    list(.{ .id = "test-sub-list" }, sub_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-sub-list" } }, sub_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 /// Item type B: plain strings with a trailing chevron (content parity).
@@ -357,7 +358,7 @@ fn renderB(_: void, item: []const u8, index: usize) void {
 }
 
 fn declareStrList() void {
-    list(.{ .id = "test-str-list" }, str_slice, {}, renderB);
+    list(.{ .id = .{ .text = "test-str-list" } }, str_slice, {}, renderB);
 }
 
 /// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
@@ -411,7 +412,7 @@ test "generic list with string items renders title + trailing per row" {
 }
 
 test "ListProps carries neutral dark defaults + null selection/callbacks" {
-    const p = ListProps{ .id = "x" };
+    const p = ListProps{ .id = .{ .text = "x" } };
     try std.testing.expectEqual(@as(u32, 40), p.row_h);
     try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.row_bg);
     try std.testing.expectEqual(Color.rgb(0x3a, 0x3a, 0x3a), p.selected_bg);
@@ -439,7 +440,7 @@ fn testOnSelect(ctx: ?*anyopaque, i: usize) void {
 test "ListProps stores on_select/ctx; direct invocation delivers index" {
     var c = SelectCtx{};
     const p = ListProps{
-        .id = "x",
+        .id = .{ .text = "x" },
         .selected = 1,
         .on_select = testOnSelect,
         .ctx = &c,
@@ -473,7 +474,7 @@ const hover_items = [_]TitleItem{
 const hover_slice: []const TitleItem = &hover_items;
 
 fn declareHoverList() void {
-    list(.{ .id = "test-hover-list", .selected = 2 }, hover_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-hover-list" }, .selected = 2 }, hover_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "generic list selected index uses selected_bg; hover hits one row" {
@@ -483,7 +484,7 @@ test "generic list selected index uses selected_bg; hover hits one row" {
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
     cl.setMeasureTextFunction(void, {}, stubMeasure);
 
-    const props = ListProps{ .id = "test-hover-list", .selected = 2 };
+    const props = ListProps{ .id = .{ .text = "test-hover-list" }, .selected = 2 };
     const rest_c = props.row_bg.toClay();
     const hover_c = props.hover_bg.toClay();
     const sel_c = props.selected_bg.toClay();
@@ -551,11 +552,11 @@ const gap_items = [_]TitleItem{
 const gap_slice: []const TitleItem = &gap_items;
 
 fn declareGapList() void {
-    list(.{ .id = "test-gap-list", .gap = 8 }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-gap-list" }, .gap = 8 }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 fn declareNoGapList() void {
-    list(.{ .id = "test-nogap-list" }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-nogap-list" } }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 fn pitchFor(declare_fn: *const fn () void, base: []const u8) !f32 {
@@ -574,7 +575,7 @@ test "list gap separates rows by row_h + gap" {
 }
 
 fn declareRadiusList() void {
-    list(.{ .id = "test-radius-list", .radius = 12 }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-radius-list" }, .radius = 12 }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "list radius prop reaches row rects" {
@@ -618,7 +619,7 @@ test "list indexed rows declare IDI identities under the list id" {
 var select_rec = SelectCtx{};
 
 fn declareSelectList() void {
-    list(.{ .id = "test-select-list", .on_select = testOnSelect, .ctx = &select_rec }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-select-list" }, .on_select = testOnSelect, .ctx = &select_rec }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "list self-registers on_select per row; dispatchClick fires index" {
@@ -663,7 +664,7 @@ fn renderWithInner(_: CtxA, _: TitleItem, index: usize) void {
 }
 
 fn declareInnerList() void {
-    list(.{ .id = "test-inner-list", .on_select = onOuterClick }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderWithInner);
+    list(.{ .id = .{ .text = "test-inner-list" }, .on_select = onOuterClick }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderWithInner);
 }
 
 test "a widget inside a row wins the hit test over the row itself" {
@@ -692,7 +693,7 @@ test "a widget inside a row wins the hit test over the row itself" {
 }
 
 fn declareNoSelectList() void {
-    list(.{ .id = "test-noselect-list" }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-noselect-list" } }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "list without on_select registers nothing; dispatchClick returns false" {
@@ -738,14 +739,14 @@ fn declareClicksList() void {
         .{ .on_click = onClickA, .ctx = &clicks_a },
         .{ .on_click = onClickB, .ctx = &clicks_b },
     };
-    list(.{ .id = "test-clicks-list", .clicks = &clicks }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-clicks-list" }, .clicks = &clicks }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 fn declareShortClicksList() void {
     const clicks = [_]registry.RowClick{
         .{ .on_click = onClickA, .ctx = &clicks_a },
     };
-    list(.{ .id = "test-short-clicks-list", .clicks = &clicks }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-short-clicks-list" }, .clicks = &clicks }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "list clicks fires each row own fn once with own ctx" {
@@ -795,7 +796,7 @@ test "list clicks short slice leaves extra rows without entry" {
 }
 
 fn declareDisabledList() void {
-    list(.{ .id = "test-disabled-list", .disabled = true, .on_select = testOnSelect, .ctx = &disabled_rec }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-disabled-list" }, .disabled = true, .on_select = testOnSelect, .ctx = &disabled_rec }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 var disabled_rec = SelectCtx{};
@@ -824,7 +825,7 @@ test "disabled list registers no clicks and dims rows" {
 // ---- Horizontal + grid directions ----
 
 test "ListProps direction defaults to vertical with grid sizing defaults" {
-    const p = ListProps{ .id = "x" };
+    const p = ListProps{ .id = .{ .text = "x" } };
     try std.testing.expectEqual(Direction.vertical, p.direction);
     try std.testing.expectEqual(@as(usize, 3), p.cols);
     try std.testing.expectEqual(@as(u32, 140), p.cell_w);
@@ -861,7 +862,7 @@ const h_items = [_]TitleItem{
 const h_slice: []const TitleItem = &h_items;
 
 fn declareHList() void {
-    list(.{ .id = "test-h-list", .direction = .horizontal }, h_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-h-list" }, .direction = .horizontal }, h_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "horizontal list lays cells in one row with advancing x" {
@@ -892,7 +893,7 @@ const g_items = [_]TitleItem{
 const g_slice: []const TitleItem = &g_items;
 
 fn declareGrid() void {
-    list(.{ .id = "test-grid", .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60 }, g_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-grid" }, .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60 }, g_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "grid wraps 5 items in 3 cols with transparent cells" {
@@ -928,7 +929,7 @@ fn gridBorderForId(cmds: []cl.RenderCommand, id: u32) ?cl.BorderRenderData {
 
 fn declareSelGrid() void {
     list(
-        .{ .id = "test-sel-grid", .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60, .selected = 1, .selected_border_width = 2 },
+        .{ .id = .{ .text = "test-sel-grid" }, .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60, .selected = 1, .selected_border_width = 2 },
         g_slice,
         CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) },
         renderA,
@@ -949,7 +950,7 @@ test "grid selected cell draws the selected ring, others none" {
 
 fn declareNoSelGrid() void {
     list(
-        .{ .id = "test-nosel-grid", .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60, .selected_border_width = 2 },
+        .{ .id = .{ .text = "test-nosel-grid" }, .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60, .selected_border_width = 2 },
         g_slice,
         CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) },
         renderA,
@@ -970,7 +971,7 @@ test "grid hover draws the hover ring on one cell only" {
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
     cl.setMeasureTextFunction(void, {}, stubMeasure);
     var hover_grid = ListProps{
-        .id = "test-hov-grid",
+        .id = .{ .text = "test-hov-grid" },
         .direction = .grid,
         .cols = 3,
         .cell_w = 100,
@@ -1006,7 +1007,7 @@ var grid_click_rec = SelectCtx{};
 
 fn declareClickGrid() void {
     list(
-        .{ .id = "test-click-grid", .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60, .on_select = testOnSelect, .ctx = &grid_click_rec },
+        .{ .id = .{ .text = "test-click-grid" }, .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60, .on_select = testOnSelect, .ctx = &grid_click_rec },
         g_slice,
         CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) },
         renderA,

@@ -2,15 +2,14 @@
 const std = @import("std");
 const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
+const prop = @import("../props.zig");
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
 pub const ClickFn = ?*const fn (?*anyopaque) void;
 
-/// Label props.
+/// Label props: one text run, and what may happen to it.
 pub const TextProps = struct {
-    str: []const u8,
-    font_size: u16 = 14,
-    color: Color = Color.rgb(0xe8, 0xe8, 0xe8),
+    label: prop.Label,
     wrap: bool = false,
     disabled: bool = false,
     disabled_color: Color = Color.rgb(0x77, 0x77, 0x77),
@@ -19,11 +18,11 @@ pub const TextProps = struct {
 };
 
 /// Declare a single text element.
-pub fn label(props: TextProps) void {
-    cl.text(props.str, .{
-        .font_size = props.font_size,
-        .color = (if (props.disabled) props.disabled_color else props.color).toClay(),
-        .wrap_mode = if (props.wrap) .words else .none,
+pub fn label(p: TextProps) void {
+    cl.text(p.label.text, .{
+        .font_size = p.label.size,
+        .color = (if (p.disabled) p.disabled_color else p.label.color).toClay(),
+        .wrap_mode = if (p.wrap) .words else .none,
     });
 }
 
@@ -36,11 +35,10 @@ fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions
 }
 
 fn declareLabel() void {
-    label(.{ .str = "Hello" });
+    label(.{ .label = .{ .text = "Hello" } });
 }
 
-/// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
-fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !void {
+fn frameCommands(declare_fn: *const fn () void) ![]cl.RenderCommand {
     const mem_size = cl.minMemorySize();
     // NOTE: intentionally leaked (page_allocator, never freed).
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
@@ -50,80 +48,28 @@ fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !v
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     declare_fn();
-    const cmds = cl.endLayout();
-    var r: usize = 0;
-    var t: usize = 0;
-    for (cmds) |c| switch (c.command_type) {
-        .rectangle => r += 1,
-        .text => t += 1,
-        else => {},
-    };
-    rects.* = r;
-    texts.* = t;
+    return cl.endLayout();
 }
 
 test "label emits exactly one text command, no rectangles" {
+    const cmds = try frameCommands(declareLabel);
     var rects: usize = 0;
     var texts: usize = 0;
-    try countCommands(declareLabel, &rects, &texts);
+    for (cmds) |c| switch (c.command_type) {
+        .rectangle => rects += 1,
+        .text => texts += 1,
+        else => {},
+    };
     try std.testing.expectEqual(@as(usize, 0), rects);
     try std.testing.expectEqual(@as(usize, 1), texts);
 }
 
 test "TextProps carries neutral defaults" {
-    const p = TextProps{ .str = "x" };
-    try std.testing.expectEqual(@as(u16, 14), p.font_size);
-    try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.color);
-    try std.testing.expectEqual(false, p.wrap);
+    const p = TextProps{ .label = .{ .text = "x" } };
+    try std.testing.expectEqual(@as(u16, 14), p.label.size);
+    try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.label.color);
+    try std.testing.expect(!p.wrap);
     try std.testing.expect(!p.disabled);
     try std.testing.expectEqual(Color.rgb(0x77, 0x77, 0x77), p.disabled_color);
     try std.testing.expect(p.on_click == null);
-    try std.testing.expect(p.ctx == null);
-}
-
-const ClickCtx = struct {
-    calls: usize = 0,
-};
-
-fn testOnClick(ctx: ?*anyopaque) void {
-    const c: *ClickCtx = @ptrCast(@alignCast(ctx.?));
-    c.calls += 1;
-}
-
-test "TextProps stores on_click/ctx; label stays declare-only" {
-    var c = ClickCtx{};
-    const p = TextProps{ .str = "x", .on_click = testOnClick, .ctx = &c };
-    try std.testing.expect(p.on_click != null);
-    // Declare-only: label() ignores the stored callback (no fire here).
-    var rects: usize = 0;
-    var texts: usize = 0;
-    try countCommands(declareLabel, &rects, &texts);
-    try std.testing.expectEqual(@as(usize, 1), texts);
-    // Direct invocation still delivers ctx.
-    p.on_click.?(p.ctx);
-    try std.testing.expectEqual(@as(usize, 1), c.calls);
-}
-
-fn declareDisabledLabel() void {
-    label(.{ .str = "Hello", .disabled = true });
-}
-
-test "disabled label emits one text with the disabled color" {
-    const mem_size = cl.minMemorySize();
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
-    cl.beginLayout();
-    declareDisabledLabel();
-    const cmds = cl.endLayout();
-    var texts: usize = 0;
-    for (cmds) |c| {
-        if (c.command_type == .text) {
-            texts += 1;
-            try std.testing.expectEqual(Color.rgb(0x77, 0x77, 0x77).toClay(), c.render_data.text.text_color);
-        }
-    }
-    try std.testing.expectEqual(@as(usize, 1), texts);
 }

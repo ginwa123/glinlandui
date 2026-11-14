@@ -1,6 +1,7 @@
 // Agnostic reusable Clay image widget (toolkit-style, library only).
 const std = @import("std");
 const cl = @import("zclay");
+const prop = @import("../props.zig");
 const render = @import("../render_common.zig");
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
@@ -13,7 +14,7 @@ pub const ClickFn = ?*const fn (?*anyopaque) void;
 
 /// Toolkit-style image props.
 pub const ImageProps = struct {
-    id: []const u8,
+    id: prop.Id,
     path: []const u8,
     w: u32,
     h: u32,
@@ -49,7 +50,7 @@ pub fn image(props: ImageProps) void {
         .max_dim = props.max_dim,
     };
     cl.UI()(.{
-        .id = .ID(props.id),
+        .id = props.id.clay(),
         .layout = .{
             .sizing = .{
                 .w = .fixed(@floatFromInt(props.w)),
@@ -61,13 +62,13 @@ pub fn image(props: ImageProps) void {
     })({});
     // Semantics: an image is a leaf with no state and no text.
     semantics.register(.{
-        .id = cl.getElementId(props.id),
-        .tag = props.id,
+        .id = props.id.clay(),
+        .tag = props.id.str(),
         .role = .image,
     });
     if (props.on_click) |cb| {
         // Pointer cursor: clickable image.
-        registry.registerClickCursor(cl.getElementId(props.id), cb, props.ctx, .pointer);
+        registry.registerClickCursor(props.id.clay(), cb, props.ctx, .pointer);
     }
 }
 
@@ -81,7 +82,7 @@ fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions
 
 fn declareImage() void {
     beginFrame();
-    image(.{ .id = "test-image", .path = "/p/a.jpg", .w = 150, .h = 84 });
+    image(.{ .id = .{ .text = "test-image" }, .path = "/p/a.jpg", .w = 150, .h = 84 });
 }
 
 fn countImageCommands(declare_fn: *const fn () void, images: *usize, rects: *usize) !void {
@@ -115,7 +116,7 @@ test "image emits exactly one image command, no rectangles" {
 }
 
 test "ImageProps carries neutral defaults" {
-    const p = ImageProps{ .id = "x", .path = "/p/a.jpg", .w = 150, .h = 84 };
+    const p = ImageProps{ .id = .{ .text = "x" }, .path = "/p/a.jpg", .w = 150, .h = 84 };
     try std.testing.expectEqual(render.ImageFit.cover, p.fit);
     try std.testing.expectEqual(@as(u16, 256), p.max_dim);
     try std.testing.expectEqual(@as(u32, 0), p.radius);
@@ -132,7 +133,7 @@ test "image_data round-trips path, fit, and max_dim" {
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
     beginFrame();
     cl.beginLayout();
-    image(.{ .id = "test-image-ref", .path = "/p/b.png", .w = 150, .h = 84, .fit = .contain, .max_dim = 512 });
+    image(.{ .id = .{ .text = "test-image-ref" }, .path = "/p/b.png", .w = 150, .h = 84, .fit = .contain, .max_dim = 512 });
     const cmds = cl.endLayout();
     var found = false;
     for (cmds) |c| {
@@ -156,7 +157,7 @@ test "image honors fixed w/h geometry" {
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
     beginFrame();
     cl.beginLayout();
-    image(.{ .id = "test-image-geo", .path = "/p/a.jpg", .w = 150, .h = 84 });
+    image(.{ .id = .{ .text = "test-image-geo" }, .path = "/p/a.jpg", .w = 150, .h = 84 });
     _ = cl.endLayout();
     const bb = cl.getElementData(cl.getElementId("test-image-geo")).bounding_box;
     try std.testing.expectEqual(@as(f32, 150), bb.width);
@@ -176,12 +177,12 @@ var click_rec = ClickCtx{};
 
 fn declareClickImage() void {
     beginFrame();
-    image(.{ .id = "test-click-image", .path = "/p/a.jpg", .w = 150, .h = 84, .on_click = testOnClick, .ctx = &click_rec });
+    image(.{ .id = .{ .text = "test-click-image" }, .path = "/p/a.jpg", .w = 150, .h = 84, .on_click = testOnClick, .ctx = &click_rec });
 }
 
 fn declareNoClickImage() void {
     beginFrame();
-    image(.{ .id = "test-noclick-image", .path = "/p/a.jpg", .w = 150, .h = 84 });
+    image(.{ .id = .{ .text = "test-noclick-image" }, .path = "/p/a.jpg", .w = 150, .h = 84 });
 }
 
 test "image self-registers on_click; dispatchClick at center fires once" {

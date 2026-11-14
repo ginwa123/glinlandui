@@ -1,6 +1,7 @@
 // Agnostic reusable Clay radio button (toolkit-style, library only).
 const std = @import("std");
 const cl = @import("zclay");
+const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
@@ -10,7 +11,7 @@ pub const ClickFn = ?*const fn (?*anyopaque) void;
 
 /// Toolkit-style radio button props.
 pub const RadioProps = struct {
-    id: []const u8,
+    id: prop.Id,
     selected: bool = false,
     size: u32 = 20,
     outer_bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
@@ -29,7 +30,7 @@ pub const RadioProps = struct {
 pub fn radio(props: RadioProps) void {
     // NOTE: cl.hovered() must be evaluated INSIDE the UI() config literal (after Clay__OpenElement runs, while this element is open) so it queries this.
     cl.UI()(.{
-        .id = .ID(props.id),
+        .id = props.id.clay(),
         .layout = .{
             .sizing = .{
                 .w = .fixed(@floatFromInt(props.size)),
@@ -59,15 +60,15 @@ pub fn radio(props: RadioProps) void {
     });
     // Semantics: radios report SELECTED, not checked.
     semantics.register(.{
-        .id = cl.getElementId(props.id),
-        .tag = props.id,
+        .id = props.id.clay(),
+        .tag = props.id.str(),
         .role = .radio,
         .flags = .{ .enabled = !props.disabled, .selected = props.selected },
     });
     if (!props.disabled) {
         if (props.on_click) |cb| {
             // Pointer cursor: clickable radio.
-            registry.registerClickCursor(cl.getElementId(props.id), cb, props.ctx, .pointer);
+            registry.registerClickCursor(props.id.clay(), cb, props.ctx, .pointer);
         }
     }
 }
@@ -81,11 +82,11 @@ fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions
 }
 
 fn declareRadio() void {
-    radio(.{ .id = "test-radio" });
+    radio(.{ .id = .{ .text = "test-radio" } });
 }
 
 fn declareSelectedRadio() void {
-    radio(.{ .id = "test-radio-sel", .selected = true });
+    radio(.{ .id = .{ .text = "test-radio-sel" }, .selected = true });
 }
 
 /// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
@@ -124,7 +125,7 @@ test "radio emits outer circle only, plus dot when selected, and no text" {
 }
 
 test "RadioProps carries neutral defaults" {
-    const p = RadioProps{ .id = "x" };
+    const p = RadioProps{ .id = .{ .text = "x" } };
     try std.testing.expect(!p.selected);
     try std.testing.expectEqual(@as(u32, 20), p.size);
     try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.outer_bg);
@@ -147,7 +148,7 @@ fn borderColorForSelected(selected: bool) !cl.Color {
     cl.setMeasureTextFunction(void, {}, stubMeasure);
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
-    radio(.{ .id = "test-radio-border", .selected = selected });
+    radio(.{ .id = .{ .text = "test-radio-border" }, .selected = selected });
     const cmds = cl.endLayout();
     // NOTE: Clay tags border commands with a derived id (not the element id), so match the first border command by type, not by id.
     for (cmds) |c| {
@@ -176,7 +177,7 @@ fn testOnClick(ctx: ?*anyopaque) void {
 var click_rec = ClickCtx{};
 
 fn declareClickRadio() void {
-    radio(.{ .id = "test-click-radio", .on_click = testOnClick, .ctx = &click_rec });
+    radio(.{ .id = .{ .text = "test-click-radio" }, .on_click = testOnClick, .ctx = &click_rec });
 }
 
 test "radio self-registers on_click; dispatchClick at center fires once" {
@@ -206,7 +207,7 @@ fn rectColorForId(cmds: []cl.RenderCommand, id: u32) ?cl.Color {
 }
 
 fn declareDisabledRadio() void {
-    radio(.{ .id = "test-disabled-radio", .disabled = true, .on_click = testOnClick, .ctx = &click_rec });
+    radio(.{ .id = .{ .text = "test-disabled-radio" }, .disabled = true, .on_click = testOnClick, .ctx = &click_rec });
 }
 
 test "disabled radio uses disabled_bg and registers no click" {

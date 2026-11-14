@@ -227,7 +227,7 @@ fn showRec(ctx: ?*anyopaque, _: button.ButtonProps) void {
 }
 
 fn closeProps() button.ButtonProps {
-    return .{ .id = "x", .label = "X" };
+    return .{ .id = .{ .text = "x" }, .label = .{ .text = "X" } };
 }
 
 const KeyRec = struct {

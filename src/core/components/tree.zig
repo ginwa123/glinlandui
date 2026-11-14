@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const cl = @import("zclay");
+const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
@@ -24,7 +25,7 @@ pub const Row = struct {
 pub const SelectFn = ?*const fn (?*anyopaque, usize) void;
 
 pub const TreeProps = struct {
-    id: []const u8,
+    id: prop.Id,
     rows: []const Row,
     row_h: u32 = 24,
     indent: u16 = 13,
@@ -57,14 +58,14 @@ fn innerId(base: []const u8, i: usize, slot: u32) cl.ElementId {
 /// Declare a tree: one clickable row per entry, indented by `depth`.
 pub fn tree(props: TreeProps) void {
     semantics.register(.{
-        .id = cl.getElementId(props.id),
-        .tag = props.id,
+        .id = props.id.clay(),
+        .tag = props.id.str(),
         .role = .list,
         .flags = .{ .enabled = true },
     });
 
     cl.UI()(.{
-        .id = .ID(props.id),
+        .id = props.id.clay(),
         .layout = .{
             .direction = .top_to_bottom,
             .sizing = .{ .w = .grow, .h = .fit },
@@ -86,7 +87,7 @@ fn rowUi(props: TreeProps, row: Row, i: usize) void {
     const base_bg = if (row.selected) props.selected_bg else props.row_bg;
 
     cl.UI()(.{
-        .id = .IDI(props.id, @as(u32, @intCast(i + 1))),
+        .id = .IDI(props.id.str(), @as(u32, @intCast(i + 1))),
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{ .w = .grow, .h = .fixed(@floatFromInt(props.row_h)) },
@@ -107,7 +108,7 @@ fn rowUi(props: TreeProps, row: Row, i: usize) void {
         });
         // The label grows, which is what pushes the meta to the right edge.
         cl.UI()(.{
-            .id = innerId(props.id, i, 1),
+            .id = innerId(props.id.str(), i, 1),
             .layout = .{
                 .direction = .left_to_right,
                 .sizing = .{ .w = .grow, .h = .grow },
@@ -122,12 +123,12 @@ fn rowUi(props: TreeProps, row: Row, i: usize) void {
     });
 
     semantics.register(.{
-        .id = rowId(props.id, i),
+        .id = rowId(props.id.str(), i),
         .role = .list_item,
         .flags = .{ .enabled = true, .selected = row.selected },
     });
     if (props.on_select) |cb| {
-        registry.registerZCursor(rowId(props.id, i), cb, props.ctx, i, props.click_z, .pointer);
+        registry.registerZCursor(rowId(props.id.str(), i), cb, props.ctx, i, props.click_z, .pointer);
     }
 }
 
@@ -169,7 +170,7 @@ const sample_rows = [_]Row{
 };
 
 fn declareSample() void {
-    tree(.{ .id = "t", .rows = &sample_rows });
+    tree(.{ .id = .{ .text = "t" }, .rows = &sample_rows });
 }
 
 test "a tree draws one row per entry, plus the container" {
@@ -191,5 +192,5 @@ test "an empty tree still declares its container" {
 }
 
 fn declareEmpty() void {
-    tree(.{ .id = "t-empty", .rows = &.{} });
+    tree(.{ .id = .{ .text = "t-empty" }, .rows = &.{} });
 }

@@ -1,6 +1,7 @@
 // Agnostic reusable Clay toggle switch (toolkit-style, library only).
 const std = @import("std");
 const cl = @import("zclay");
+const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
@@ -10,7 +11,7 @@ pub const ClickFn = ?*const fn (?*anyopaque) void;
 
 /// Toolkit-style toggle switch props.
 pub const ToggleProps = struct {
-    id: []const u8,
+    id: prop.Id,
     on: bool = false,
     w: u32 = 44,
     h: u32 = 24,
@@ -30,7 +31,7 @@ pub fn toggle(props: ToggleProps) void {
     // NOTE: cl.hovered() must be evaluated INSIDE the UI() config literal (after Clay__OpenElement runs, while this element is open) so it queries this.
     const knob_d: u32 = props.h -| 4;
     cl.UI()(.{
-        .id = .ID(props.id),
+        .id = props.id.clay(),
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{
@@ -56,15 +57,15 @@ pub fn toggle(props: ToggleProps) void {
     });
     // Semantics: `.on` is the toggle's checked state.
     semantics.register(.{
-        .id = cl.getElementId(props.id),
-        .tag = props.id,
+        .id = props.id.clay(),
+        .tag = props.id.str(),
         .role = .toggle,
         .flags = .{ .enabled = !props.disabled, .checked = props.on },
     });
     if (!props.disabled) {
         if (props.on_click) |cb| {
             // Pointer cursor: clickable toggle.
-            registry.registerClickCursor(cl.getElementId(props.id), cb, props.ctx, .pointer);
+            registry.registerClickCursor(props.id.clay(), cb, props.ctx, .pointer);
         }
     }
 }
@@ -78,7 +79,7 @@ fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions
 }
 
 fn declareToggle() void {
-    toggle(.{ .id = "test-toggle" });
+    toggle(.{ .id = .{ .text = "test-toggle" } });
 }
 
 /// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
@@ -114,7 +115,7 @@ test "toggle emits pill + knob rectangles and no text" {
 }
 
 test "ToggleProps carries neutral defaults" {
-    const p = ToggleProps{ .id = "x" };
+    const p = ToggleProps{ .id = .{ .text = "x" } };
     try std.testing.expect(!p.on);
     try std.testing.expectEqual(@as(u32, 44), p.w);
     try std.testing.expectEqual(@as(u32, 24), p.h);
@@ -144,7 +145,7 @@ fn pillColor(on: bool) !cl.Color {
     cl.setMeasureTextFunction(void, {}, stubMeasure);
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
-    toggle(.{ .id = "test-toggle-bg", .on = on });
+    toggle(.{ .id = .{ .text = "test-toggle-bg" }, .on = on });
     const cmds = cl.endLayout();
     const bg = rectColorForId(cmds, cl.getElementId("test-toggle-bg").id);
     try std.testing.expect(bg != null);
@@ -171,7 +172,7 @@ fn testOnClick(ctx: ?*anyopaque) void {
 var click_rec = ClickCtx{};
 
 fn declareClickToggle() void {
-    toggle(.{ .id = "test-click-toggle", .on_click = testOnClick, .ctx = &click_rec });
+    toggle(.{ .id = .{ .text = "test-click-toggle" }, .on_click = testOnClick, .ctx = &click_rec });
 }
 
 test "toggle self-registers on_click; dispatchClick at center fires once" {
@@ -194,7 +195,7 @@ test "toggle self-registers on_click; dispatchClick at center fires once" {
 }
 
 fn declareDisabledToggle() void {
-    toggle(.{ .id = "test-disabled-toggle", .disabled = true, .on_click = testOnClick, .ctx = &click_rec });
+    toggle(.{ .id = .{ .text = "test-disabled-toggle" }, .disabled = true, .on_click = testOnClick, .ctx = &click_rec });
 }
 
 test "disabled toggle uses disabled_bg and registers no click" {

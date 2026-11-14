@@ -2,10 +2,11 @@
 
 const std = @import("std");
 const cl = @import("zclay");
+const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 
 pub const BadgeProps = struct {
-    id: []const u8,
+    id: prop.Id,
     label: []const u8,
     bg: Color = Color.rgb(0x26, 0x26, 0x2c),
     fg: Color = Color.rgb(0x8a, 0x8a, 0x94),
@@ -18,7 +19,7 @@ pub const BadgeProps = struct {
 /// Declare a badge.
 pub fn badge(props: BadgeProps) void {
     cl.UI()(.{
-        .id = .ID(props.id),
+        .id = props.id.clay(),
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{ .w = .fit, .h = .fit },
@@ -63,7 +64,7 @@ fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !v
 }
 
 fn declareSample() void {
-    badge(.{ .id = "b", .label = "INTEGER" });
+    badge(.{ .id = .{ .text = "b" }, .label = "INTEGER" });
 }
 
 test "a badge is one rect and one text" {
