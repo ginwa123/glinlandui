@@ -117,6 +117,21 @@ by design. What is comparable is the layout and the scroll, not the ink.
 Changing the bench — the frame count, the size, the scroll speed — means changing
 `ci/lazy_scroll_bench.expected` in the same commit. Those numbers are contractual.
 
+## Scrolling and repaint
+
+A gesture delta is in **points and moves that many points of content**. Clay multiplies a wheel delta by 10 internally
+(`scrollPosition += scrollDelta * 10`), so `frame.wheel_factor` cancels it and every call site divides by it. Handing Clay the raw
+platform delta makes a trackpad scroll ten times further than the fingers moved, which reads on screen as the list jumping and
+rows flashing in and out of the virtualisation window.
+
+A frame whose render commands are **identical to the previous frame's** is not presented: `frame.commandsRepeated()` is what the
+Cocoa window checks before blitting, and a resize is never skipped. Re-presenting an unchanged surface is wasted work, and it is
+the window through which any glitch in the blit or the composite reaches the eye as a blink.
+
+`GLIN_FRAME_DIFF=1 ./app` reports the two cases worth chasing: commands identical but pixels different (the engine), and a small
+changed frame with the colour it flipped between (a state flip, usually hover). Whole-area changes are scrolling and are
+suppressed — they are not a bug.
+
 ## Dependencies
 
 None. The package is std-only apart from the vendored Clay bindings and stb headers under
