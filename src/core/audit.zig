@@ -140,6 +140,8 @@ pub fn checkHitConsistency() usize {
         if (!data.found) continue;
         const cx = data.bounding_box.x + data.bounding_box.width * 0.5;
         const cy = data.bounding_box.y + data.bounding_box.height * 0.5;
+        // A target scrolled out of its container has no centre on screen, so there is nothing to lose it to.
+        if (!registry.insideClip(hit.clip, cx, cy)) continue;
         const winner = registry.topmostAt(cx, cy) orelse continue;
         if (winner.id.id == hit.id.id) continue;
         // A higher z is what an overlay is FOR, and a button inside a clickable card legitimately covers its centre. Only an ambiguous click between two targets

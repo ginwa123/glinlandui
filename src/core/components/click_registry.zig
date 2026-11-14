@@ -17,6 +17,15 @@ pub const RowClick = struct {
     ctx: ?*anyopaque,
 };
 
+/// The viewport a target is clipped to: a target inside a scroll container only answers inside it.
+pub const Clip = struct { x: f32, y: f32, w: f32, h: f32 };
+
+/// True when the point falls inside the clip (an absent clip clips nothing).
+pub fn insideClip(c: ?Clip, x: f32, y: f32) bool {
+    const r = c orelse return true;
+    return x >= r.x and x < r.x + r.w and y >= r.y and y < r.y + r.h;
+}
+
 const Entry = struct {
     id: cl.ElementId,
     cb_row: ?*const fn (?*anyopaque, usize) void = null,
@@ -29,14 +38,46 @@ const Entry = struct {
     z: i16 = 0,
     /// Hover cursor for this entry (Wayland cursor shape).
     cursor: Cursor = .default,
+    /// Scroll-container viewport this target was declared inside, if any.
+    clip: ?Clip = null,
 };
 
 var entries: [cap]Entry = undefined;
 var count: usize = 0;
 
+/// Viewport in force while declaring; `pushClip` nests by intersecting.
+var clip: ?Clip = null;
+var clip_stack: [8]?Clip = undefined;
+var clip_depth: usize = 0;
+
 /// Clear the registry for a new frame.
 pub fn beginFrame() void {
     count = 0;
+    clip = null;
+    clip_depth = 0;
+}
+
+/// Enter a scroll container's viewport: targets declared until `popClip` are clipped to it. A null rect (first frame, box unknown) clips nothing.
+pub fn pushClip(rect: ?Clip) void {
+    if (clip_depth < clip_stack.len) {
+        clip_stack[clip_depth] = clip;
+        clip_depth += 1;
+    }
+    if (rect) |r| {
+        clip = if (clip) |c| .{
+            .x = @max(c.x, r.x),
+            .y = @max(c.y, r.y),
+            .w = @max(0, @min(c.x + c.w, r.x + r.w) - @max(c.x, r.x)),
+            .h = @max(0, @min(c.y + c.h, r.y + r.h) - @max(c.y, r.y)),
+        } else r;
+    }
+}
+
+/// Leave the innermost scroll container.
+pub fn popClip() void {
+    if (clip_depth == 0) return;
+    clip_depth -= 1;
+    clip = clip_stack[clip_depth];
 }
 
 /// Register a row hit-target (list/dropdown rows) at default priority 0.
@@ -52,7 +93,7 @@ pub fn registerZ(id: cl.ElementId, cb: *const fn (?*anyopaque, usize) void, ctx:
 /// Full row version storing cursor (list rows pass .pointer).
 pub fn registerZCursor(id: cl.ElementId, cb: *const fn (?*anyopaque, usize) void, ctx: ?*anyopaque, index: usize, z: i16, cursor: Cursor) void {
     if (count >= cap) return;
-    entries[count] = .{ .id = id, .cb_row = cb, .ctx = ctx, .index = index, .z = z, .cursor = cursor };
+    entries[count] = .{ .id = id, .cb_row = cb, .ctx = ctx, .index = index, .z = z, .cursor = cursor, .clip = clip };
     count += 1;
 }
 
@@ -64,7 +105,7 @@ pub fn registerClick(id: cl.ElementId, cb: ClickFn, ctx: ?*anyopaque) void {
 /// Full click version storing cursor (button/toggle/checkbox/radio pass .pointer, slider passes .ew_resize, image on_click passes .pointer).
 pub fn registerClickCursor(id: cl.ElementId, cb: ClickFn, ctx: ?*anyopaque, cursor: Cursor) void {
     if (count >= cap) return;
-    entries[count] = .{ .id = id, .cb_click = cb, .ctx = ctx, .cursor = cursor };
+    entries[count] = .{ .id = id, .cb_click = cb, .ctx = ctx, .cursor = cursor, .clip = clip };
     count += 1;
 }
 
@@ -84,7 +125,7 @@ pub fn registerHover(id: cl.ElementId, cursor: Cursor) void {
 /// Hover-only with explicit z (overlay floats pass their z so the float wins over covered in-flow rows, mirroring dispatchClick's rule).
 pub fn registerHoverZ(id: cl.ElementId, cursor: Cursor, z: i16) void {
     if (count >= cap) return;
-    entries[count] = .{ .id = id, .z = z, .cursor = cursor };
+    entries[count] = .{ .id = id, .z = z, .cursor = cursor, .clip = clip };
     count += 1;
 }
 
@@ -103,6 +144,7 @@ pub fn topmostAt(x: f32, y: f32) ?Entry {
         const data = cl.getElementData(e.id);
         if (!data.found) continue;
         if (!contains(data.bounding_box, x, y)) continue;
+        if (!insideClip(e.clip, x, y)) continue;
         // Forward scan + >= : later entries win ties (legacy order).
         if (best == null or e.z >= best.?.z) best = e;
     }
@@ -150,6 +192,7 @@ pub fn hoverCursorAt(x: f32, y: f32) Cursor {
         const data = cl.getElementData(e.id);
         if (!data.found) continue;
         if (!contains(data.bounding_box, x, y)) continue;
+        if (!insideClip(e.clip, x, y)) continue;
         if (best == null or e.z >= best.?.z) best = e;
     }
     return if (best) |hit| hit.cursor else .default;
@@ -163,6 +206,7 @@ pub const Hit = struct {
     z: i16,
     cursor: Cursor,
     clickable: bool,
+    clip: ?Clip,
 };
 
 pub fn hitCount() usize {
@@ -177,6 +221,7 @@ pub fn hitAt(i: usize) ?Hit {
         .z = e.z,
         .cursor = e.cursor,
         .clickable = (e.cb_row != null or e.cb_click != null),
+        .clip = e.clip,
     };
 }
 

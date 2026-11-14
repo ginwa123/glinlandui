@@ -4282,14 +4282,14 @@ Clay_ScrollContainerData Clay_GetScrollContainerData(Clay_ElementId id) {
         Clay__ScrollContainerDataInternal *scrollContainerData = Clay__ScrollContainerDataInternalArray_Get(&context->scrollContainerDatas, i);
         if (scrollContainerData->elementId == id.id) {
             Clay_ClipElementConfig *clipElementConfig = Clay__FindElementConfigWithType(scrollContainerData->layoutElement, CLAY__ELEMENT_CONFIG_TYPE_CLIP).clipElementConfig;
-            if (!clipElementConfig) { // This can happen on the first frame before a scroll container is declared
-                return CLAY__INIT(Clay_ScrollContainerData) CLAY__DEFAULT_STRUCT;
-            }
+            // A missing config only means the element has not been re-registered yet this frame: the stored data is still this container's,
+            // so reporting found=false here made a virtualised list fall back to "no scroll offset" for that frame.
+            Clay_ClipElementConfig noConfig = CLAY__INIT(Clay_ClipElementConfig) CLAY__DEFAULT_STRUCT;
             return CLAY__INIT(Clay_ScrollContainerData) {
                 .scrollPosition = &scrollContainerData->scrollPosition,
                 .scrollContainerDimensions = { scrollContainerData->boundingBox.width, scrollContainerData->boundingBox.height },
                 .contentDimensions = scrollContainerData->contentSize,
-                .config = *clipElementConfig,
+                .config = clipElementConfig ? *clipElementConfig : noConfig,
                 .found = true
             };
         }

@@ -129,6 +129,11 @@ matches the element being declared by pointer into the per-frame element array, 
 whenever an element earlier in the frame appears or disappears — a blinking caret was enough to snap a scrolled list back to the top of
 its content for one frame, which is exactly the flash users report as "the list blinks".
 
+The scrollbar thumb floats over the viewport, so an **overflowing** container insets its content by the bar's width plus its margin: without
+that gutter a right-aligned value (a column type in a schema tree) runs under the thumb and is unreadable. A click target declared inside a
+scroll container answers **only inside that container** (`click_registry.pushClip`), so a row scrolled under a footer cannot swallow the
+footer's click — which is what the audit's `hit_target_not_self` was reporting.
+
 A frame whose render commands are **identical to the previous frame's** is not presented: `frame.commandsRepeated()` is what the
 Cocoa window checks before blitting, and a resize is never skipped. Re-presenting an unchanged surface is wasted work, and it is
 the window through which any glitch in the blit or the composite reaches the eye as a blink.

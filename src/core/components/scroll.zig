@@ -3,6 +3,7 @@ const std = @import("std");
 const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
 const box_mod = @import("box.zig");
+const click_registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
 const frame_mod = @import("../frame.zig");
 
@@ -161,6 +162,13 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
         .horizontal => .left_to_right,
         .vertical, .both => .top_to_bottom,
     };
+    // The thumb floats OVER the viewport, so an overflowing container insets its content by the gutter the thumb occupies.
+    const pad = cl.Padding{
+        .left = props.pad,
+        .right = props.pad + scrollbarGutter(props, axes.v, true),
+        .top = props.pad,
+        .bottom = props.pad + scrollbarGutter(props, axes.h, false),
+    };
     cl.UI()(.{
         .id = .ID(props.id),
         .layout = .{
@@ -169,7 +177,7 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
                 .w = toSizingAxis(props.w, props.min_w, props.max_w),
                 .h = toSizingAxis(props.h, props.min_h, props.max_h),
             },
-            .padding = .all(props.pad),
+            .padding = pad,
             .child_gap = props.gap,
         },
         // By ID, not Clay_GetScrollOffset(): that matches the open element by a stale pointer and drops the offset when an earlier element blinks.
@@ -183,7 +191,16 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
     })({
         // Clip ancestry for the semantics layer: every node registered inside this container records it, so resolve() can compute what is actually visible and.
         semantics.pushAncestor(cl.getElementId(props.id), true);
+        // A target inside a scroll container answers only inside it: a row scrolled under the footer must not swallow the footer's click.
+        const viewport = cl.getElementData(cl.getElementId(props.id));
+        click_registry.pushClip(if (viewport.found) .{
+            .x = viewport.bounding_box.x,
+            .y = viewport.bounding_box.y,
+            .w = viewport.bounding_box.width,
+            .h = viewport.bounding_box.height,
+        } else null);
         children(ctx);
+        click_registry.popClip();
         semantics.popAncestor();
     });
     // The container's own node is registered AFTER the pop, so it does not list itself as an ancestor.
@@ -196,6 +213,17 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
     });
     if (!props.show_scrollbar or props.disabled) return;
     declareScrollbars(props);
+}
+
+// Width a scrollbar takes out of the content on its axis: the thumb plus the margin it floats by, or zero when nothing overflows.
+fn scrollbarGutter(props: ScrollProps, axis: bool, vertical: bool) u16 {
+    if (!axis or !props.show_scrollbar or props.disabled) return 0;
+    const data = cl.getScrollContainerData(cl.getElementId(props.id));
+    if (!data.found) return 0;
+    const viewport = if (vertical) data.scroll_container_dimensions.h else data.scroll_container_dimensions.w;
+    const content = if (vertical) data.content_dimensions.h else data.content_dimensions.w;
+    if (!needsScrollbar(viewport, content)) return 0;
+    return props.scrollbar_width + @as(u16, @intFromFloat(props.scrollbar_margin));
 }
 
 /// Floating scrollbar thumbs for every overflowing scroll axis, attached to the viewport (previous-frame scroll data; first frame declares nothing —.
@@ -219,7 +247,7 @@ fn declareScrollbars(props: ScrollProps) void {
                             .attach_to = .to_element_with_id,
                             .parentId = parent_id,
                             .attach_points = .{ .element = .right_top, .parent = .right_top },
-                            .offset = .{ .x = -(w + props.scrollbar_margin), .y = props.scrollbar_margin },
+                            .offset = .{ .x = -props.scrollbar_margin, .y = props.scrollbar_margin },
                             .z_index = props.z_index,
                             .pointer_capture_mode = .passthrough,
                         },
@@ -228,14 +256,14 @@ fn declareScrollbars(props: ScrollProps) void {
                         .corner_radius = .all(@floatFromInt(props.thumb_radius)),
                     })({});
                 }
-                // NOTE: cl.hovered() stays INSIDE the UI() literal (while this thumb is open) — hoisting it would query the parent.
+                // The attach point is the edge the bar sits against, so the margin is the whole offset: subtracting the width pushed it 8 px in.
                 cl.UI()(.{
                     .id = .IDI(props.id, vthumb_index),
                     .floating = .{
                         .attach_to = .to_element_with_id,
                         .parentId = parent_id,
                         .attach_points = .{ .element = .right_top, .parent = .right_top },
-                        .offset = .{ .x = -(w + props.scrollbar_margin), .y = props.scrollbar_margin + off },
+                        .offset = .{ .x = -props.scrollbar_margin, .y = props.scrollbar_margin + off },
                         .z_index = props.z_index + 1,
                         .pointer_capture_mode = .passthrough,
                     },
@@ -261,7 +289,7 @@ fn declareScrollbars(props: ScrollProps) void {
                             .attach_to = .to_element_with_id,
                             .parentId = parent_id,
                             .attach_points = .{ .element = .left_bottom, .parent = .left_bottom },
-                            .offset = .{ .x = props.scrollbar_margin, .y = -(w + props.scrollbar_margin) },
+                            .offset = .{ .x = props.scrollbar_margin, .y = -props.scrollbar_margin },
                             .z_index = props.z_index,
                             .pointer_capture_mode = .passthrough,
                         },
@@ -276,7 +304,7 @@ fn declareScrollbars(props: ScrollProps) void {
                         .attach_to = .to_element_with_id,
                         .parentId = parent_id,
                         .attach_points = .{ .element = .left_bottom, .parent = .left_bottom },
-                        .offset = .{ .x = props.scrollbar_margin + off, .y = -(w + props.scrollbar_margin) },
+                        .offset = .{ .x = props.scrollbar_margin + off, .y = -props.scrollbar_margin },
                         .z_index = props.z_index + 1,
                         .pointer_capture_mode = .passthrough,
                     },
@@ -583,6 +611,30 @@ test "the scroll offset survives an element declared before the container" {
     _ = cl.endLayout();
     const off2 = cl.getElementData(cl.getElementId("scroll-probe")).bounding_box.y - cl.getElementData(cl.getElementId("test-scroll-probe")).bounding_box.y;
     try std.testing.expectApproxEqAbs(off1, off2, 0.5);
+}
+
+test "an overflowing container insets its content by the scrollbar gutter" {
+    const mem_size = cl.minMemorySize();
+    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
+    const arena = cl.Arena.init(buf);
+    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
+    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
+
+    // Frame 1 knows nothing about the content yet, so there is no thumb and no gutter.
+    cl.beginLayout();
+    declareProbeScroll();
+    _ = cl.endLayout();
+    const w1 = cl.getElementData(cl.getElementId("scroll-probe")).bounding_box.width;
+
+    // Frame 2 sees 400 px of content in a 100 px viewport: the thumb appears and the content stops short of it.
+    cl.beginLayout();
+    declareProbeScroll();
+    _ = cl.endLayout();
+    const w2 = cl.getElementData(cl.getElementId("scroll-probe")).bounding_box.width;
+
+    try std.testing.expectApproxEqAbs(@as(f32, 200), w1, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f32, 200 - 8 - 4), w2, 0.5);
 }
 
 // ---- Slider-style drag tests: pointer down = scroll down (content up), 1:1 clamped — the scrollbar-slider convention (Clay's built-in drag is.
