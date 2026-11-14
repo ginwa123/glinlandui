@@ -4,6 +4,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+// The one face every platform shares, embedded so the same app looks the same everywhere and pixel tests are reproducible.
+pub const bundled_font: []const u8 = @embedFile("../assets/IBMPlexMono-Regular.ttf");
+
 // ONE ordered list for every platform: `core/` may not branch on the target OS (ci/check_layering.sh R3/R5), and the paths are data, not a dependency.
 pub const candidates: []const [:0]const u8 = &.{
     // macOS.

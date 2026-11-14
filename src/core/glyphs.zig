@@ -22,6 +22,14 @@ pub const Font = struct {
 
     /// Load the platform's default UI font, trying each candidate until one actually PARSES.
     pub fn loadDefault(alloc: std.mem.Allocator) ?Font {
+        // The bundled face first: one typeface on every platform is what makes the app look the same and the golden tests reproducible.
+        if (alloc.dupe(u8, font_io.bundled_font)) |bytes| {
+            if (fromBytes(alloc, bytes)) |font| {
+                return font;
+            } else |_| {
+                alloc.free(bytes);
+            }
+        } else |_| {}
         for (font_io.fontCandidates()) |path| {
             if (load(alloc, path)) |font| {
                 return font;
