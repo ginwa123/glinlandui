@@ -285,8 +285,7 @@ pub fn claimId(id: cl.ElementId) void {
 
 fn clayErrorHandler(err: cl.ErrorData) callconv(.c) void {
     const msg = err.error_text.chars[0..@intCast(err.error_text.length)];
-    // Clay's duplicate message never names the id, and `claimId` already reports it with the string and offset, so this
-    // branch would only add a nameless line per element per frame.
+    // Clay's duplicate message never names the id and `claimId` already reports it, so this would only add a nameless line.
     if (err.error_type == .duplicate_id) return;
     std.log.err("clay {s}: {s}", .{ @tagName(err.error_type), msg });
 }

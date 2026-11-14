@@ -82,9 +82,7 @@ pub const Host = struct {
         frame_mod.setPointerButton(self.ptr.down, self.ptr.down_x, self.ptr.down_y);
         self.clock_s += 0.016;
         frame_mod.setTime(self.clock_s, 0.016);
-        // Consume the pending wheel delta exactly once per frame (Clay routes it to the hovered scroll container; zero = no-op).
-        // WHOLE pixels only, with the remainder carried to the next frame: a sub-pixel scroll offset re-rasterises every
-        // glyph at a new sub-pixel phase, which reads on screen as the list shimmering or blinking.
+        // Consume the wheel delta once per frame, in WHOLE pixels with the remainder carried: a sub-pixel offset re-rasterises every glyph.
         const dx = @trunc(self.scroll_dx);
         const dy = @trunc(self.scroll_dy);
         self.scroll_dx -= dx;
@@ -310,8 +308,7 @@ test "host: a frame applies whole pixels of scroll and keeps the remainder" {
 test "host: a no-op scroll does not make the frame dirty" {
     var h: Host = undefined;
     try testHost(&h, null, noopRoot);
-    // A trackpad that reports a zero delta, or jitter below a hundredth of a point, must not cost a repaint: that is
-    // what kept an idle window rendering at 60 frames a second.
+    // A zero delta, or jitter below a hundredth of a point, must not cost a repaint: that kept an idle window at 60 fps.
     h.onScrollEvent(0, 0);
     h.onScrollEvent(0.001, -0.004);
     try std.testing.expectEqual(@as(f32, 0), h.scroll_dy);

@@ -492,7 +492,7 @@ pub fn offsetAtX(text: []const u8, x: f32, font_size: u16, measure: *const fn ([
     // The nearer edge wins, which is what makes a click between two letters feel right.
     if (lo < text.len) {
         const step = codepointLen(text, lo);
-        if (x - measure(text[0..lo], font_size) > measure(text[0..lo + step], font_size) - x) return lo + step;
+        if (x - measure(text[0..lo], font_size) > measure(text[0 .. lo + step], font_size) - x) return lo + step;
     }
     return lo;
 }

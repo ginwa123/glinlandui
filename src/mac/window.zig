@@ -218,8 +218,7 @@ pub const Window = struct {
     ) callconv(.c) void {
         const self = ctx(p);
         const d = self.delegate orelse return;
-        // AppKit delivers motion events nobody asked for (a noisy device, a re-keyed window), and repainting on one of
-        // those is what keeps an idle app at 60 frames a second. A pointer event that changes nothing is dropped here.
+        // AppKit delivers motion events nobody asked for, and repainting on one kept an idle app at 60 fps: a no-op event is dropped here.
         const pressed_now = kind == input_macos.DOWN or (kind == input_macos.MOTION and self.left_held);
         if (x == self.last_ptr_x and y == self.last_ptr_y and pressed_now == self.last_ptr_pressed) return;
         self.last_ptr_x = x;
