@@ -10,6 +10,7 @@ const cl = @import("zclay");
 const scroll_mod = @import("components/scroll.zig");
 const input_mod = @import("components/input.zig");
 const semantics = @import("semantics.zig");
+const glyphs = @import("glyphs.zig");
 
 /// App declare callback: builds the Clay tree for a w x h window.
 pub const RootFn = *const fn (?*anyopaque, u32, u32) void;
@@ -42,6 +43,8 @@ pub const Host = struct {
 
     pub fn init(alloc: std.mem.Allocator, ctx: ?*anyopaque, root_fn: RootFn) !Host {
         var self = Host{ .alloc = alloc, .root_ctx = ctx, .root_fn = root_fn };
+        // The glyph cache spends the app's allocator, not a page-per-glyph one of its own.
+        glyphs.initCache(alloc);
         self.clay_mem = try frame_mod.initClay(alloc, self.win_w, self.win_h);
         self.clay_ready = true;
         // Nothing is on screen yet, so the first frame of this host is never "the same as the last", and no field owns the keyboard.

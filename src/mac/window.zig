@@ -226,6 +226,8 @@ pub const Window = struct {
         const comparable = self.diff_prev.len == n and self.diff_prev_w == sf.width and self.diff_prev_h == sf.height;
         self.frame_no +%= 1;
         if (!comparable) {
+            // Free the old buffer: a resize re-enters here, and the previous frame's copy is dead.
+            if (self.diff_prev.len > 0) std.heap.page_allocator.free(self.diff_prev);
             self.diff_prev = std.heap.page_allocator.alloc(u8, n) catch return;
             @memcpy(self.diff_prev[0..n], sf.pixels);
             self.diff_prev_w = sf.width;

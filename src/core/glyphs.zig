@@ -155,6 +155,17 @@ pub const CachedGlyph = struct {
 const CacheKey = struct { cp: u21, size: u16 };
 
 var cache: std.AutoHashMapUnmanaged(CacheKey, CachedGlyph) = .empty;
+// The allocator the APPLICATION's `main` handed the toolkit. Never invented here.
+var cache_alloc: std.mem.Allocator = std.heap.page_allocator;
+// Glyph pixels bump-allocate from one arena: a page-per-glyph allocator charged 16 KB for a 96-byte mask, so a 1000-glyph screen became 16 MB of mmaps.
+var pixels: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+
+/// Point the glyph cache at the app's allocator. `Host.init` calls this with the allocator it was given.
+pub fn initCache(alloc: std.mem.Allocator) void {
+    clearGlyphCache();
+    cache_alloc = alloc;
+    pixels = .init(alloc);
+}
 
 /// Rasterize `cp` at `font_size` once and reuse it for every later frame.
 pub fn cachedGlyph(font: *const Font, cp: u21, font_size: u16) ?*const CachedGlyph {
@@ -166,18 +177,15 @@ pub fn cachedGlyph(font: *const Font, cp: u21, font_size: u16) ?*const CachedGly
     defer freeMask(&m);
 
     const n = m.w * m.h;
-    const data = std.heap.page_allocator.alloc(u8, n) catch return null;
+    const data = pixels.allocator().alloc(u8, n) catch return null;
     @memcpy(data, m.data[0..n]);
-    cache.put(std.heap.page_allocator, key, .{
+    cache.put(cache_alloc, key, .{
         .data = data,
         .w = m.w,
         .h = m.h,
         .xoff = m.xoff,
         .yoff = m.yoff,
-    }) catch {
-        std.heap.page_allocator.free(data);
-        return null;
-    };
+    }) catch return null;
     return cache.getPtr(key);
 }
 
@@ -193,15 +201,38 @@ pub fn capBox(font: *const Font, font_size: u16) ?struct { top: f32, height: f32
 
 /// Drop every cached glyph. Call when the font changes.
 pub fn clearGlyphCache() void {
-    var it = cache.iterator();
-    while (it.next()) |e| std.heap.page_allocator.free(e.value_ptr.data);
-    cache.deinit(std.heap.page_allocator);
+    cache.deinit(cache_alloc);
     cache = .empty;
+    // Retain the arena's chunks: a font switch re-rasterizes the same glyphs, so those pages are wanted again immediately.
+    _ = pixels.reset(.retain_capacity);
 }
 
 /// How many glyphs are cached, for tests.
 pub fn cachedGlyphCount() usize {
     return cache.count();
+}
+
+/// The arena's live bytes, so a test can prove glyph memory is bounded rather than one page per glyph.
+pub fn cachedGlyphBytes() usize {
+    return pixels.queryCapacity();
+}
+
+test "the glyph cache bumps from one arena instead of a page per glyph" {
+    var font = requireFont() orelse return error.SkipZigTest;
+    defer font.deinit();
+    // page_allocator, so the arena's chunks are exactly the pages it asked the kernel for and nothing leaks into the test's checker.
+    initCache(std.heap.page_allocator);
+    defer clearGlyphCache();
+
+    var cached: usize = 0;
+    for (8..16) |size| {
+        for ('a'..('z' + 1)) |cp| {
+            if (cachedGlyph(&font, @intCast(cp), @intCast(size)) != null) cached += 1;
+        }
+    }
+    try std.testing.expect(cached > 100);
+    // A page per glyph would be cached * 16 KB; the arena pays only for the masks themselves.
+    try std.testing.expect(cachedGlyphBytes() < cached * 4096);
 }
 
 /// Decode the next UTF-8 codepoint.

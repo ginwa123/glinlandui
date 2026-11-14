@@ -2,4 +2,4 @@
 const std = @import("std");
 
 /// The process allocator.
-pub const allocator = std.heap.page_allocator;
+pub const allocator = std.heap.smp_allocator;
