@@ -193,49 +193,6 @@ pub const Window = struct {
         if (self.handle) |handle| c.glin_cocoa_set_animating(handle, if (on) 1 else 0);
     }
 
-    // GLIN_FRAME_DIFF=1: report the case that matters — commands identical to the previous frame, pixels not. That is a blink the app did not draw.
-    fn reportFrameDiff(self: *Window, surface: ?*soft.Surface) void {
-        const sf = surface orelse return;
-        const n = sf.pixels.len;
-        const comparable = self.diff_prev.len == n and self.diff_prev_w == sf.width and self.diff_prev_h == sf.height;
-        self.frame_no +%= 1;
-        // Consecutive frames only, and a changed frame is reported too (throttled), so a blink always names its own box.
-        if (comparable and !frame_mod.commandsRepeated() and self.diff_prints < 50) {
-            self.diff_changed +%= 1;
-            if (self.diff_changed % 12 != 1) {
-                @memcpy(self.diff_prev[0..n], sf.pixels);
-                self.diff_prev_w = sf.width;
-                self.diff_prev_h = sf.height;
-                return;
-            }
-            const box = self.diffBox(sf);
-            // A small change is the interesting one: a whole-area repaint is scrolling, a row or a column is a blink.
-            if (box.count * 20 < n / 4) {
-                self.diff_prints += 1;
-                // The colour the changed box went from and to, which names the state that flipped (base / hover / selected).
-                const cx = (box.min_x + box.max_x) / 2;
-                const cy = (box.min_y + box.max_y) / 2;
-                const ci = (cy * @as(usize, sf.width) + cx) * 4;
-                const was = (@as(u32, self.diff_prev[ci]) << 16) | (@as(u32, self.diff_prev[ci + 1]) << 8) | self.diff_prev[ci + 2];
-                const now = (@as(u32, sf.pixels[ci]) << 16) | (@as(u32, sf.pixels[ci + 1]) << 8) | sf.pixels[ci + 2];
-                std.log.info("FRAME CHANGED {d} px  x {d}..{d}  y {d}..{d}  cmds={d}  colour {x:0>6} -> {x:0>6}  frame={d}", .{ box.count, box.min_x, box.max_x, box.min_y, box.max_y, frame_mod.lastCommandCount(), was, now, self.frame_no });
-            }
-        }
-        if (comparable and frame_mod.commandsRepeated() and self.diff_prints < 50) {
-            const box = self.diffBox(sf);
-            if (box.count > 0) {
-                self.diff_prints += 1;
-                std.log.info("FRAME DIFF {d} px  x {d}..{d}  y {d}..{d}  commands identical, pixels not", .{ box.count, box.min_x, box.max_x, box.min_y, box.max_y });
-            }
-        }
-        if (!comparable) {
-            self.diff_prev = std.heap.page_allocator.alloc(u8, n) catch return;
-        }
-        @memcpy(self.diff_prev[0..n], sf.pixels);
-        self.diff_prev_w = sf.width;
-        self.diff_prev_h = sf.height;
-    }
-
     // Every pixel that differs from the previous frame, and the box they fall in.
     const DiffBox = struct { count: usize = 0, min_x: usize = 0, max_x: usize = 0, min_y: usize = 0, max_y: usize = 0 };
 
@@ -255,6 +212,37 @@ pub const Window = struct {
             }
         }
         return b;
+    }
+
+    // GLIN_FRAME_DIFF=1: every frame whose pixels changed, with what changed and the colour it flipped between.
+    fn reportFrameDiff(self: *Window, surface: ?*soft.Surface) void {
+        const sf = surface orelse return;
+        const n = sf.pixels.len;
+        const comparable = self.diff_prev.len == n and self.diff_prev_w == sf.width and self.diff_prev_h == sf.height;
+        self.frame_no +%= 1;
+        if (!comparable) {
+            self.diff_prev = std.heap.page_allocator.alloc(u8, n) catch return;
+            @memcpy(self.diff_prev[0..n], sf.pixels);
+            self.diff_prev_w = sf.width;
+            self.diff_prev_h = sf.height;
+            return;
+        }
+        // Consecutive frames only, and no cap on the number of lines: a loop prints a line per frame, which is the point.
+        const box = self.diffBox(sf);
+        if (box.count > 0 and frame_mod.commandsRepeated()) {
+            std.log.info("FRAME DIFF {d} px  x {d}..{d}  y {d}..{d}  commands identical, pixels not  frame={d}", .{ box.count, box.min_x, box.max_x, box.min_y, box.max_y, self.frame_no });
+        } else if (box.count > 0 and box.count * 20 < n / 4) {
+            // A whole-area repaint is scrolling; a small one is a state flip, and the colour names which.
+            const cx = (box.min_x + box.max_x) / 2;
+            const cy = (box.min_y + box.max_y) / 2;
+            const ci = (cy * @as(usize, sf.width) + cx) * 4;
+            const was = (@as(u32, self.diff_prev[ci]) << 16) | (@as(u32, self.diff_prev[ci + 1]) << 8) | self.diff_prev[ci + 2];
+            const now = (@as(u32, sf.pixels[ci]) << 16) | (@as(u32, sf.pixels[ci + 1]) << 8) | sf.pixels[ci + 2];
+            std.log.info("FRAME CHANGED {d} px  x {d}..{d}  y {d}..{d}  cmds={d}  colour {x:0>6} -> {x:0>6}  frame={d}", .{ box.count, box.min_x, box.max_x, box.min_y, box.max_y, frame_mod.lastCommandCount(), was, now, self.frame_no });
+        }
+        @memcpy(self.diff_prev[0..n], sf.pixels);
+        self.diff_prev_w = sf.width;
+        self.diff_prev_h = sf.height;
     }
 
     // Apply the cursor shape the frame resolved, when it changed.
