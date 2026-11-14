@@ -27,6 +27,11 @@ jobs:
       - name: Check the core/linux/mac layering rules
         run: ./ci/check_layering.sh
 
+      # Static and OS-independent: it reads the four window backends and fails
+      # when one stops honouring the display backing scale. See ci/render_scale.expected.
+      - name: Every backend renders at the display backing scale
+        run: ./ci/check_render_scale.sh
+
   linux:
     name: Linux / Zig 0.16.0 / native GLES3
     runs-on: ubuntu-24.04

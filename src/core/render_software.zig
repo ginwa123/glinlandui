@@ -1,5 +1,6 @@
 // Portable software rasterizer — the reference renderer for glinlandui.
 const std = @import("std");
+const scale = @import("scale.zig");
 const cl = @import("zclay");
 const glyphs = @import("glyphs.zig");
 const text_face = @import("text_face.zig");
@@ -615,9 +616,8 @@ pub const Renderer = struct {
         if (win_w <= 0 or win_h <= 0) return;
         // `self` is stable here (the renderer lives inside the owning Host), so exposing &self.surface for a window backend to blit is safe.
         current_surface = &self.surface;
-        const pw: u32 = @intFromFloat(@as(f32, @floatFromInt(win_w)) * render_scale);
-        const ph: u32 = @intFromFloat(@as(f32, @floatFromInt(win_h)) * render_scale);
-        self.surface.resize(pw, ph) catch return;
+        const p = scale.pixelSize(@intCast(win_w), @intCast(win_h), render_scale);
+        self.surface.resize(p.w, p.h) catch return;
         self.surface.clear();
         self.surface.renderCommands(commands);
     }

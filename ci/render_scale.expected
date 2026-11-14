@@ -1,0 +1,10 @@
+# Backends that do NOT yet honour the display backing scale.
+#
+# Each one renders a 1x image that the compositor upscales, which is the blur
+# users see on a HiDPI screen. Deleting a line is the proof the fix landed;
+# the gate fails while a line is here but the backend is wired.
+#
+# mac is deliberately absent: it renders at `backing_scale` (2x on Retina).
+windows
+linux
+web
