@@ -238,9 +238,13 @@ Three lifetimes decide whether an app works, and each one is a bug the todo exam
 2. **A click callback's `ctx` must outlive the frame.** Clicks are dispatched *after* the declare returns, so a
    pointer to a local in the composable is already gone. Carry the ViewModel, or a value `remember`ed in the
    composition.
-3. **Register a row's click target before you declare its box.** `click_registry.topmostAt` lets the later
-   entry win a tie, so a button declared inside the row beats the row's own target — otherwise the row
-   swallows its own Delete button.
+3. **A row's click target is registered before its box is declared.** `click_registry.topmostAt` lets the later
+   entry win a tie, so a button declared inside the row must come after the row. `components.list` does this
+   for you — an app that declares its own row must do it itself.
+
+Two components already do the plumbing an app would otherwise repeat: `components.input.liveField` takes a
+`FieldCtx` that OWNS the draft (buffer, caret, selection, measure) — declare one and feed it keys — and
+`components.list` owns a list's rows, their ids, hover and per-row clicks.
 
 `examples/todo/` is the worked example, and its README is the full Compose-to-glinlandui mapping table.
 

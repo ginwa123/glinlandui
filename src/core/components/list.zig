@@ -155,6 +155,8 @@ fn listVertical(
         for (items, 0..) |item, i| {
             const is_sel: bool = if (props.selected) |sel| sel == i else false;
             const base_bg: Color = if (props.disabled) props.disabled_bg else if (is_sel) props.selected_bg else props.row_bg;
+            // Registered BEFORE the row: a later entry wins the hit test, so a button declared inside the row beats the row.
+            registerCell(props, i);
             // NOTE: cl.hovered() must be evaluated INSIDE this row's UI() config literal (while the row element is open) so it queries this row — calling it.
             cl.UI()(.{
                 // +1: CLAY_ID(base) == CLAY_IDI(base, 0) — row i takes IDI(base, i + 1) so row 0 never collides with the container .ID(props.id) above.
@@ -175,7 +177,6 @@ fn listVertical(
             })({
                 renderItem(item_ctx, item, i);
             });
-            registerCell(props, i);
         }
     });
 }
@@ -215,7 +216,6 @@ fn listHorizontal(
             })({
                 renderItem(item_ctx, item, i);
             });
-            registerCell(props, i);
         }
     });
 }
@@ -251,6 +251,7 @@ fn listGrid(
                     if (i >= items.len) break;
                     const item = items[i];
                     const is_sel: bool = if (props.selected) |sel| sel == i else false;
+                    registerCell(props, i);
                     cl.UI()(.{
                         .id = .IDI(props.id, @as(u32, @intCast(i + 1))),
                         .layout = .{
@@ -271,7 +272,6 @@ fn listGrid(
                     })({
                         renderItem(item_ctx, item, i);
                     });
-                    registerCell(props, i);
                 }
             });
         }
@@ -639,6 +639,56 @@ test "list self-registers on_select per row; dispatchClick fires index" {
     try std.testing.expectEqual(@as(?usize, 2), select_rec.last);
     try std.testing.expect(!registry.dispatchClick(700, 460));
     try std.testing.expectEqual(@as(usize, 1), select_rec.calls);
+}
+
+var inner_hits: usize = 0;
+var outer_hits: usize = 0;
+
+fn onInnerClick(_: ?*anyopaque) void {
+    inner_hits += 1;
+}
+
+fn onOuterClick(_: ?*anyopaque, _: usize) void {
+    outer_hits += 1;
+}
+
+// A row that contains its own click target, which is what every app with a Delete button in a row declares.
+fn renderWithInner(_: CtxA, _: TitleItem, index: usize) void {
+    if (index != 0) return;
+    cl.UI()(.{
+        .id = .ID("test-inner-target"),
+        .layout = .{ .sizing = .{ .w = .fixed(24), .h = .fixed(24) } },
+    })({});
+    registry.registerClickCursor(cl.getElementId("test-inner-target"), onInnerClick, null, .pointer);
+}
+
+fn declareInnerList() void {
+    list(.{ .id = "test-inner-list", .on_select = onOuterClick }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderWithInner);
+}
+
+test "a widget inside a row wins the hit test over the row itself" {
+    const mem_size = cl.minMemorySize();
+    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
+    const arena = cl.Arena.init(buf);
+    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
+    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    registry.beginFrame();
+    inner_hits = 0;
+    outer_hits = 0;
+    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
+    cl.beginLayout();
+    declareInnerList();
+    _ = cl.endLayout();
+
+    const inner = cl.getElementData(cl.getElementId("test-inner-target")).bounding_box;
+    try std.testing.expect(registry.dispatchClick(inner.x + inner.width * 0.5, inner.y + inner.height * 0.5));
+    try std.testing.expectEqual(@as(usize, 1), inner_hits);
+    try std.testing.expectEqual(@as(usize, 0), outer_hits);
+
+    // Anywhere else in the row is still the row's.
+    const row = cl.getElementData(rowId("test-inner-list", 0)).bounding_box;
+    try std.testing.expect(registry.dispatchClick(row.x + row.width - 4, row.y + row.height * 0.5));
+    try std.testing.expectEqual(@as(usize, 1), outer_hits);
 }
 
 fn declareNoSelectList() void {

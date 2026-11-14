@@ -20,6 +20,11 @@ pub const pangoFamily = native.pangoFamily;
 
 // and a caret placed from a measurement drifts off the glyphs.
 pub const measureText = face.measureText;
+
+// A run's width in points — what a caret or a click needs, rather than the full extent.
+pub fn runWidth(bytes: []const u8, font_size: u16) f32 {
+    return measureText(bytes, font_size).w;
+}
 // True when text is measured with real metrics; false on a host with no font file (a bare CI runner, wasm).
 pub const fontAvailable = face.fontAvailable;
 // The face itself, so a rasteriser draws with the same one the layout measured with.

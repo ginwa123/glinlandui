@@ -6,6 +6,7 @@ const registry = @import("click_registry.zig");
 const caret_mod = @import("caret.zig");
 const frame_mod = @import("../frame.zig");
 const text_editor = @import("../text_editor.zig");
+const text_backend = @import("../text_backend.zig");
 const semantics = @import("../semantics.zig");
 
 // Raw evdev keycode → printable ASCII under the US layout.
@@ -444,12 +445,12 @@ pub fn field(props: FieldProps, query: []const u8) void {
 
 // Declare a text field with HTML-like caret + selection: prompt, then the query split around the caret (before / "|" / after), with the selected span.
 pub const FieldCtx = struct {
-    input: *text_editor.Editor,
-    id: []const u8,
-    // Measures a run with the font that draws the field. REQUIRED: a guessed cell width drifts off the glyphs, so the caret, the click and the drag would
-
-    // each land somewhere slightly different.
-    measure: *const fn ([]const u8, u16) f32,
+    // The draft, owned here: a field that only DRAWS takes a `[]const u8`, and this one is the field an app types into.
+    buf: [max_field_len]u8 = undefined,
+    editor: text_editor.Editor = .{ .buf = &.{} },
+    id: []const u8 = "",
+    // Measures a run with the font that draws the field. The engine's text backend is that font.
+    measure: *const fn ([]const u8, u16) f32 = text_backend.runWidth,
     // Left padding of the field, written by `liveField` each frame so a click and the caret share one origin.
     pad_lr: f32 = 8,
     // The field's font size, written by `liveField` each frame, for the same reason.
@@ -459,7 +460,18 @@ pub const FieldCtx = struct {
     focus_ctx: ?*anyopaque = null,
     // True while this field owns a drag in flight; the field ticks it, so the app never has to.
     dragging: bool = false,
+    bound: bool = false,
+
+    // Point the editor at this field's own buffer, once, after the FieldCtx is where it will stay.
+    pub fn bind(self: *FieldCtx) void {
+        if (self.bound) return;
+        self.editor = text_editor.Editor.init(&self.buf);
+        self.bound = true;
+    }
 };
+
+// How much draft a field owns. A single-line input is not a document; an app that needs more uses `liveField` with its own editor.
+pub const max_field_len: usize = 256;
 
 // Anchor the caret on the press, extend it while the button stays down, and release the drag when it comes up.
 fn dragSelect(ctx: *FieldCtx, id: []const u8) void {
@@ -476,7 +488,7 @@ fn dragSelect(ctx: *FieldCtx, id: []const u8) void {
     if (!ctx.dragging and !began_here) return;
     // `extend` is false on the anchoring frame (place the caret) and true after it (grow the selection from that anchor).
     const x = frame_mod.ptr_x - bb.x - ctx.pad_lr;
-    ctx.input.setCaret(text_editor.offsetAtX(ctx.input.text(), x, ctx.font_size, ctx.measure), ctx.dragging);
+    ctx.editor.setCaret(text_editor.offsetAtX(ctx.editor.text(), x, ctx.font_size, ctx.measure), ctx.dragging);
     if (!ctx.dragging) {
         ctx.dragging = true;
         frame_mod.setFocus(ctx.id);
@@ -486,7 +498,8 @@ fn dragSelect(ctx: *FieldCtx, id: []const u8) void {
 
 // A live text field: selection highlight, a blinking caret, and a click that places the caret.
 pub fn liveField(props: FieldProps, ctx: *FieldCtx) void {
-    const input = ctx.input;
+    ctx.bind();
+    const input = &ctx.editor;
     // The click and drag handlers need the same origin and metrics the text is drawn with.
     ctx.pad_lr = @floatFromInt(props.pad_lr);
     ctx.font_size = props.font_size;
@@ -548,15 +561,15 @@ fn onFieldDoubleClick(ctx: ?*anyopaque) void {
     const data = cl.getElementData(cl.getElementId(c.id));
     if (!data.found) return;
     const x = frame_mod.ptr_x - data.bounding_box.x - c.pad_lr;
-    text_editor.selectWordAt(c.input, text_editor.offsetAtX(c.input.text(), x, c.font_size, c.measure));
-    c.input.idle = 0;
+    text_editor.selectWordAt(&c.editor, text_editor.offsetAtX(c.editor.text(), x, c.font_size, c.measure));
+    c.editor.idle = 0;
     frame_mod.setFocus(c.id);
     if (c.on_focus) |f| f(c.focus_ctx);
 }
 
 // The caret, floated at the measured end of the run before it. The primitive snaps it and makes it one device pixel.
 fn caretBar(props: FieldProps, ctx: *FieldCtx, text: []const u8) void {
-    const at = @min(ctx.input.caret.offset, text.len);
+    const at = @min(ctx.editor.caret.offset, text.len);
     caret_mod.declare(.{
         // The padding is part of the parent box, so the offset starts from the border box, not the text.
         .id = .IDI(props.id, 2),
@@ -573,8 +586,8 @@ fn onFieldClick(ctx: ?*anyopaque) void {
     const data = cl.getElementData(cl.getElementId(c.id));
     if (!data.found) return;
     const x = frame_mod.ptr_x - data.bounding_box.x - c.pad_lr;
-    c.input.setCaret(text_editor.offsetAtX(c.input.text(), x, c.font_size, c.measure), false);
-    c.input.idle = 0;
+    c.editor.setCaret(text_editor.offsetAtX(c.editor.text(), x, c.font_size, c.measure), false);
+    c.editor.idle = 0;
     frame_mod.setFocus(c.id);
     if (c.on_focus) |f| f(c.focus_ctx);
 }

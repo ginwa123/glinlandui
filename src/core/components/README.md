@@ -32,8 +32,8 @@ theme import and no global palette — the caller passes `bg`, `fg`, `hover_bg` 
 | `box.zig` | the container: direction, sizing, padding, gap, radius, border, background. Also `row`, `column` and `spacer` helpers |
 | `text.zig` | a single text run: size, colour, wrap |
 | `button.zig` | a clickable label with hover, disabled and border states |
-| `input.zig` | a text field (`fieldEdit`) that draws a caret and a selection from an `EditState`, plus `handleKey`/`handleText` for editing it |
-| `list.zig` | rows, cells or a grid, with selection, hover and per-row click targets |
+| `input.zig` | text fields: `field`/`fieldEdit` DRAW a value the caller owns, and `liveField` takes a `FieldCtx` that OWNS the draft, the caret and the selection, plus `handleKey`/`handleText` for editing it |
+| `list.zig` | rows, cells or a grid, with selection, hover and per-row click targets — registered BEFORE each row, so a widget inside it wins the hit test |
 | `tree.zig` | hierarchical rows: depth indent, caret, expansion state, selection, right-aligned meta |
 | `tabs.zig` | a tab bar: active state, optional accent dot, optional close button |
 | `badge.zig` | a short label in a rounded pill — a type, a count, a state |

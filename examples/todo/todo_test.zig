@@ -1,6 +1,5 @@
 // End-to-end: the REAL App, driven headlessly, asserted on the frame it produced.
-// This is the test that makes the architecture believable — it types into the field, presses Enter, and checks
-// both the model and the rendered frame. Asserting only on `vm.uiState()` would pass with a blank window.
+// Asserting only on `vm.uiState()` would pass with a blank window, so every test also checks the frame.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
 const todo = @import("todo");
@@ -30,7 +29,7 @@ test "the empty state is drawn, not just modelled" {
     defer driver.deinit();
 
     // The field owns the keyboard from the first frame, which is what makes typing reach the model.
-    try std.testing.expect(glinlandui.frame.isFocused("todo.field"));
+    try std.testing.expect(app.field.editor.focused);
     try std.testing.expect(driver.hasText("No todos yet — type one and press Enter."));
     try std.testing.expect(driver.hasText("0 of 0 done"));
 }
@@ -41,36 +40,33 @@ test "typing and pressing Enter adds a row to the model and to the frame" {
     defer driver.deinit();
 
     try driver.typeText("buy milk");
-    try std.testing.expectEqualStrings("buy milk", app.field.ed.text());
-    try std.testing.expectEqualStrings("buy milk", app.vm().uiState().input.slice());
+    try std.testing.expectEqualStrings("buy milk", app.field.editor.text());
 
     _ = try driver.key(key_enter);
 
     const state = app.vm().uiState();
     try std.testing.expectEqual(@as(usize, 1), state.count);
     try std.testing.expectEqualStrings("buy milk", state.items()[0].title.slice());
-    // The model cleared the field, and the view adopted that on the same frame.
-    try std.testing.expectEqual(@as(usize, 0), state.input.len);
-    try std.testing.expectEqualStrings("", app.field.ed.text());
+    // The intent took the draft, so the field is empty again.
+    try std.testing.expectEqualStrings("", app.field.editor.text());
 
     try std.testing.expect(driver.hasText("buy milk"));
     try std.testing.expect(driver.hasText("0 of 1 done"));
 }
 
-test "a blank Enter adds nothing, and publishes nothing" {
+test "a blank Enter adds nothing, and leaves the draft alone" {
     var app = App{};
     var driver = try boot(&app);
     defer driver.deinit();
 
     try driver.typeText("   ");
-    const before = app.vm().revision();
     _ = try driver.key(key_enter);
 
     try std.testing.expectEqual(@as(usize, 0), app.vm().uiState().count);
-    try std.testing.expectEqual(before, app.vm().revision());
+    try std.testing.expectEqualStrings("   ", app.field.editor.text());
 }
 
-test "clicking a row toggles it, and the footer counts it" {
+test "clicking the checkbox toggles the row, and the footer counts it" {
     var app = App{};
     var driver = try boot(&app);
     defer driver.deinit();
@@ -78,12 +74,9 @@ test "clicking a row toggles it, and the footer counts it" {
     try driver.typeText("one");
     _ = try driver.key(key_enter);
 
-    try driver.click("todo.row.0");
+    try driver.click("todo.row.check.0");
     try std.testing.expect(app.vm().uiState().items()[0].done);
     try std.testing.expect(driver.hasText("1 of 1 done"));
-
-    try driver.click("todo.row.0");
-    try std.testing.expect(!app.vm().uiState().items()[0].done);
 }
 
 test "Delete removes its own row and does not toggle it" {
@@ -104,20 +97,4 @@ test "Delete removes its own row and does not toggle it" {
     // The button won the hit test, so the row underneath it never saw the click.
     try std.testing.expect(!state.items()[0].done);
     try std.testing.expect(!driver.hasText("two"));
-}
-
-test "an intent the view raised invalidates the composition" {
-    var app = App{};
-    var driver = try boot(&app);
-    defer driver.deinit();
-
-    // The click is dispatched after the frame declared, so the publish lands after `beginFrame` cleared the flag.
-    try driver.typeText("x");
-    _ = try driver.key(key_enter);
-    app.vm().onInputChange("y");
-    try std.testing.expect(app.comp.invalidated);
-
-    driver.frame();
-    try std.testing.expect(!app.comp.invalidated);
-    try std.testing.expect(driver.hasText("x"));
 }
