@@ -1,6 +1,7 @@
 // Generic agnostic dispatch tables: views / keys / pointer (no alloc, fixed caps).
 const std = @import("std");
 const cl = @import("zclay");
+const headless = @import("../testing/headless.zig");
 const button = @import("button.zig");
 const input = @import("input.zig");
 const registry = @import("click_registry.zig");
@@ -248,21 +249,8 @@ fn escLike(ctx: ?*anyopaque, _: input.Mods, keycode: u32) bool {
     return keycode == 1;
 }
 
-fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions {
-    return .{
-        .w = @as(f32, @floatFromInt(s.len)) * @as(f32, @floatFromInt(cfg.font_size)) * 0.6,
-        .h = @as(f32, @floatFromInt(cfg.font_size)),
-    };
-}
-
 fn layoutOne() !void {
-    const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed).
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     cl.UI()(.{
         .id = .ID("dp-list"),

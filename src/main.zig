@@ -67,7 +67,7 @@ pub fn main() !void {
 /// Render one real frame through the normal frame path into a software surface and report how many pixels were drawn.
 fn renderHeadless(host: *glinlandui.host.Host, w: u32, h: u32) !void {
     const soft = glinlandui.software_render;
-    var renderer = try soft.Renderer.init(std.heap.page_allocator);
+    var renderer = try soft.Renderer.init(glinlandui.platform.allocator);
     defer renderer.deinit();
 
     var opt = glinlandui.frame.FrameOptions{};

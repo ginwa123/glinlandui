@@ -1,6 +1,7 @@
 // Agnostic reusable Clay button (toolkit-style, library only).
 const std = @import("std");
 const cl = @import("zclay");
+const headless = @import("../testing/headless.zig");
 const Color = @import("../color.zig").Color;
 const prop = @import("../props.zig");
 const registry = @import("click_registry.zig");
@@ -63,28 +64,6 @@ pub fn button(p: ButtonProps) void {
     }
 }
 
-// Stub text estimator for headless tests (no font backend needed).
-fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions {
-    return .{
-        .w = @as(f32, @floatFromInt(s.len)) * @as(f32, @floatFromInt(cfg.font_size)) * 0.6,
-        .h = @as(f32, @floatFromInt(cfg.font_size)),
-    };
-}
-
-fn frameCommands(declare_fn: *const fn () void) ![]cl.RenderCommand {
-    const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed).
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    // Park the pointer far outside the layout so hovered() is false and the test observes the resting bg path.
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
-    cl.beginLayout();
-    declare_fn();
-    return cl.endLayout();
-}
-
 fn rectColorForId(cmds: []cl.RenderCommand, id: u32) ?cl.Color {
     for (cmds) |c| {
         if (c.command_type == .rectangle and c.id == id) return c.render_data.rectangle.background_color;
@@ -142,12 +121,12 @@ fn declareMinButton() void {
 }
 
 fn fitWidth(declare_fn: *const fn () void, id: []const u8) !f32 {
-    _ = try frameCommands(declare_fn);
+    _ = try headless.frameCommands(declare_fn);
     return cl.getElementData(cl.getElementId(id)).bounding_box.width;
 }
 
 test "button emits rectangle + text render commands" {
-    const cmds = try frameCommands(declareButton);
+    const cmds = try headless.frameCommands(declareButton);
     var rects: usize = 0;
     var texts: usize = 0;
     for (cmds) |c| switch (c.command_type) {
@@ -194,7 +173,7 @@ fn declareHoverButton() void {
 test "button hover switches bg to hover_bg when pointer is over" {
     const p = ButtonProps{ .id = .{ .text = "test-button-hover" }, .label = .{ .text = "OK" } };
     const eid = p.id.clay();
-    _ = try frameCommands(declareHoverButton);
+    _ = try headless.frameCommands(declareHoverButton);
 
     // Frame 2: pointer over the button centre (frame-1 box) — hover bg.
     const bb = cl.getElementData(eid).bounding_box;
@@ -219,7 +198,7 @@ test "button hover switches bg to hover_bg when pointer is over" {
 }
 
 test "button fixed size honours w/h props with zero padding" {
-    _ = try frameCommands(declareFixedButton);
+    _ = try headless.frameCommands(declareFixedButton);
     const bb = cl.getElementData(cl.getElementId("test-fixed-button")).bounding_box;
     try std.testing.expectEqual(@as(f32, 16), bb.width);
     try std.testing.expectEqual(@as(f32, 16), bb.height);
@@ -234,7 +213,7 @@ test "button padding props grow the fit box" {
 
 test "button without on_click registers nothing; dispatchClick returns false" {
     registry.beginFrame();
-    _ = try frameCommands(declareNoClickButton);
+    _ = try headless.frameCommands(declareNoClickButton);
     const bb = cl.getElementData(cl.getElementId("test-noclick-button")).bounding_box;
     try std.testing.expect(!registry.dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
 }
@@ -242,7 +221,7 @@ test "button without on_click registers nothing; dispatchClick returns false" {
 test "button self-registers on_click; dispatchClick at center fires once" {
     click_rec = .{};
     registry.beginFrame();
-    _ = try frameCommands(declareClickButton);
+    _ = try headless.frameCommands(declareClickButton);
     const bb = cl.getElementData(cl.getElementId("test-click-button")).bounding_box;
     try std.testing.expect(registry.dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
     try std.testing.expectEqual(@as(usize, 1), click_rec.calls);
@@ -253,7 +232,7 @@ test "button self-registers on_click; dispatchClick at center fires once" {
 test "disabled button uses disabled_bg and registers no click" {
     click_rec = .{};
     registry.beginFrame();
-    const cmds = try frameCommands(declareDisabledButton);
+    const cmds = try headless.frameCommands(declareDisabledButton);
     const eid = cl.getElementId("test-disabled-button");
     const bg = rectColorForId(cmds, eid.id);
     try std.testing.expect(bg != null);

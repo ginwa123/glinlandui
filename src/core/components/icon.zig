@@ -1,6 +1,7 @@
 // Agnostic reusable Clay icon widget (toolkit-style, library only).
 const std = @import("std");
 const cl = @import("zclay");
+const headless = @import("../testing/headless.zig");
 const Color = @import("../color.zig").Color;
 
 // ---- Glyph table (Font Awesome codepoints, present in Nerd Fonts) ---- Drill-in / expand affordances (replace the ASCII ">" chevron).
@@ -37,45 +38,14 @@ pub fn icon(props: IconProps) void {
     });
 }
 
-// Stub text estimator for headless tests (no font backend needed).
-fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions {
-    return .{
-        .w = @as(f32, @floatFromInt(s.len)) * @as(f32, @floatFromInt(cfg.font_size)) * 0.6,
-        .h = @as(f32, @floatFromInt(cfg.font_size)),
-    };
-}
-
 fn declareIcon() void {
     icon(.{ .glyph = chevron_right });
-}
-
-/// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
-fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !void {
-    const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed).
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
-    cl.beginLayout();
-    declare_fn();
-    const cmds = cl.endLayout();
-    var r: usize = 0;
-    var t: usize = 0;
-    for (cmds) |c| switch (c.command_type) {
-        .rectangle => r += 1,
-        .text => t += 1,
-        else => {},
-    };
-    rects.* = r;
-    texts.* = t;
 }
 
 test "icon emits exactly one text command, no rectangles" {
     var rects: usize = 0;
     var texts: usize = 0;
-    try countCommands(declareIcon, &rects, &texts);
+    try headless.countCommands(declareIcon, &rects, &texts);
     try std.testing.expectEqual(@as(usize, 0), rects);
     try std.testing.expectEqual(@as(usize, 1), texts);
 }
@@ -93,12 +63,7 @@ fn declareDisabledIcon() void {
 }
 
 test "disabled icon emits one text with the disabled color" {
-    const mem_size = cl.minMemorySize();
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     declareDisabledIcon();
     const cmds = cl.endLayout();

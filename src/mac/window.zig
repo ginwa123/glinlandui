@@ -76,11 +76,12 @@ pub const Window = struct {
     diff_prints: u32 = 0,
     diff_changed: u32 = 0,
     frame_no: u64 = 0,
+    // The allocator the application's `main` passed in.
+    alloc: std.mem.Allocator,
 
     pub fn init(alloc: std.mem.Allocator, config: WindowConfig) Window {
-        // The allocator is accepted for signature parity with the web backend, which genuinely needs it (`wasm_allocator` is the only allocator that grows a.
-        _ = alloc;
-        return .{ .state = contract.WindowState.init(config) };
+        // Kept for the frame-diff buffer, which is allocated per surface size; the signature also matches the web backend, whose `wasm_allocator` is the only allocator that grows a
+        return .{ .state = contract.WindowState.init(config), .alloc = alloc };
     }
 
     pub fn clamp(self: Window, w: u32, h: u32) struct { w: u32, h: u32 } {
@@ -227,8 +228,8 @@ pub const Window = struct {
         self.frame_no +%= 1;
         if (!comparable) {
             // Free the old buffer: a resize re-enters here, and the previous frame's copy is dead.
-            if (self.diff_prev.len > 0) std.heap.page_allocator.free(self.diff_prev);
-            self.diff_prev = std.heap.page_allocator.alloc(u8, n) catch return;
+            if (self.diff_prev.len > 0) self.alloc.free(self.diff_prev);
+            self.diff_prev = self.alloc.alloc(u8, n) catch return;
             @memcpy(self.diff_prev[0..n], sf.pixels);
             self.diff_prev_w = sf.width;
             self.diff_prev_h = sf.height;

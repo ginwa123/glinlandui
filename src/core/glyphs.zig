@@ -11,6 +11,8 @@ pub const bytes_per_pixel: usize = 4;
 
 /// A loaded font: the file bytes plus the stb face built over them.
 pub const Font = struct {
+    /// The allocator the application's `main` gave the toolkit; the bytes are freed with it.
+    alloc: std.mem.Allocator,
     /// The file bytes must outlive the face, so they are owned here.
     bytes: []u8,
     info: stb.stbtt_fontinfo,
@@ -19,9 +21,9 @@ pub const Font = struct {
     descent: f32 = 0,
 
     /// Load the platform's default UI font, trying each candidate until one actually PARSES.
-    pub fn loadDefault() ?Font {
+    pub fn loadDefault(alloc: std.mem.Allocator) ?Font {
         for (font_io.fontCandidates()) |path| {
-            if (load(path)) |font| {
+            if (load(alloc, path)) |font| {
                 return font;
             } else |_| {
                 // Not parseable (wrong format, truncated, permissions).
@@ -31,14 +33,14 @@ pub const Font = struct {
     }
 
     /// Load one specific font file.
-    pub fn load(path: [:0]const u8) !Font {
-        const buf = try font_io.readFontBytes(path, std.heap.page_allocator);
-        errdefer std.heap.page_allocator.free(buf);
-        return fromBytes(buf);
+    pub fn load(alloc: std.mem.Allocator, path: [:0]const u8) !Font {
+        const buf = try font_io.readFontBytes(path, alloc);
+        errdefer alloc.free(buf);
+        return fromBytes(alloc, buf);
     }
 
     /// Build a `Font` over bytes the CALLER owns.
-    pub fn fromBytes(bytes: []u8) !Font {
+    pub fn fromBytes(alloc: std.mem.Allocator, bytes: []u8) !Font {
         if (bytes.len == 0) return error.FontNotFound;
         // THE GUARD IS LOAD-BEARING, not defensive politeness.
         if (!sfntSignatureRecognized(bytes)) return error.FontInitFailed;
@@ -46,7 +48,7 @@ pub const Font = struct {
         var info: stb.stbtt_fontinfo = undefined;
         if (stb.stbtt_InitFont(&info, bytes.ptr, 0) == 0) return error.FontInitFailed;
 
-        var font = Font{ .bytes = bytes, .info = info };
+        var font = Font{ .alloc = alloc, .bytes = bytes, .info = info };
         var a: c_int = 0;
         var d: c_int = 0;
         var g: c_int = 0;
@@ -57,7 +59,7 @@ pub const Font = struct {
     }
 
     pub fn deinit(self: *Font) void {
-        std.heap.page_allocator.free(self.bytes);
+        self.alloc.free(self.bytes);
     }
 
     /// Horizontal scale factor for a requested pixel height.
@@ -155,10 +157,10 @@ pub const CachedGlyph = struct {
 const CacheKey = struct { cp: u21, size: u16 };
 
 var cache: std.AutoHashMapUnmanaged(CacheKey, CachedGlyph) = .empty;
-// The allocator the APPLICATION's `main` handed the toolkit. Never invented here.
-var cache_alloc: std.mem.Allocator = std.heap.page_allocator;
+// The allocator the APPLICATION's `main` handed the toolkit, via `initCache` or the font it loaded. Never invented here.
+var cache_alloc: ?std.mem.Allocator = null;
 // Glyph pixels bump-allocate from one arena: a page-per-glyph allocator charged 16 KB for a 96-byte mask, so a 1000-glyph screen became 16 MB of mmaps.
-var pixels: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+var pixels: ?std.heap.ArenaAllocator = null;
 
 /// Point the glyph cache at the app's allocator. `Host.init` calls this with the allocator it was given.
 pub fn initCache(alloc: std.mem.Allocator) void {
@@ -167,8 +169,14 @@ pub fn initCache(alloc: std.mem.Allocator) void {
     pixels = .init(alloc);
 }
 
+// A cache used before `initCache` borrows the allocator of the font it caches, which came from `main` too.
+fn ensureCache(font: *const Font) void {
+    if (cache_alloc == null) initCache(font.alloc);
+}
+
 /// Rasterize `cp` at `font_size` once and reuse it for every later frame.
 pub fn cachedGlyph(font: *const Font, cp: u21, font_size: u16) ?*const CachedGlyph {
+    ensureCache(font);
     const key = CacheKey{ .cp = cp, .size = font_size };
     if (cache.getPtr(key)) |g| return g;
 
@@ -177,9 +185,9 @@ pub fn cachedGlyph(font: *const Font, cp: u21, font_size: u16) ?*const CachedGly
     defer freeMask(&m);
 
     const n = m.w * m.h;
-    const data = pixels.allocator().alloc(u8, n) catch return null;
+    const data = pixels.?.allocator().alloc(u8, n) catch return null;
     @memcpy(data, m.data[0..n]);
-    cache.put(cache_alloc, key, .{
+    cache.put(cache_alloc.?, key, .{
         .data = data,
         .w = m.w,
         .h = m.h,
@@ -201,10 +209,19 @@ pub fn capBox(font: *const Font, font_size: u16) ?struct { top: f32, height: f32
 
 /// Drop every cached glyph. Call when the font changes.
 pub fn clearGlyphCache() void {
-    cache.deinit(cache_alloc);
+    // `deinit` leaves the map undefined, so it is always reset to a usable empty map here.
+    if (cache_alloc) |a| cache.deinit(a);
     cache = .empty;
     // Retain the arena's chunks: a font switch re-rasterizes the same glyphs, so those pages are wanted again immediately.
-    _ = pixels.reset(.retain_capacity);
+    if (pixels) |*p| _ = p.reset(.retain_capacity);
+}
+
+/// Release the cache's arena and forget the allocator. For a test, or a host shutting down.
+pub fn deinitCache() void {
+    clearGlyphCache();
+    if (pixels) |*p| p.deinit();
+    pixels = null;
+    cache_alloc = null;
 }
 
 /// How many glyphs are cached, for tests.
@@ -214,15 +231,15 @@ pub fn cachedGlyphCount() usize {
 
 /// The arena's live bytes, so a test can prove glyph memory is bounded rather than one page per glyph.
 pub fn cachedGlyphBytes() usize {
-    return pixels.queryCapacity();
+    if (pixels) |p| return p.queryCapacity();
+    return 0;
 }
 
 test "the glyph cache bumps from one arena instead of a page per glyph" {
     var font = requireFont() orelse return error.SkipZigTest;
     defer font.deinit();
-    // page_allocator, so the arena's chunks are exactly the pages it asked the kernel for and nothing leaks into the test's checker.
-    initCache(std.heap.page_allocator);
-    defer clearGlyphCache();
+    initCache(std.testing.allocator);
+    defer deinitCache();
 
     var cached: usize = 0;
     for (8..16) |size| {
@@ -307,7 +324,7 @@ pub fn clearInstalledFont() void {
 test "fromBytes rejects empty bytes instead of building a dead Font" {
     // A zero-length slice would make stbtt_InitFont read off the end of a 0-byte allocation.
     var empty: [0]u8 = .{};
-    try std.testing.expectError(error.FontNotFound, Font.fromBytes(&empty));
+    try std.testing.expectError(error.FontNotFound, Font.fromBytes(std.testing.allocator, &empty));
 }
 
 test "sfntSignatureRecognized accepts the four loadable sfnt tags" {
@@ -335,10 +352,10 @@ test "fromBytes rejects bytes that are not a font, without aborting" {
     // THE regression guard for the abort above.
     var junk: [64]u8 = undefined;
     for (&junk, 0..) |*b, i| b.* = @intCast(i);
-    try std.testing.expectError(error.FontInitFailed, Font.fromBytes(&junk));
+    try std.testing.expectError(error.FontInitFailed, Font.fromBytes(std.testing.allocator, &junk));
 
     const html: []u8 = @constCast("<!DOCTYPE html><html></html>");
-    try std.testing.expectError(error.FontInitFailed, Font.fromBytes(html));
+    try std.testing.expectError(error.FontInitFailed, Font.fromBytes(std.testing.allocator, html));
 }
 
 test "installFont is visible to installedFont and clearInstalledFont drops it" {
@@ -363,7 +380,7 @@ test "installFont is visible to installedFont and clearInstalledFont drops it" {
 }
 
 fn requireFont() ?Font {
-    return Font.loadDefault();
+    return Font.loadDefault(std.testing.allocator);
 }
 
 test "nextCodepoint decodes ASCII one byte at a time" {

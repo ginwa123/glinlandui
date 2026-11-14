@@ -1,6 +1,7 @@
 // Agnostic reusable Clay dropdown (toolkit-style, library only).
 const std = @import("std");
 const cl = @import("zclay");
+const headless = @import("../testing/headless.zig");
 const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
@@ -207,22 +208,8 @@ fn dropdownInner(
     }
 }
 
-// Stub text estimator for headless tests (no font backend needed).
-fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions {
-    return .{
-        .w = @as(f32, @floatFromInt(s.len)) * @as(f32, @floatFromInt(cfg.font_size)) * 0.6,
-        .h = @as(f32, @floatFromInt(cfg.font_size)),
-    };
-}
-
 fn layoutCommands(declare_fn: *const fn () void) ![]cl.RenderCommand {
-    const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed).
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     declare_fn();
     return cl.endLayout();
@@ -365,7 +352,7 @@ test "dropdown forwards on_select to rows; dispatchClick fires display index" {
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
     click_rec = .{};
     registry.beginFrame();
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
@@ -415,7 +402,7 @@ test "dropdown forwards clicks passthrough; each row fires own fn" {
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
     dd_clicks_a = .{};
     dd_clicks_b = .{};
     registry.beginFrame();
@@ -497,13 +484,8 @@ fn declareOverlayFrame() void {
 }
 
 fn frameY(declare_fn: *const fn () void, base: []const u8) !f32 {
-    const mem_size = cl.minMemorySize();
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
     registry.beginFrame();
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     declare_fn();
     _ = cl.endLayout();

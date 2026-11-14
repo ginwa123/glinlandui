@@ -19,6 +19,13 @@ pub const TextExtent = estimator.TextExtent;
 // The process-wide face. Loaded once, from the installed font or the platform's candidate list.
 var face: ?glyphs.Font = null;
 var load_tried: bool = false;
+// The allocator the application's `main` supplied. `Host.init` sets it before the first frame.
+var face_alloc: ?std.mem.Allocator = null;
+
+/// Point the face at the allocator the application's `main` gave the toolkit.
+pub fn setAllocator(alloc: std.mem.Allocator) void {
+    face_alloc = alloc;
+}
 
 // The face this process measures and draws with, or null when no font file could be parsed.
 pub fn font() ?*glyphs.Font {
@@ -32,7 +39,8 @@ pub fn font() ?*glyphs.Font {
     }
     if (!load_tried) {
         load_tried = true;
-        face = glyphs.Font.loadDefault();
+        // No allocator yet means no `main` has run: stay fontless rather than inventing a heap.
+        if (face_alloc) |a| face = glyphs.Font.loadDefault(a);
     }
     if (face) |*f| return f;
     return null;
@@ -101,6 +109,8 @@ pub fn measureText(text: []const u8, font_size: u16) TextExtent {
 // ===================== tests =====================
 
 test "measureText agrees with the glyph advances it will be drawn with" {
+    // page_allocator: the face is a process-lifetime singleton, so it is deliberately never freed (same rule as the Clay arena).
+    setAllocator(std.heap.page_allocator);
     const f = font() orelse return error.SkipZigTest;
     const m = measureText("Invoice", 14);
     try std.testing.expectApproxEqAbs(glyphs.measure(f, "Invoice", 14).width, m.w, 0.001);

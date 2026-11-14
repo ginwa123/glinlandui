@@ -1,6 +1,7 @@
 // Agnostic reusable Clay slider (toolkit-style, library only).
 const std = @import("std");
 const cl = @import("zclay");
+const headless = @import("../testing/headless.zig");
 const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
@@ -124,46 +125,14 @@ pub fn slider(props: SliderProps) void {
     }
 }
 
-// Stub text estimator for headless tests (no font backend needed).
-fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions {
-    return .{
-        .w = @as(f32, @floatFromInt(s.len)) * @as(f32, @floatFromInt(cfg.font_size)) * 0.6,
-        .h = @as(f32, @floatFromInt(cfg.font_size)),
-    };
-}
-
 fn declareSlider() void {
     slider(.{ .id = .{ .text = "test-slider" } });
-}
-
-/// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
-fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !void {
-    const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed).
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    // Park the pointer far outside the layout so hovered() is false and the test observes the resting bg path deterministically.
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
-    cl.beginLayout();
-    declare_fn();
-    const cmds = cl.endLayout();
-    var r: usize = 0;
-    var t: usize = 0;
-    for (cmds) |c| switch (c.command_type) {
-        .rectangle => r += 1,
-        .text => t += 1,
-        else => {},
-    };
-    rects.* = r;
-    texts.* = t;
 }
 
 test "slider emits outer + track + fill + thumb rectangles and no text" {
     var rects: usize = 0;
     var texts: usize = 0;
-    try countCommands(declareSlider, &rects, &texts);
+    try headless.countCommands(declareSlider, &rects, &texts);
     // Outer (transparent) + track + fill + thumb = 4; allow 3 if the backend culls the transparent outer or a zero-size fill.
     try std.testing.expect(rects >= 3 and rects <= 4);
     try std.testing.expectEqual(@as(usize, 0), texts);
@@ -206,12 +175,7 @@ fn rectColorForId(cmds: []cl.RenderCommand, id: u32) ?cl.Color {
 }
 
 fn layoutSlider(props: SliderProps) ![]cl.RenderCommand {
-    const mem_size = cl.minMemorySize();
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     slider(props);
     return cl.endLayout();
@@ -237,12 +201,7 @@ fn declareClampedSlider() void {
 }
 
 test "slider value above max clamps fill to full width" {
-    const mem_size = cl.minMemorySize();
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     declareClampedSlider();
     _ = cl.endLayout();
@@ -274,7 +233,7 @@ test "slider without on_change registers nothing; dispatchClick returns false" {
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
     registry.beginFrame();
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
@@ -289,7 +248,7 @@ test "slider self-registers on_change; dispatchClick at center fires once" {
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
     click_rec = .{};
     registry.beginFrame();
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
@@ -312,7 +271,7 @@ test "disabled slider uses disabled_bg and registers no click" {
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
     click_rec = .{};
     registry.beginFrame();
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);

@@ -1,6 +1,7 @@
 // Agnostic reusable Clay radio button (toolkit-style, library only).
 const std = @import("std");
 const cl = @import("zclay");
+const headless = @import("../testing/headless.zig");
 const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
@@ -72,14 +73,6 @@ pub fn radio(props: RadioProps) void {
     }
 }
 
-// Stub text estimator for headless tests (no font backend needed).
-fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions {
-    return .{
-        .w = @as(f32, @floatFromInt(s.len)) * @as(f32, @floatFromInt(cfg.font_size)) * 0.6,
-        .h = @as(f32, @floatFromInt(cfg.font_size)),
-    };
-}
-
 fn declareRadio() void {
     radio(.{ .id = .{ .text = "test-radio" } });
 }
@@ -88,37 +81,13 @@ fn declareSelectedRadio() void {
     radio(.{ .id = .{ .text = "test-radio-sel" }, .selected = true });
 }
 
-/// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
-fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !void {
-    const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed).
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    // Park the pointer far outside the layout so hovered() is false and the test observes the resting bg path deterministically.
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
-    cl.beginLayout();
-    declare_fn();
-    const cmds = cl.endLayout();
-    var r: usize = 0;
-    var t: usize = 0;
-    for (cmds) |c| switch (c.command_type) {
-        .rectangle => r += 1,
-        .text => t += 1,
-        else => {},
-    };
-    rects.* = r;
-    texts.* = t;
-}
-
 test "radio emits outer circle only, plus dot when selected, and no text" {
     var rects: usize = 0;
     var texts: usize = 0;
-    try countCommands(declareRadio, &rects, &texts);
+    try headless.countCommands(declareRadio, &rects, &texts);
     try std.testing.expectEqual(@as(usize, 1), rects);
     try std.testing.expectEqual(@as(usize, 0), texts);
-    try countCommands(declareSelectedRadio, &rects, &texts);
+    try headless.countCommands(declareSelectedRadio, &rects, &texts);
     try std.testing.expectEqual(@as(usize, 2), rects);
     try std.testing.expectEqual(@as(usize, 0), texts);
 }
@@ -140,12 +109,7 @@ test "RadioProps carries neutral defaults" {
 }
 
 fn borderColorForSelected(selected: bool) !cl.Color {
-    const mem_size = cl.minMemorySize();
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     radio(.{ .id = .{ .text = "test-radio-border" }, .selected = selected });
     const cmds = cl.endLayout();
@@ -184,7 +148,7 @@ test "radio self-registers on_click; dispatchClick at center fires once" {
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
     click_rec = .{};
     registry.beginFrame();
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
@@ -214,7 +178,7 @@ test "disabled radio uses disabled_bg and registers no click" {
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
     click_rec = .{};
     registry.beginFrame();
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);

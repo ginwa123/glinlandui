@@ -1,6 +1,7 @@
 //! Per-frame semantics model: the queryable node tree behind the E2E test API (`glinlandui.testing`) and, in time, accessibility and the debug inspector.
 const std = @import("std");
 const cl = @import("zclay");
+const headless = @import("testing/headless.zig");
 const registry = @import("components/click_registry.zig");
 
 /// Node capacity.
@@ -234,12 +235,7 @@ fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions
 
 /// One headless Clay layout of a single fixed-size box.
 fn layoutBox(id: []const u8, w: f32, h: f32) !void {
-    const mem_size = cl.minMemorySize();
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     cl.UI()(.{
         .id = .ID(id),
@@ -250,12 +246,7 @@ fn layoutBox(id: []const u8, w: f32, h: f32) !void {
 
 /// One headless Clay layout of an id'd clip container holding one child that overflows it on the vertical axis (100px viewport, 400px child).
 fn layoutClipped() !void {
-    const mem_size = cl.minMemorySize();
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     cl.UI()(.{
         .id = .ID("sem-clip"),

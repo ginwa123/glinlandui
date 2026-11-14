@@ -1,6 +1,7 @@
 // Agnostic reusable Clay label widget (toolkit-style, library only).
 const std = @import("std");
 const cl = @import("zclay");
+const headless = @import("../testing/headless.zig");
 const Color = @import("../color.zig").Color;
 const prop = @import("../props.zig");
 
@@ -21,33 +22,12 @@ pub fn label(p: TextProps) void {
     });
 }
 
-// Stub text estimator for headless tests (no font backend needed).
-fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions {
-    return .{
-        .w = @as(f32, @floatFromInt(s.len)) * @as(f32, @floatFromInt(cfg.font_size)) * 0.6,
-        .h = @as(f32, @floatFromInt(cfg.font_size)),
-    };
-}
-
 fn declareLabel() void {
     label(.{ .label = .{ .text = "Hello" } });
 }
 
-fn frameCommands(declare_fn: *const fn () void) ![]cl.RenderCommand {
-    const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed).
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
-    cl.beginLayout();
-    declare_fn();
-    return cl.endLayout();
-}
-
 test "label emits exactly one text command, no rectangles" {
-    const cmds = try frameCommands(declareLabel);
+    const cmds = try headless.frameCommands(declareLabel);
     var rects: usize = 0;
     var texts: usize = 0;
     for (cmds) |c| switch (c.command_type) {

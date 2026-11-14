@@ -1,6 +1,7 @@
 // Agnostic reusable Clay list (toolkit-style, library only).
 const std = @import("std");
 const cl = @import("zclay");
+const headless = @import("../testing/headless.zig");
 const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
@@ -278,14 +279,6 @@ fn listGrid(
     });
 }
 
-// Stub text estimator for headless tests (no font backend needed).
-fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions {
-    return .{
-        .w = @as(f32, @floatFromInt(s.len)) * @as(f32, @floatFromInt(cfg.font_size)) * 0.6,
-        .h = @as(f32, @floatFromInt(cfg.font_size)),
-    };
-}
-
 // ---- Generic test fixtures: TWO different item types prove anytype ----
 
 /// Item type A: struct with title (+ optional subtitle).
@@ -360,34 +353,10 @@ fn declareStrList() void {
     list(.{ .id = .{ .text = "test-str-list" } }, str_slice, {}, renderB);
 }
 
-/// Run one headless Clay frame around `declare_fn`, counting rectangle and text render commands.
-fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !void {
-    const mem_size = cl.minMemorySize();
-    // NOTE: intentionally leaked (page_allocator, never freed).
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    // Park the pointer far outside the layout so hovered() is false and the test observes the resting bg path deterministically.
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
-    cl.beginLayout();
-    declare_fn();
-    const cmds = cl.endLayout();
-    var r: usize = 0;
-    var t: usize = 0;
-    for (cmds) |c| switch (c.command_type) {
-        .rectangle => r += 1,
-        .text => t += 1,
-        else => {},
-    };
-    rects.* = r;
-    texts.* = t;
-}
-
 test "generic list with struct items emits 3 row rectangles + title texts" {
     var rects: usize = 0;
     var texts: usize = 0;
-    try countCommands(declareList, &rects, &texts);
+    try headless.countCommands(declareList, &rects, &texts);
     try std.testing.expect(rects >= 3);
     try std.testing.expectEqual(@as(usize, 3), texts);
 }
@@ -395,7 +364,7 @@ test "generic list with struct items emits 3 row rectangles + title texts" {
 test "generic list renders subtitles as extra text commands" {
     var rects: usize = 0;
     var texts: usize = 0;
-    try countCommands(declareSubList, &rects, &texts);
+    try headless.countCommands(declareSubList, &rects, &texts);
     try std.testing.expect(rects >= 2);
     // 2 titles + 2 subtitles.
     try std.testing.expectEqual(@as(usize, 4), texts);
@@ -404,7 +373,7 @@ test "generic list renders subtitles as extra text commands" {
 test "generic list with string items renders title + trailing per row" {
     var rects: usize = 0;
     var texts: usize = 0;
-    try countCommands(declareStrList, &rects, &texts);
+    try headless.countCommands(declareStrList, &rects, &texts);
     try std.testing.expect(rects >= 2);
     // 2 titles + 2 trailing chevrons (proves a second item type).
     try std.testing.expectEqual(@as(usize, 4), texts);
@@ -480,7 +449,7 @@ test "generic list selected index uses selected_bg; hover hits one row" {
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
 
     const props = ListProps{ .id = .{ .text = "test-hover-list" }, .selected = 2 };
     const rest_c = props.row_bg.toClay();
@@ -524,12 +493,7 @@ test "generic list selected index uses selected_bg; hover hits one row" {
 
 /// Run one headless Clay frame around `declare_fn`, returning the render commands (valid until the next beginLayout).
 fn layoutCommands(declare_fn: *const fn () void) ![]cl.RenderCommand {
-    const mem_size = cl.minMemorySize();
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     declare_fn();
     return cl.endLayout();
@@ -589,14 +553,7 @@ test "list radius prop reaches row rects" {
 }
 
 test "list indexed rows declare IDI identities under the list id" {
-    const mem_size = cl.minMemorySize();
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-
-    // Frame 1: pointer parked offscreen — both IDI rows exist but idle.
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     declareGapList();
     _ = cl.endLayout();
@@ -625,7 +582,7 @@ test "list self-registers on_select per row; dispatchClick fires index" {
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
     select_rec = .{};
     registry.beginFrame();
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
@@ -670,7 +627,7 @@ test "a widget inside a row wins the hit test over the row itself" {
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
     registry.beginFrame();
     inner_hits = 0;
     outer_hits = 0;
@@ -699,7 +656,7 @@ test "list without on_select registers nothing; dispatchClick returns false" {
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
     registry.beginFrame();
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
@@ -752,7 +709,7 @@ test "list clicks fires each row own fn once with own ctx" {
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
     clicks_a = .{};
     clicks_b = .{};
     registry.beginFrame();
@@ -777,7 +734,7 @@ test "list clicks short slice leaves extra rows without entry" {
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
     clicks_a = .{};
     clicks_b = .{};
     registry.beginFrame();
@@ -804,7 +761,7 @@ test "disabled list registers no clicks and dims rows" {
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
     disabled_rec = .{};
     registry.beginFrame();
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
@@ -967,7 +924,7 @@ test "grid hover draws the hover ring on one cell only" {
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
     var hover_grid = ListProps{
         .id = .{ .text = "test-hov-grid" },
         .direction = .grid,
@@ -1017,7 +974,7 @@ test "grid on_select fires with the cell index at its center" {
     const buf = try std.heap.page_allocator.alloc(u8, mem_size);
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
     grid_click_rec = .{};
     registry.beginFrame();
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);

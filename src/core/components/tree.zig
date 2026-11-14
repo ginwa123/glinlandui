@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const cl = @import("zclay");
+const headless = @import("../testing/headless.zig");
 const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
@@ -138,36 +139,6 @@ fn rowUi(props: TreeProps, row: Row, i: usize) void {
     }
 }
 
-// ---- tests ----
-
-fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions {
-    return .{
-        .w = @as(f32, @floatFromInt(s.len)) * @as(f32, @floatFromInt(cfg.font_size)) * 0.6,
-        .h = @as(f32, @floatFromInt(cfg.font_size)),
-    };
-}
-
-fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !void {
-    const mem_size = cl.minMemorySize();
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
-    cl.beginLayout();
-    declare_fn();
-    const cmds = cl.endLayout();
-    var r: usize = 0;
-    var t: usize = 0;
-    for (cmds) |c| switch (c.command_type) {
-        .rectangle => r += 1,
-        .text => t += 1,
-        else => {},
-    };
-    rects.* = r;
-    texts.* = t;
-}
-
 const sample_rows = [_]Row{
     .{ .label = "demo.db", .depth = 0, .has_children = true, .expanded = true, .kind = .group },
     .{ .label = "Tables", .depth = 1, .has_children = true, .expanded = true, .kind = .group },
@@ -182,7 +153,7 @@ fn declareSample() void {
 test "a tree draws one row per entry, plus the container" {
     var rects: usize = 0;
     var texts: usize = 0;
-    try countCommands(declareSample, &rects, &texts);
+    try headless.countCommands(declareSample, &rects, &texts);
     // One rect per row: the container and the label boxes are transparent, so they emit none.
     try std.testing.expectEqual(sample_rows.len, rects);
     // A caret and a label per row, plus a meta on the two that carry one.
@@ -192,7 +163,7 @@ test "a tree draws one row per entry, plus the container" {
 test "an empty tree still declares its container" {
     var rects: usize = 0;
     var texts: usize = 0;
-    try countCommands(declareEmpty, &rects, &texts);
+    try headless.countCommands(declareEmpty, &rects, &texts);
     try std.testing.expectEqual(@as(usize, 0), rects);
     try std.testing.expectEqual(@as(usize, 0), texts);
 }
@@ -210,11 +181,11 @@ fn declareWithBar() void {
 test "selected_bar draws one 2px left border per row, transparent when unselected" {
     var rects: usize = 0;
     var texts: usize = 0;
-    try countCommands(declareWithBar, &rects, &texts);
+    try headless.countCommands(declareWithBar, &rects, &texts);
     // The bar rides on the row's own border, so it adds no rectangle and no text.
     try std.testing.expectEqual(bar_rows.len, rects);
     // Without the prop the rows are unchanged.
-    try countCommands(declareSample, &rects, &texts);
+    try headless.countCommands(declareSample, &rects, &texts);
     try std.testing.expectEqual(sample_rows.len, rects);
 }
 

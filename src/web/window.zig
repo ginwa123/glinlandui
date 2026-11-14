@@ -256,7 +256,7 @@ pub const Window = struct {
     /// Take ownership of font bytes and install them as the process-wide glyph source.
     pub fn installFontBytes(self: *Window, bytes: []u8) bool {
         self.font_bytes = bytes;
-        const f = glyphs.Font.fromBytes(bytes) catch |err| {
+        const f = glyphs.Font.fromBytes(self.alloc, bytes) catch |err| {
             // Record WHY, so the page can distinguish "not a font" from "stb refused it" instead of seeing a bare 0.
             self.font_error = switch (err) {
                 error.FontNotFound => 1,

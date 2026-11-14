@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const cl = @import("zclay");
+const headless = @import("../testing/headless.zig");
 const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
@@ -118,36 +119,6 @@ fn tabUi(props: TabsProps, tab: Tab, i: usize) void {
     }
 }
 
-// ---- tests ----
-
-fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions {
-    return .{
-        .w = @as(f32, @floatFromInt(s.len)) * @as(f32, @floatFromInt(cfg.font_size)) * 0.6,
-        .h = @as(f32, @floatFromInt(cfg.font_size)),
-    };
-}
-
-fn countCommands(declare_fn: *const fn () void, rects: *usize, texts: *usize) !void {
-    const mem_size = cl.minMemorySize();
-    const buf = try std.heap.page_allocator.alloc(u8, mem_size);
-    const arena = cl.Arena.init(buf);
-    _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
-    cl.setMeasureTextFunction(void, {}, stubMeasure);
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
-    cl.beginLayout();
-    declare_fn();
-    const cmds = cl.endLayout();
-    var r: usize = 0;
-    var t: usize = 0;
-    for (cmds) |c| switch (c.command_type) {
-        .rectangle => r += 1,
-        .text => t += 1,
-        else => {},
-    };
-    rects.* = r;
-    texts.* = t;
-}
-
 const sample_tabs = [_]Tab{
     .{ .label = "users", .active = true, .accent = Color.rgb(0x7a, 0xa2, 0xc4) },
     .{ .label = "orders", .accent = Color.rgb(0x7f, 0xae, 0x8a) },
@@ -161,7 +132,7 @@ fn declareSample() void {
 test "a tab bar draws a box per tab plus the container" {
     var rects: usize = 0;
     var texts: usize = 0;
-    try countCommands(declareSample, &rects, &texts);
+    try headless.countCommands(declareSample, &rects, &texts);
     // Container + one box per tab + a dot on two + a close box on two.
     try std.testing.expectEqual(@as(usize, 1 + 3 + 2 + 2), rects);
     // A label per tab, plus an "x" on the two closable ones.
@@ -171,7 +142,7 @@ test "a tab bar draws a box per tab plus the container" {
 test "an empty bar still declares its container" {
     var rects: usize = 0;
     var texts: usize = 0;
-    try countCommands(declareEmpty, &rects, &texts);
+    try headless.countCommands(declareEmpty, &rects, &texts);
     try std.testing.expectEqual(@as(usize, 1), rects);
     try std.testing.expectEqual(@as(usize, 0), texts);
 }
