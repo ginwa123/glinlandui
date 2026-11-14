@@ -372,10 +372,10 @@ pub const Field = struct {
     on_change: ChangeFn = null,
     // Called on Enter with the draft. True means the intent took it, and then the field clears itself.
     on_submit: SubmitFn = null,
-    ctx: ?*anyopaque = null,
     // Called after a click places the caret, so the app can take focus.
     on_focus: ?*const fn (?*anyopaque) void = null,
-    focus_ctx: ?*anyopaque = null,
+    // The one handle every callback gets: Zig has no closures, so a function pointer cannot capture its model.
+    ctx: ?*anyopaque = null,
     // Measures a run with the font that draws the field. The engine's text backend is that font.
     measure: *const fn ([]const u8, u16) f32 = text_backend.runWidth,
 
@@ -535,7 +535,7 @@ fn dragSelect(field: *Field) void {
     if (!field.dragging) {
         field.dragging = true;
         frame_mod.setFocus(field.name());
-        if (field.on_focus) |f| f(field.focus_ctx);
+        if (field.on_focus) |f| f(field.ctx);
     }
 }
 
@@ -625,7 +625,7 @@ fn onFieldDoubleClick(ctx: ?*anyopaque) void {
     text_editor.selectWordAt(&field.editor, text_editor.offsetAtX(field.editor.text(), x, field.font_size, field.measure));
     field.editor.idle = 0;
     frame_mod.setFocus(field.name());
-    if (field.on_focus) |f| f(field.focus_ctx);
+    if (field.on_focus) |f| f(field.ctx);
 }
 
 // The caret, floated at the measured end of the run before it. The primitive snaps it and makes it one device pixel.
@@ -650,7 +650,7 @@ fn onFieldClick(ctx: ?*anyopaque) void {
     field.editor.setCaret(text_editor.offsetAtX(field.editor.text(), x, field.font_size, field.measure), false);
     field.editor.idle = 0;
     frame_mod.setFocus(field.name());
-    if (field.on_focus) |f| f(field.focus_ctx);
+    if (field.on_focus) |f| f(field.ctx);
 }
 
 // Stub text estimator for headless tests (no font backend needed).
