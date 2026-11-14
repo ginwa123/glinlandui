@@ -194,11 +194,15 @@ pub const Driver = struct {
         return consumed;
     }
 
-    /// Type a string as raw evdev key presses.
+    /// Type a string as raw evdev key presses, holding Shift for the bytes that need it.
     pub fn typeText(self: *Driver, input_text: []const u8) !void {
         for (input_text) |byte| {
-            const code = keyCodeForAscii(byte) orelse return error.UnsupportedCharacter;
-            _ = try self.key(code);
+            const k = keyForAscii(byte) orelse return error.UnsupportedCharacter;
+            if (k.shift) _ = self.host.onKeyEvent(key_shift, true);
+            _ = self.host.onKeyEvent(k.code, true);
+            _ = self.host.onKeyEvent(k.code, false);
+            if (k.shift) _ = self.host.onKeyEvent(key_shift, false);
+            self.frame();
         }
     }
 
@@ -539,26 +543,69 @@ fn scrollAncestor(n: semantics.Node) ?semantics.Node {
 /// Stable public alias so applications can declare their own root callback without depending on the private test implementation type.
 pub const RootFn = host_mod.RootFn;
 
-/// Linux evdev code table for the subset used by `Driver.typeText`.
-fn keyCodeForAscii(byte: u8) ?u32 {
-    return switch (byte) {
-        'a'...'z' => @as(u32, byte - 'a') + 16,
-        'A'...'Z' => @as(u32, byte - 'A') + 16,
-        '0'...'9' => @as(u32, byte - '0') + 2,
-        ' ' => 57,
-        '-' => 12,
-        '=' => 13,
-        '[' => 26,
-        ']' => 27,
-        '\\' => 43,
-        ';' => 39,
-        '\'' => 40,
-        '`' => 41,
-        ',' => 51,
-        '.' => 52,
-        '/' => 53,
-        else => null,
+// evdev KEY_LEFTSHIFT, the modifier the keycode route has to hold for an uppercase or shifted byte.
+const key_shift: u32 = 42;
+
+// The key a printable ASCII byte is typed with, and whether Shift is part of the gesture.
+
+// The table is the US layout the toolkit's `input.keyChar` decodes, so a byte typed here reads back as the same byte there.
+
+// Letters are NOT contiguous in evdev (q..p is 16..25, a..l is 30..38, z..m is 44..50), which is the mistake a `byte - 'a' + 16` shortcut makes.
+const KeyStroke = struct { code: u32, shift: bool };
+
+fn keyForAscii(byte: u8) ?KeyStroke {
+    const lower = "qwertyuiopasdfghjklzxcvbnm";
+    const letter_codes = [_]u32{ 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 30, 31, 32, 33, 34, 35, 36, 37, 38, 44, 45, 46, 47, 48, 49, 50 };
+    for (lower, 0..) |c, i| {
+        if (byte == c) return .{ .code = letter_codes[i], .shift = false };
+        if (byte == std.ascii.toUpper(c)) return .{ .code = letter_codes[i], .shift = true };
+    }
+    // Digits: 1..9 are 2..10 and 0 is 11. Their shifted symbols are the same keys with Shift held.
+    const shifted_digits = "!@#$%^&*()";
+    for (shifted_digits, 0..) |c, i| {
+        if (byte == c) return .{ .code = if (i == 9) 11 else @as(u32, @intCast(i)) + 2, .shift = true };
+    }
+    if (byte >= '1' and byte <= '9') return .{ .code = byte - '1' + 2, .shift = false };
+    if (byte == '0') return .{ .code = 11, .shift = false };
+    // Every remaining printable, plain and shifted.
+    const table = [_]struct { plain: u8, shifted: u8, code: u32 }{
+        .{ .plain = '-', .shifted = '_', .code = 12 },
+        .{ .plain = '=', .shifted = '+', .code = 13 },
+        .{ .plain = '[', .shifted = '{', .code = 26 },
+        .{ .plain = ']', .shifted = '}', .code = 27 },
+        .{ .plain = ';', .shifted = ':', .code = 39 },
+        .{ .plain = '\'', .shifted = '"', .code = 40 },
+        .{ .plain = '`', .shifted = '~', .code = 41 },
+        .{ .plain = '\\', .shifted = '|', .code = 43 },
+        .{ .plain = ',', .shifted = '<', .code = 51 },
+        .{ .plain = '.', .shifted = '>', .code = 52 },
+        .{ .plain = '/', .shifted = '?', .code = 53 },
+        .{ .plain = ' ', .shifted = ' ', .code = 57 },
     };
+    for (table) |t| {
+        if (byte == t.plain) return .{ .code = t.code, .shift = false };
+        if (byte == t.shifted) return .{ .code = t.code, .shift = true };
+    }
+    return null;
+}
+
+test "the typing table types what the field decodes" {
+    const input_mod = @import("../components/input.zig");
+    var b: u8 = 'a';
+    while (b <= 'z') : (b += 1) {
+        const k = keyForAscii(b) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(?u8, b), input_mod.keyChar(k.code, k.shift));
+        // The same key with Shift is the capital, which is what makes `typeText("Buy")` type a B.
+        try std.testing.expectEqual(@as(?u8, std.ascii.toUpper(b)), input_mod.keyChar(k.code, true));
+    }
+    var d: u8 = '0';
+    while (d <= '9') : (d += 1) {
+        const k = keyForAscii(d) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(?u8, d), input_mod.keyChar(k.code, k.shift));
+    }
+    // Shifted punctuation is the same key with Shift held.
+    try std.testing.expectEqual(@as(?u8, '('), input_mod.keyChar(keyForAscii('(').?.code, true));
+    try std.testing.expectEqual(@as(?u8, '*'), input_mod.keyChar(keyForAscii('*').?.code, true));
 }
 
 test "a repaint that draws the same commands is reported as repeated, and a change is not" {
