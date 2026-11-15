@@ -61,7 +61,7 @@ test "every section is declared and drawn" {
     for ([_][]const u8{
         "catalog.buttons.section", "catalog.field.section",    "catalog.selection.section", "catalog.roles.section",
         "catalog.type.section",    "catalog.badges.section",   "catalog.tabs.section",      "catalog.list.section",
-        "catalog.tree.section",    "catalog.dropdown.section",
+        "catalog.tree.section",    "catalog.dropdown.section", "catalog.images.section",
     }) |id| {
         try testing.expect(driver.exists(id));
     }

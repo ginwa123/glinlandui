@@ -1,6 +1,10 @@
 // Portable software rasterizer — the reference renderer for glinlandui.
 const std = @import("std");
 const scale = @import("scale.zig");
+const stbi = @cImport({
+    @cInclude("stb/stb_image.h");
+    @cInclude("stb/stb_image_resize2.h");
+});
 const cl = @import("zclay");
 const glyphs = @import("glyphs.zig");
 const text_face = @import("text_face.zig");
@@ -101,6 +105,8 @@ pub const Surface = struct {
     scissor: ?Scissor = null,
     clear_rgb: [4]f32 = .{ 0, 0, 0, 255 },
     images: std.AutoHashMapUnmanaged(u64, Image) = .empty,
+    // Pixel buffers this surface decoded itself, so deinit frees only what it owns.
+    owned_pixels: std.ArrayList([]u8) = .empty,
 
     pub fn init(alloc: std.mem.Allocator, width: u32, height: u32) !Surface {
         var self = Surface{ .alloc = alloc, .width = 0, .height = 0, .pixels = &.{} };
@@ -111,6 +117,8 @@ pub const Surface = struct {
     pub fn deinit(self: *Surface) void {
         self.alloc.free(self.pixels);
         self.pixels = &.{};
+        for (self.owned_pixels.items) |p| self.alloc.free(p);
+        self.owned_pixels.deinit(self.alloc);
         self.images.deinit(self.alloc);
     }
 
@@ -583,13 +591,50 @@ pub const Surface = struct {
         }
     }
 
+    // Read a file off disk, downscale it to `max_dim` and hand back RGBA8 the caller owns.
+    fn decodeImage(self: *Surface, path: []const u8, max_dim: u16) ?Image {
+        if (path.len == 0 or path.len + 1 > std.fs.max_path_bytes) return null;
+        var cbuf: [std.fs.max_path_bytes]u8 = undefined;
+        @memcpy(cbuf[0..path.len], path);
+        cbuf[path.len] = 0;
+
+        var iw: c_int = 0;
+        var ih: c_int = 0;
+        var nch: c_int = 0;
+        const raw = stbi.stbi_load(@ptrCast(&cbuf), &iw, &ih, &nch, 4) orelse return null;
+        defer stbi.stbi_image_free(raw);
+        if (iw <= 0 or ih <= 0) return null;
+
+        const dims = common.scaledDims(@intCast(iw), @intCast(ih), max_dim);
+        const len: usize = @as(usize, dims[0]) * dims[1] * 4;
+        const out = self.alloc.alloc(u8, len) catch return null;
+        if (dims[0] == @as(u32, @intCast(iw)) and dims[1] == @as(u32, @intCast(ih))) {
+            @memcpy(out, raw[0..len]);
+        } else if (stbi.stbir_resize_uint8_linear(raw, iw, ih, 0, out.ptr, @intCast(dims[0]), @intCast(dims[1]), 0, stbi.STBIR_RGBA) == null) {
+            self.alloc.free(out);
+            return null;
+        }
+        self.owned_pixels.append(self.alloc, out) catch {};
+        return .{ .width = dims[0], .height = dims[1], .pixels = out };
+    }
+
     fn drawImageCmd(self: *Surface, bb: cl.BoundingBox, ref: *const ImageRef) void {
         if (bb.width <= 0 or bb.height <= 0) return;
         const path = ref.path_ptr[0..ref.path_len];
         const max_dim: u16 = if (ref.max_dim == 0) 256 else ref.max_dim;
-        const img = self.images.get(hashImageKey(path, max_dim)) orelse {
-            self.drawBox(bb.x, bb.y, bb.width, bb.height, noRadius, 0, 0, img_placeholder.toClay());
-            return;
+        const key = hashImageKey(path, max_dim);
+        const img = blk: {
+            if (self.images.get(key)) |found| break :blk found;
+            // Decode on demand, exactly as the GPU backends do: without this every CPU platform drew a placeholder.
+            const decoded = self.decodeImage(path, max_dim) orelse {
+                self.drawBox(bb.x, bb.y, bb.width, bb.height, noRadius, 0, 0, img_placeholder.toClay());
+                return;
+            };
+            self.images.put(self.alloc, key, decoded) catch {
+                self.drawBox(bb.x, bb.y, bb.width, bb.height, noRadius, 0, 0, img_placeholder.toClay());
+                return;
+            };
+            break :blk self.images.get(key).?;
         };
         const iw: f32 = @floatFromInt(img.width);
         const ih: f32 = @floatFromInt(img.height);

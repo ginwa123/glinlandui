@@ -5,6 +5,7 @@ const cl = @import("zclay");
 const soft = @import("../core/render_software.zig");
 const scenes = @import("../core/golden_scenes.zig");
 const renderer = @import("renderer.zig");
+const text_face = @import("../core/text_face.zig");
 
 const w: u32 = 200;
 const h: u32 = 120;
@@ -27,6 +28,7 @@ fn cpuPixels(commands: []const cl.RenderCommand, alloc: std.mem.Allocator) ![]u8
 
 test "Metal matches the CPU reference on every golden scene" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
+    text_face.setAllocator(std.heap.page_allocator);
     var r = try renderer.Renderer.init(std.testing.allocator);
     defer r.deinit();
     // A CI runner with no Metal device is not a failure; the gate is meaningless there.
@@ -74,6 +76,7 @@ fn writeTestTga(path: [:0]const u8, tw: u16, th: u16, rgba: []const u8) !void {
 
 test "Metal matches the CPU on an image quad" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
+    text_face.setAllocator(std.heap.page_allocator);
     var r = try renderer.Renderer.init(std.testing.allocator);
     defer r.deinit();
     if (!r.attachOffscreen()) return error.SkipZigTest;

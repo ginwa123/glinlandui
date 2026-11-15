@@ -112,7 +112,7 @@ pub const CatalogUiState = struct {
 // ---- the catalog's content, as values -------------------------------------------------------------------------
 
 // Which demo a section draws. A tag, not a function pointer: the data stays a value and the view owns the drawing.
-pub const Body = enum { buttons, text_field, selection, roles, type_scale, badges, tabs, list, tree, dropdown };
+pub const Body = enum { buttons, text_field, selection, roles, type_scale, badges, tabs, list, tree, dropdown, images };
 
 // One card on the page: its element id, its heading, and the note that says what to look at.
 pub const Section = struct {
@@ -134,6 +134,7 @@ pub const sections = [_]Section{
     .{ .id = "catalog.list.section", .title = "List", .note = "rows with ids, hover and a click each", .body = .list },
     .{ .id = "catalog.tree.section", .title = "Tree", .note = "26px rows, a 17px indent, selection is a fill and a bar", .body = .tree },
     .{ .id = "catalog.dropdown.section", .title = "Dropdown", .note = "a field and its rows, owned by the caller", .body = .dropdown },
+    .{ .id = "catalog.images.section", .title = "Images", .note = "cover, contain and stretch — decoded once, drawn on the GPU", .body = .images },
 };
 
 // One colour role as a value the view can paint.

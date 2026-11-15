@@ -4,6 +4,7 @@ const props = glinlandui.props;
 const components = glinlandui.components;
 const box_mod = components.box;
 const text_mod = components.text;
+const image_mod = components.image;
 const button = components.button;
 const badge_mod = components.badge;
 const checkbox_mod = components.checkbox;
@@ -146,7 +147,58 @@ fn sectionBody(ctx: SectionCtx) void {
         .list => listBody(ctx.scope),
         .tree => treeBody(ctx.scope),
         .dropdown => dropdownBody(ctx.scope),
+        .images => imagesBody(ctx.scope),
     }
+}
+
+// ---- images --------------------------------------------------------------------------------------------------
+
+fn imagesBody(scope: *Scope) void {
+    row(scope, "catalog.images.fits", imageFits);
+}
+
+fn imageFits(scope: *Scope) void {
+    imageCard(scope, .{ .id = "catalog.img.cover", .path = "examples/catalog/assets/gradient.png", .caption = "cover — fills the box, crops the overhang", .fit = .cover });
+    imageCard(scope, .{ .id = "catalog.img.contain", .path = "examples/catalog/assets/disc.png", .caption = "contain — whole image, letterboxed", .fit = .contain });
+    imageCard(scope, .{ .id = "catalog.img.stretch", .path = "examples/catalog/assets/checker.png", .caption = "stretch — aspect ignored, alpha kept", .fit = .stretch });
+}
+
+const ImageCardCtx = struct {
+    // Filled in by imageCard, so a call site states only what the card shows.
+    scope: *Scope = undefined,
+    id: []const u8,
+    path: []const u8,
+    caption: []const u8,
+    fit: image_mod.Fit,
+};
+
+fn imageCard(scope: *Scope, card: ImageCardCtx) void {
+    var ctx = card;
+    ctx.scope = scope;
+    box_mod.box(.{
+        .id = .{ .text = ctx.id },
+        .direction = .column,
+        .gap = 6,
+        .pad = props.Pad.all(8),
+        .bg = scope.theme.colors.surface_variant,
+        .radius = props.Radius.all(r_card),
+    }, ctx, imageCardChildren);
+}
+
+fn imageCardChildren(ctx: ImageCardCtx) void {
+    image_mod.image(.{
+        .id = .{ .text = frame.formatText("{s}.img", .{ctx.id}) },
+        .path = ctx.path,
+        .w = 220,
+        .h = 130,
+        .fit = ctx.fit,
+        .radius = 6,
+    });
+    text_mod.label(.{ .label = .{
+        .text = ctx.caption,
+        .size = ctx.scope.theme.type_scale.caption,
+        .color = ctx.scope.theme.colors.text_dim,
+    } });
 }
 
 // ---- buttons -------------------------------------------------------------------------------------------------
