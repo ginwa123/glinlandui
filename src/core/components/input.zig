@@ -374,6 +374,9 @@ pub const Field = struct {
     disabled: bool = false,
     disabled_bg: Color = Color.rgb(0x1a, 0x1a, 0x1a),
     disabled_fg: Color = Color.rgb(0x77, 0x77, 0x77),
+    // A hint drawn in the empty field while it does not own the keyboard, e.g. "Filter requests".
+    placeholder: []const u8 = "",
+    placeholder_fg: Color = Color.rgb(0x77, 0x77, 0x77),
     // ---- the intents it raises, each with the model it belongs to.
     on_change: prop.Change = .{},
     // Called on Enter with the draft. True means the intent took it, and then the field clears itself.
@@ -659,6 +662,8 @@ pub fn textField(field: *Field) void {
     const fg: Color = if (field.disabled) field.disabled_fg else field.fg;
     // Solid for half a second after the caret moves, then blinking: a caret that blinks while you type is a caret you cannot find.
     const blink_on = text_editor.caretVisible(input);
+    // A hint belongs to an empty single-line field nobody is typing in, so it never competes with a draft or a caret.
+    const hint = field.placeholder.len > 0 and draft.len == 0 and !input.focused and !field.disabled;
 
     cl.UI()(.{
         .id = field.id.clay(),
@@ -676,7 +681,7 @@ pub fn textField(field: *Field) void {
         if (field.multiline) {
             drawLines(field, draft, blink_on, fg, name);
         } else {
-            drawSingleLine(field, draft, blink_on, fg, name);
+            drawSingleLine(field, draft, blink_on, fg, name, hint);
         }
     });
 
@@ -722,7 +727,7 @@ pub fn caretId(name: []const u8) cl.ElementId {
 }
 
 // The single-line body of a field: the selection as three runs, or the draft as one with the caret floated after it.
-fn drawSingleLine(field: *Field, draft: []const u8, blink_on: bool, fg: Color, name: []const u8) void {
+fn drawSingleLine(field: *Field, draft: []const u8, blink_on: bool, fg: Color, name: []const u8, hint: bool) void {
     const input = &field.editor;
     if (input.caret.hasSelection()) {
         const span = input.caret.selection().?;
@@ -743,6 +748,10 @@ fn drawSingleLine(field: *Field, draft: []const u8, blink_on: bool, fg: Color, n
         return;
     }
     // One run for the value, caret floated over it; an empty one draws a space so `.fit` keeps a line.
+    if (hint) {
+        cl.text(field.placeholder, .{ .font_size = field.font_size.whole(), .color = field.placeholder_fg.toClay() });
+        return;
+    }
     cl.text(if (draft.len == 0) " " else draft, .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
     if (blink_on) caretBar(field, draft);
 }
@@ -1537,4 +1546,35 @@ test "field border emits a border command" {
         borders += 1;
     };
     try std.testing.expectEqual(@as(usize, 1), borders);
+}
+
+var placeholder_field: Field = .{ .id = .{ .text = "test-placeholder-field" }, .placeholder = "Filter requests", .placeholder_fg = Color.rgb(0x66, 0x66, 0x66) };
+
+fn declarePlaceholderField() void {
+    textField(&placeholder_field);
+}
+
+// The runs a layout drew, so a test can assert on the text and the tone it was drawn in.
+fn drawnRun(cmds: []const cl.RenderCommand, want: []const u8) ?cl.TextRenderData {
+    for (cmds) |c| {
+        if (c.command_type != .text) continue;
+        const run = c.render_data.text;
+        const shown = run.string_contents.chars[0..@intCast(run.string_contents.length)];
+        if (std.mem.eql(u8, shown, want)) return run;
+    }
+    return null;
+}
+
+test "an empty unfocused field draws its placeholder, and a draft replaces it" {
+    // The suite shares the frame: a press or a focus another test left behind would take the keyboard on this field's first layout.
+    frame_mod.ptr_down = false;
+    frame_mod.setFocus(null);
+    const hint = drawnRun(try layoutCommands(declarePlaceholderField), "Filter requests") orelse return error.PlaceholderMissing;
+    try std.testing.expectEqual(Color.rgb(0x66, 0x66, 0x66).toClay(), hint.text_color);
+
+    // Typing wins over the hint: with a draft the field draws the draft, never both.
+    placeholder_field.setText("abc");
+    const typed = try layoutCommands(declarePlaceholderField);
+    try std.testing.expect(drawnRun(typed, "Filter requests") == null);
+    try std.testing.expect(drawnRun(typed, "abc") != null);
 }
