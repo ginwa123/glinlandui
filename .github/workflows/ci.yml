@@ -161,7 +161,26 @@ jobs:
 
           test -x zig-out/bin/glinlandui
 
-          out="$(env QS_SETTINGS_TEST_FRAMES=1 ./zig-out/bin/glinlandui 2>&1)"
+          # Bounded, because it is not self-capping any more: with the Metal path
+          # the app can keep waiting for a drawable that never arrives (a runner
+          # has no WindowServer session), and a bare `$(...)` then sits on the pipe
+          # until the job's 10-minute timeout with NOTHING printed. 90 s plus the
+          # app's own log turns that into a readable failure.
+          log="$(mktemp)"
+          env QS_SETTINGS_TEST_FRAMES=1 ./zig-out/bin/glinlandui >"$log" 2>&1 &
+          pid=$!
+          for _ in $(seq 1 90); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 1
+          done
+          if kill -0 "$pid" 2>/dev/null; then
+            kill -9 "$pid" 2>/dev/null || true
+            echo "the demo did not exit within 90s under QS_SETTINGS_TEST_FRAMES=1" >&2
+            echo "--- app output ---" >&2
+            cat "$log" >&2
+            exit 1
+          fi
+          out="$(cat "$log")"
           echo "$out"
 
           echo "$out" | grep -q 'macOS window:'
