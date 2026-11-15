@@ -13,6 +13,12 @@ const semantics = @import("../semantics.zig");
 /// What a row is, which decides its colour.
 pub const RowKind = enum { group, item, leaf };
 
+/// Where a drop landed, in the same words `reorder.zig` decides it with: above a row, inside it, or below it.
+pub const Zone = reorder_mod.Zone;
+
+/// The drag spec a tree hands in: `on_drop` is reported with the row under the pointer and the zone.
+pub const Reorder = reorder_mod.Reorder;
+
 /// One row. `depth` is the indent level, 0 for a top-level node.
 pub const Row = struct {
     label: []const u8,
