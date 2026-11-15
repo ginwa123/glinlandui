@@ -30,6 +30,8 @@ pub const App = struct {
         const Self = @This();
         components.box.box(.{
             .id = .{ .text = "root" },
+            // The app-side source line the devtool shows; Zig cannot infer a call site, so a widget that wants one is given it.
+            .src = @src(),
             .direction = .column,
             .w = .grow,
             .h = .grow,
@@ -48,6 +50,7 @@ pub const App = struct {
         });
         components.button.button(.{
             .id = .{ .text = "click-me" },
+            .src = @src(),
             .label = .{ .text = "Click me" },
             .w = .{ .fixed = 180 },
             .h = .{ .fixed = 40 },
