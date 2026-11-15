@@ -450,7 +450,8 @@ pub const Surface = struct {
                         bb.y,
                         bb.height,
                         bytes,
-                        @intFromFloat(@as(f32, @floatFromInt(td.font_size)) * k),
+                        // Rounded, not truncated: a 14 point run at 150% is 21 pixels, not 20.
+                        @intFromFloat(@round(@as(f32, @floatFromInt(td.font_size)) * k)),
                         td.text_color,
                     );
                 },

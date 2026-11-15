@@ -897,6 +897,43 @@ fn onFieldClick(ctx: ?*anyopaque) void {
     if (field.on_focus.f) |f| f(field.on_focus.ctx);
 }
 
+// ---- Double click: the word under the pointer is selected, and the next frame keeps the highlight ----
+
+var dbl_field: Field = .{ .id = .{ .text = "test-double-field" } };
+
+fn declareDblField() void {
+    textField(&dbl_field);
+}
+
+test "a double click selects the word under the pointer, and the next frame still draws it" {
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.ptr_down = false;
+    beginFrame();
+    dbl_field = .{ .id = .{ .text = "test-double-field" }, .value = "hello world" };
+    dbl_field.bind();
+    _ = try layoutCommands(declareDblField);
+    const bb = cl.getElementData(cl.getElementId("test-double-field")).bounding_box;
+    // Two points into the run: past the field's own left padding, so the pointer lands inside "hello".
+    const x = bb.x + dbl_field.pad_lr.pts() + 2;
+    const y = bb.y + bb.height * 0.5;
+    frame_mod.setPointer(x, y);
+    try std.testing.expect(registry.dispatchDoubleClick(x, y));
+    const span = dbl_field.editor.caret.selection() orelse return error.NoSelection;
+    try std.testing.expectEqual(@as(usize, 0), span.start);
+    try std.testing.expectEqual(@as(usize, 5), span.end);
+
+    // The frame after the click, with the button already released: the selection survives and is drawn as its own run.
+    const cmds = try layoutCommands(declareDblField);
+    const kept = dbl_field.editor.caret.selection() orelse return error.SelectionCleared;
+    try std.testing.expectEqual(@as(usize, 5), kept.end);
+    var highlighted = false;
+    for (cmds) |c| {
+        if (c.command_type == .rectangle and c.id == cl.ElementId.IDI("test-double-field", 1).id) highlighted = true;
+    }
+    try std.testing.expect(highlighted);
+}
+
 fn layoutCommands(declare_fn: *const fn () void) ![]cl.RenderCommand {
     headless.begin(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();

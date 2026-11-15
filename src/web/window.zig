@@ -10,6 +10,7 @@ const present = @import("present.zig");
 const soft = @import("../core/render_software.zig");
 const scale_mod = @import("../core/scale.zig");
 const glyphs = @import("../core/glyphs.zig");
+const frame_mod = @import("../core/frame.zig");
 
 // NOTE: no render/text/frame re-exports here.
 
@@ -242,6 +243,8 @@ pub const Window = struct {
         if (scale > 0 and scale <= present.max_device_scale) self.device_scale = scale;
         // The renderer must know the density too, or it draws a 1x image the page upscales into a blur.
         soft.setRenderScale(self.device_scale);
+        // And so must the components, or a caret is one CSS pixel instead of one device pixel on a 2x page.
+        frame_mod.setPixelScale(soft.renderScale());
         self.applySize();
         self.state.needs_draw = true;
     }

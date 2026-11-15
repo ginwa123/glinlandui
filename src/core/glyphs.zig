@@ -70,9 +70,10 @@ pub const Font = struct {
         self.alloc.free(self.bytes);
     }
 
-    /// Horizontal scale factor for a requested pixel height.
+    /// Horizontal scale factor for a requested EM size: `font_size` is the em square, which is what every metric in this toolkit assumes.
     fn scaleFor(self: *const Font, font_size: u16) f32 {
-        return stb.stbtt_ScaleForPixelHeight(&self.info, @floatFromInt(font_size));
+        // Mapping the EM onto pixels, NOT the ascent-to-descent box: Plex Mono's line box is 1.3 em, so scaling the box down drew 14 as a 10.8 em.
+        return stb.stbtt_ScaleForMappingEmToPixels(&self.info, @floatFromInt(font_size));
     }
 
     /// The font's line box height at `font_size`, in pixels: ascent + |descent|.
@@ -501,6 +502,19 @@ test "advance width grows with font size" {
     try std.testing.expect(a24 > a12);
     // Roughly proportional, not quadratic.
     try std.testing.expect(a24 < a12 * 3);
+}
+
+test "font_size is the EM square, so a 14 point run is 8.4 points of advance and a 9.8 point cap" {
+    var font = requireFont() orelse return error.SkipZigTest;
+    defer font.deinit();
+    // The cap box comes through the glyph cache, which the test has to own here or its arena outlives the test.
+    initCache(std.testing.allocator);
+    defer deinitCache();
+    // Plex Mono's advance is 600/1000 em, so 14 points is 8.4. Scaling the ascent-to-descent box (1.3 em) instead drew every 14 as a 10.8 em.
+    try std.testing.expectApproxEqAbs(@as(f32, 8.4), font.glyphMetrics('0', 14).advance, 0.05);
+    // The same scale puts the cap height at 698/1000 em, which is the ink a 14 point label should have.
+    const cap = capBox(&font, 14) orelse return error.SkipZigTest;
+    try std.testing.expect(cap.height >= 9.0 and cap.height <= 11.0);
 }
 
 test "measure sums advances and stays monotonic in length" {

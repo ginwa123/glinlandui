@@ -304,6 +304,8 @@ pub const Editor = struct {
             self.caret.clearSelection();
         }
         self.caret.offset = clamped;
+        // EVERY caret move restarts the solid half of the blink, arrows included: a caret that lands mid-blink is a caret that vanishes as you move it.
+        self.idle = 0;
     }
 
     // Delete everything and reset the caret.
@@ -972,6 +974,43 @@ test "an unfocused editor draws no caret and holds its blink clock at zero" {
     try testing.expect(!caretVisible(&e));
     try testing.expectEqual(@as(f32, 0), e.idle);
     e.focused = true;
+    try testing.expect(caretVisible(&e));
+}
+
+test "an arrow, Home, End or a word jump brings the caret back solid instead of leaving it mid-blink" {
+    var buf: [32]u8 = undefined;
+    var e = Editor.init(&buf);
+    _ = e.insertSlice("one two");
+    // Mid-blink: the caret is in its OFF half, which is where an arrow used to leave it, so a move looked like a vanishing caret.
+    e.idle = 0.9;
+    try testing.expect(!caretVisible(&e));
+    e.moveLeft(false);
+    try testing.expect(caretVisible(&e));
+    try testing.expectEqual(@as(f32, 0), e.idle);
+
+    e.idle = 0.6;
+    e.moveRight(false);
+    try testing.expect(caretVisible(&e));
+
+    e.idle = 0.7;
+    e.moveHome(false);
+    try testing.expect(caretVisible(&e));
+
+    e.idle = 0.8;
+    e.moveEnd(false);
+    try testing.expect(caretVisible(&e));
+
+    e.idle = 0.9;
+    e.moveWordLeft(false);
+    try testing.expect(caretVisible(&e));
+
+    e.idle = 0.9;
+    e.moveWordRight(false);
+    try testing.expect(caretVisible(&e));
+
+    // A shift-move extends the selection and restarts the blink the same way: the active end has to be visible to be dragged.
+    e.idle = 0.9;
+    e.moveLeft(true);
     try testing.expect(caretVisible(&e));
 }
 

@@ -51,6 +51,17 @@ else switch (builtin.os.tag) {
     else => @import("core/clipboard_portable.zig"),
 };
 
+/// The monotonic millisecond clock: without one a double click is indistinguishable from two clicks and the caret blink steps per frame instead of per.
+pub const clock = if (builtin.is_test)
+    @import("core/clock_portable.zig")
+else switch (builtin.os.tag) {
+    .linux => @import("linux/clock.zig"),
+    .macos => @import("mac/clock.zig"),
+    .windows => @import("windows/clock.zig"),
+    .freestanding, .wasi => if (builtin.cpu.arch.isWasm()) @import("web/clock.zig") else @import("core/clock_portable.zig"),
+    else => @import("core/clock_portable.zig"),
+};
+
 /// The devtool service: what lets a CLI attach to a running app over a unix socket and drive it. Linux first; every other host reports it as unavailable.
 pub const devtools_service = if (builtin.is_test)
     @import("core/devtools_service_portable.zig")

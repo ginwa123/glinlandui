@@ -161,7 +161,7 @@ pub const Renderer = struct {
                 .text => {
                     const td = cmd.render_data.text;
                     const bytes = td.string_contents.chars[0..@intCast(td.string_contents.length)];
-                    self.pushText(bb.x * k, bb.y * k, bb.height * k, bytes, @intFromFloat(@as(f32, @floatFromInt(td.font_size)) * k), td.text_color);
+                    self.pushText(bb.x * k, bb.y * k, bb.height * k, bytes, @intFromFloat(@round(@as(f32, @floatFromInt(td.font_size)) * k)), td.text_color);
                 },
                 .scissor_start => self.setScissor(bb.x * k, bb.y * k, bb.width * k, bb.height * k),
                 .scissor_end => self.setScissor(0, 0, 0, 0),
@@ -227,7 +227,7 @@ pub const Renderer = struct {
                 .text => {
                     const td = cmd.render_data.text;
                     const bytes = td.string_contents.chars[0..@intCast(td.string_contents.length)];
-                    self.pushText(bb.x * k, bb.y * k, bb.height * k, bytes, @intFromFloat(@as(f32, @floatFromInt(td.font_size)) * k), td.text_color);
+                    self.pushText(bb.x * k, bb.y * k, bb.height * k, bytes, @intFromFloat(@round(@as(f32, @floatFromInt(td.font_size)) * k)), td.text_color);
                 },
                 .scissor_start => self.setScissor(bb.x * k, bb.y * k, bb.width * k, bb.height * k),
                 .scissor_end => self.setScissor(0, 0, 0, 0),
