@@ -148,13 +148,17 @@ pub const Driver = struct {
 
     /// Move the pointer and render a frame.
     pub fn move(self: *Driver, x: f32, y: f32) void {
+        frame_mod.setPointer(x, y);
         self.host.onPointerEvent(x, y, false, 0);
         self.frame();
     }
 
     /// Press and release at a point, rendering once after the complete gesture.
     pub fn clickAt(self: *Driver, x: f32, y: f32) void {
+        frame_mod.setPointer(x, y);
+        frame_mod.setPointerButton(true, x, y);
         self.host.onPointerEvent(x, y, true, dispatch.BTN_LEFT);
+        frame_mod.setPointerButton(false, 0, 0);
         self.host.onPointerEvent(x, y, false, dispatch.BTN_LEFT);
         self.frame();
     }
@@ -169,20 +173,28 @@ pub const Driver = struct {
 
     /// Press at a point without releasing.
     pub fn pressAt(self: *Driver, x: f32, y: f32) void {
+        frame_mod.setPointer(x, y);
+        frame_mod.setPointerButton(true, x, y);
         self.host.onPointerEvent(x, y, true, dispatch.BTN_LEFT);
         self.frame();
     }
 
     /// Release a previously pressed point.
     pub fn releaseAt(self: *Driver, x: f32, y: f32) void {
+        frame_mod.setPointer(x, y);
+        frame_mod.setPointerButton(false, 0, 0);
         self.host.onPointerEvent(x, y, false, dispatch.BTN_LEFT);
         self.frame();
     }
 
     /// Drag from one point to another with one motion event.
     pub fn drag(self: *Driver, x0: f32, y0: f32, x1: f32, y1: f32) void {
+        frame_mod.setPointer(x0, y0);
+        frame_mod.setPointerButton(true, x0, y0);
         self.host.onPointerEvent(x0, y0, true, dispatch.BTN_LEFT);
+        frame_mod.setPointer(x1, y1);
         self.host.onPointerEvent(x1, y1, false, 0);
+        frame_mod.setPointerButton(false, 0, 0);
         self.host.onPointerEvent(x1, y1, false, dispatch.BTN_LEFT);
         self.frame();
     }
@@ -984,4 +996,28 @@ test "e2e: a click registered outside the component still reports hasClickAction
 
     try key.performClick();
     try std.testing.expectEqual(@as(usize, 1), state.hits);
+}
+
+test "the driver keeps the pointer bookkeeping a cross-frame gesture reads" {
+    const root = struct {
+        fn declare(_: ?*anyopaque, _: u32, _: u32) void {}
+    }.declare;
+    var driver = try Driver.initOwned(std.heap.page_allocator, null, root);
+    defer driver.deinit();
+    try driver.start(.{ .width = 200, .height = 100 });
+
+    // `input.dragSelect` and `components.sidebar` read these, so the harness must report them like a platform does.
+    driver.pressAt(12, 34);
+    try std.testing.expect(frame_mod.ptr_down);
+    try std.testing.expectEqual(@as(f32, 12), frame_mod.ptr_x);
+    try std.testing.expectEqual(@as(f32, 34), frame_mod.ptr_y);
+    try std.testing.expectEqual(@as(f32, 12), frame_mod.ptr_press_x);
+    try std.testing.expectEqual(@as(f32, 34), frame_mod.ptr_press_y);
+
+    driver.move(40, 34);
+    try std.testing.expect(frame_mod.ptr_down);
+    try std.testing.expectEqual(@as(f32, 40), frame_mod.ptr_x);
+
+    driver.releaseAt(40, 34);
+    try std.testing.expect(!frame_mod.ptr_down);
 }
