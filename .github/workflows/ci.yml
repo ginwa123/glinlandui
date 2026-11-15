@@ -32,6 +32,11 @@ jobs:
       - name: Every backend renders at the display backing scale
         run: ./ci/check_render_scale.sh
 
+      # Static too: it reads all five backend files for all five platforms, which
+      # a single test binary cannot do without linking every OS's toolkit.
+      - name: Every backend exposes the same public surface
+        run: ./ci/check_backend_parity.sh
+
   linux:
     name: Linux / Zig 0.16.0 / native GLES3
     runs-on: ubuntu-24.04

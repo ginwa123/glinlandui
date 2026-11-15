@@ -143,6 +143,7 @@ test {
     _ = @import("core/render_software.zig");
     _ = @import("core/scale.zig");
     _ = @import("core/golden_test.zig");
+    _ = @import("core/backend_contract_test.zig");
     // Real glyph rasterization for the CPU renderer (stb_truetype).
     _ = @import("core/glyphs.zig");
     _ = @import("core/render_pixels_test.zig");

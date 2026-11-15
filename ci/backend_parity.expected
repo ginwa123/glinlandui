@@ -1,0 +1,13 @@
+# Known gaps: a backend that is missing a public name the other backends have.
+#
+# Format: <os> <seam> <name>
+#
+# Each line is a real parity gap that has NOT been fixed yet. Deleting a line is
+# the proof it was fixed; the gate fails while a line is here but the backend
+# declares that name, so this list can only shrink.
+#
+# linux: the Wayland backend has no headless render entry point, so the verify
+# and inspect tooling cannot drive a frame there. Not app-breaking (the app uses
+# the Driver, not Window.renderHeadless), but it is a capability the other three
+# backends have.
+linux window renderHeadless
