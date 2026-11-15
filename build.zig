@@ -484,7 +484,7 @@ pub fn build(b: *std.Build) void {
     // The Metal-vs-CPU comparison needs a Metal device, so it is a macOS step of its own and NOT part of `test` — the parity suite's count has to match on every OS.
     const mac_gpu_test_step = b.step("test-macos-gpu", "Run the macOS-only Metal renderer tests (Metal draws the CPU reference's pixels)");
     if (is_macos) {
-        const m = b.createModule(.{ .root_source_file = b.path("src/mac/metal_parity_test.zig"), .target = target });
+        const m = b.createModule(.{ .root_source_file = b.path("src/mac_gpu_test.zig"), .target = target });
         m.addImport("zclay", zclay_mod);
         m.addIncludePath(b.path("src/mac"));
         addVendoredStbInclude(b, m);
