@@ -107,6 +107,8 @@ pub const Editor = struct {
         @memmove(self.buf[0..n], new_text[0..n]);
         self.len = n;
         self.caret = .{};
+        // A model edit puts the caret back on screen, solid, whatever the blink clock said.
+        self.idle = 0;
     }
 
     // Insert one byte at the caret, replacing the selection if any.
@@ -125,6 +127,8 @@ pub const Editor = struct {
         self.buf[self.caret.offset] = c;
         self.len += 1;
         self.caret.offset += 1;
+        // Typing is exactly when the caret must be visible: an edit always restarts the solid half of the blink.
+        self.idle = 0;
         return true;
     }
 
@@ -168,6 +172,8 @@ pub const Editor = struct {
 
     // Remove `count` bytes at `at`, closing the gap.
     fn splice(self: *Editor, at: usize, count: usize) void {
+        // Deleting is an edit too, so the caret is solid while a key is held down.
+        self.idle = 0;
         const tail = self.len - (at + count);
         if (tail > 0) {
             std.mem.copyForwards(u8, self.buf[at .. at + tail], self.buf[at + count ..][0..tail]);
@@ -917,6 +923,22 @@ test "the caret is solid right after an edit and blinks after half a second" {
     try testing.expect(!caretVisible(&e));
     // 1.1 s is the bright half again.
     e.idle = 1.1;
+    try testing.expect(caretVisible(&e));
+}
+
+test "an edit makes a caret that had blinked out solid again" {
+    var buf: [16]u8 = undefined;
+    var e = Editor.init(&buf);
+    // 0.6 s of idle is the dark half, which is exactly when a typist must never lose the caret.
+    e.idle = 0.6;
+    try testing.expect(!caretVisible(&e));
+    _ = e.insertByte('a');
+    try testing.expect(caretVisible(&e));
+    e.idle = 0.7;
+    e.backspace();
+    try testing.expect(caretVisible(&e));
+    e.idle = 0.7;
+    e.setText("xyz");
     try testing.expect(caretVisible(&e));
 }
 

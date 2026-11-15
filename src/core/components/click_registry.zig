@@ -7,8 +7,8 @@ const headless = @import("../testing/headless.zig");
 /// Every click target of one frame. The devtool overlay claims a slice of this for its own rows, so it sits above an app's own ceiling.
 pub const cap: usize = 384;
 
-/// Cursor kind for Wayland wl_pointer cursor shape.
-pub const Cursor = enum { default, pointer, text, ew_resize };
+/// Cursor kind for Wayland wl_pointer cursor shape: the same enum a widget's props name.
+pub const Cursor = @import("../props.zig").Cursor;
 
 /// Click callback shapes (same as button.ClickFn / list row fn).
 pub const ClickFn = *const fn (?*anyopaque) void;

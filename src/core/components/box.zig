@@ -4,6 +4,7 @@ const cl = @import("zclay");
 const headless = @import("../testing/headless.zig");
 const Color = @import("../color.zig").Color;
 const prop = @import("../props.zig");
+const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
 
 /// The sizing type a container props uses. One definition, named where a box needs it.
@@ -31,6 +32,10 @@ pub const BoxProps = struct {
     radius: prop.Radius = .{},
     border: prop.Border = .{},
     child_align: cl.ChildAlignment = .{},
+    // The click this container raises: an app hands one in instead of reaching for the click registry itself.
+    on_click: prop.Click = .{},
+    // The pointer shape over the hit target; only read when `on_click` has a handler.
+    cursor: prop.Cursor = .pointer,
 };
 
 /// Declare a div-like container: a Clay element named by `id`, with the mapped direction, sizing, padding, gap, radius and border; a background only when one is given.
@@ -53,6 +58,8 @@ pub fn box(p: BoxProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void)
         .corner_radius = p.radius.clay(),
         .border = p.border.clay(),
     })({
+        // The box's own hit target answers first, so a clickable child drawn on top of it wins the tie.
+        if (p.on_click.f) |cb| registry.registerClickCursor(p.id.clay(), cb, p.on_click.ctx, p.cursor);
         // A container is part of the component tree: the children it declares record it as their parent, which is what the devtool's tree shows.
         semantics.pushAncestor(p.id.clay(), false);
         children(ctx);
@@ -63,8 +70,9 @@ pub fn box(p: BoxProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void)
         .declared = semantics.declaredAt(p.src),
         .id = p.id.clay(),
         .tag = p.id.str(),
-        .role = .container,
+        .role = if (p.on_click.f != null) .button else .container,
         .flags = .{ .enabled = true },
+        .actions = .{ .click = p.on_click.f != null },
     });
 }
 
@@ -254,4 +262,95 @@ test "spacer grows on both axes and has no children" {
     // A spacer is transparent, so Clay emits no rectangle for it — that is the point of a spacer.
     try std.testing.expectEqual(@as(usize, 0), rects);
     try std.testing.expectEqual(@as(usize, 0), texts);
+}
+
+// ---- on_click: a container that answers the pointer without the app touching the registry ----
+
+const BoxClickRec = struct {
+    outer: usize = 0,
+    inner: usize = 0,
+};
+
+var box_click: BoxClickRec = .{};
+
+fn onOuterBox(_: ?*anyopaque) void {
+    box_click.outer += 1;
+}
+
+fn onInnerBox(_: ?*anyopaque) void {
+    box_click.inner += 1;
+}
+
+fn declareClickableBox() void {
+    box(.{
+        .id = .{ .text = "test-click-box" },
+        .w = .{ .fixed = 80 },
+        .h = .{ .fixed = 40 },
+        .on_click = .{ .f = onOuterBox, .ctx = &box_click },
+    }, {}, emptyChildren);
+}
+
+test "a clickable box answers a click at its centre, and a plain box answers nothing" {
+    registry.beginFrame();
+    _ = try headless.frameCommands(declareClickableBox);
+    const bb = cl.getElementData(cl.getElementId("test-click-box")).bounding_box;
+    try std.testing.expect(registry.dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
+    try std.testing.expectEqual(@as(usize, 1), box_click.outer);
+
+    registry.beginFrame();
+    _ = try headless.frameCommands(declareBgBox);
+    const plain = cl.getElementData(cl.getElementId("test-bg-box")).bounding_box;
+    try std.testing.expect(!registry.dispatchClick(plain.x + plain.width * 0.5, plain.y + plain.height * 0.5));
+    try std.testing.expectEqual(@as(usize, 1), box_click.outer);
+}
+
+fn innerClickable(_: void) void {
+    box(.{
+        .id = .{ .text = "test-inner-click" },
+        .w = .{ .fixed = 40 },
+        .h = .{ .fixed = 20 },
+        .on_click = .{ .f = onInnerBox, .ctx = &box_click },
+    }, {}, emptyChildren);
+}
+
+fn declareNestedClickable() void {
+    box(.{
+        .id = .{ .text = "test-outer-click" },
+        .w = .{ .fixed = 120 },
+        .h = .{ .fixed = 60 },
+        .on_click = .{ .f = onOuterBox, .ctx = &box_click },
+    }, {}, innerClickable);
+}
+
+test "a clickable child wins a click over the clickable box that contains it" {
+    box_click = .{};
+    registry.beginFrame();
+    _ = try headless.frameCommands(declareNestedClickable);
+    const inner = cl.getElementData(cl.getElementId("test-inner-click")).bounding_box;
+    try std.testing.expect(registry.dispatchClick(inner.x + inner.width * 0.5, inner.y + inner.height * 0.5));
+    try std.testing.expectEqual(@as(usize, 1), box_click.inner);
+    try std.testing.expectEqual(@as(usize, 0), box_click.outer);
+    // Outside the child but inside the container: the container answers.
+    const outer = cl.getElementData(cl.getElementId("test-outer-click")).bounding_box;
+    try std.testing.expect(registry.dispatchClick(outer.x + 2, outer.y + outer.height - 2));
+    try std.testing.expectEqual(@as(usize, 1), box_click.outer);
+}
+
+test "a clickable box is a button with a click action; a plain box stays a container" {
+    _ = try headless.frameCommands(declareClickableBox);
+    const clickable = semantics.byId(cl.getElementId("test-click-box")).?;
+    try std.testing.expectEqual(semantics.Role.button, clickable.role);
+    try std.testing.expect(clickable.actions.click);
+
+    _ = try headless.frameCommands(declareBgBox);
+    const plain = semantics.byId(cl.getElementId("test-bg-box")).?;
+    try std.testing.expectEqual(semantics.Role.container, plain.role);
+    try std.testing.expect(!plain.actions.click);
+}
+
+test "a clickable box asks for the pointer shape it was given" {
+    const text_box = BoxProps{ .id = .{ .text = "t" }, .on_click = .{ .f = onOuterBox }, .cursor = .text };
+    try std.testing.expectEqual(prop.Cursor.text, text_box.cursor);
+    // The default is a hand, because a clickable container is a button unless it says otherwise.
+    try std.testing.expectEqual(prop.Cursor.pointer, (BoxProps{ .id = .{ .text = "t" } }).cursor);
 }

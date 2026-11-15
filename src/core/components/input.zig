@@ -363,6 +363,8 @@ pub const Field = struct {
     sel_bg: Color = Color.rgb(0x2d, 0x3a, 0x52),
     // The caret's colour, or a neutral one when null: a caret that matches the text merges with the glyph it touches.
     caret_fg: ?Color = null,
+    // Multiline: Enter types a new line and the caret moves onto it; Ctrl/Cmd+Enter is the submit gesture instead.
+    multiline: bool = false,
     // A field grows to the width it is given and fits its text vertically, unless the caller says otherwise.
     w: prop.Size = .grow,
     h: prop.Size = .{ .fixed = 32 },
@@ -412,6 +414,24 @@ pub const Field = struct {
     // The draft, for an app that wants to read it.
     pub fn text(self: *const Field) []const u8 {
         return self.editor.text();
+    }
+
+    // How tall one line of a multiline field is: the glyphs, plus the room the caret bar needs.
+    pub fn lineHeight(self: *const Field) f32 {
+        return @as(f32, @floatFromInt(self.font_size)) + 6;
+    }
+
+    // The byte offset a point lands on, with `x`/`y` already relative to the field's text origin: a click in a multiline field picks the line first.
+    pub fn caretOffsetAtPoint(self: *const Field, x: f32, y: f32) usize {
+        const ed = &self.editor;
+        if (!self.multiline) return text_editor.offsetAtX(ed.text(), x, self.font_size, self.measure);
+        const raw = @floor(@max(y, 0) / self.lineHeight());
+        const last = ed.lineCount() - 1;
+        const line = @min(@as(usize, @intFromFloat(raw)), last);
+        const start = ed.lineStartAt(line);
+        var end = start;
+        while (end < ed.len and ed.buf[end] != '\n') end += 1;
+        return start + text_editor.offsetAtX(ed.buf[start..end], x, self.font_size, self.measure);
     }
 
     // Adopt a value from the model: it does NOT report, because the model is where it came from.
@@ -500,6 +520,12 @@ pub fn dispatchKey(mods: Mods, keycode: u32) bool {
     const field = active orelse return false;
     // A single-line field has no newline: Enter is the submit gesture, and with no handler it is absorbed.
     if (keycode == text_editor.KEY_ENTER) {
+        // A multiline field types the newline instead, and only the shortcut submits; that is what puts the caret on a new line.
+        if (field.multiline and !mods.shortcut()) {
+            if (!field.editor.insertByte('\n')) return false;
+            field.report();
+            return true;
+        }
         _ = field.submit();
         return true;
     }
@@ -533,7 +559,8 @@ fn dragSelect(field: *Field) void {
     if (!field.dragging and !began_here) return;
     // `extend` is false on the anchoring frame (place the caret) and true after it (grow the selection from that anchor).
     const x = frame_mod.ptr_x - bb.x - field.pad_lr;
-    field.editor.setCaret(text_editor.offsetAtX(field.editor.text(), x, field.font_size, field.measure), field.dragging);
+    const y = frame_mod.ptr_y - bb.y - @as(f32, @floatFromInt(field.pad.top));
+    field.editor.setCaret(field.caretOffsetAtPoint(x, y), field.dragging);
     if (!field.dragging) {
         field.dragging = true;
         frame_mod.setFocus(field.name());
@@ -564,43 +591,27 @@ pub fn textField(field: *Field) void {
     if (input.focused and !field.disabled) active = field;
     // The field owns its own animation, and only while it is focused: an unfocused field holds its clock at zero and draws no caret.
     input.tickBlink(frame_mod.delta_s);
-    const fg = (if (field.disabled) field.disabled_fg else field.fg).toClay();
+    const fg: Color = if (field.disabled) field.disabled_fg else field.fg;
     // Solid for half a second after the caret moves, then blinking: a caret that blinks while you type is a caret you cannot find.
     const blink_on = text_editor.caretVisible(input);
 
     cl.UI()(.{
         .id = field.id.clay(),
         .layout = .{
-            .direction = .left_to_right,
+            .direction = if (field.multiline) .top_to_bottom else .left_to_right,
             .sizing = .{ .w = field.w.clay(), .h = field.h.clay() },
             .padding = field.pad.clay(),
-            .child_alignment = .{ .x = .left, .y = .center },
+            .child_alignment = .{ .x = .left, .y = if (field.multiline) .top else .center },
             .child_gap = 0,
         },
         .background_color = (if (field.disabled) field.disabled_bg else field.bg).toClay(),
         .corner_radius = field.radius.clay(),
         .border = field.border.clay(),
     })({
-        if (input.caret.hasSelection()) {
-            const span = input.caret.selection().?;
-            const s = span.start;
-            const e = span.end;
-            if (s > 0) cl.text(draft[0..s], .{ .font_size = field.font_size, .color = fg });
-            cl.UI()(.{
-                .id = .IDI(name, 1),
-                .layout = .{
-                    .sizing = .{ .w = .fit, .h = .grow },
-                    .padding = .{ .top = 1, .bottom = 1 },
-                },
-                .background_color = field.sel_bg.toClay(),
-            })({
-                cl.text(draft[s..e], .{ .font_size = field.font_size, .color = field.sel_fg.toClay() });
-            });
-            if (e < draft.len) cl.text(draft[e..], .{ .font_size = field.font_size, .color = fg });
+        if (field.multiline) {
+            drawLines(field, draft, blink_on, fg, name);
         } else {
-            // One run for the value, caret floated over it; an empty one draws a space so `.fit` keeps a line.
-            cl.text(if (draft.len == 0) " " else draft, .{ .font_size = field.font_size, .color = fg });
-            if (blink_on) caretBar(field, draft);
+            drawSingleLine(field, draft, blink_on, fg, name);
         }
     });
 
@@ -619,13 +630,140 @@ pub fn textField(field: *Field) void {
     registry.registerClickDoubleCursor(field.id.clay(), onFieldClick, onFieldDoubleClick, field, .text);
 }
 
+// How many lines of a multiline field are drawn: a buffer is bounded by its own length, but a frame's command stream is not free.
+pub const max_lines: usize = 512;
+
+// The Clay ids a multiline field's per-line boxes live under: one space each for the line, its selection and its caret.
+fn lineBoxIndex(line: usize) u32 {
+    return @intCast(4096 + line);
+}
+
+fn lineSelIndex(line: usize) u32 {
+    return @intCast(4096 + max_lines + line);
+}
+
+fn lineCaretIndex(line: usize) u32 {
+    return @intCast(4096 + 2 * max_lines + line);
+}
+
+// The caret's Clay id inside a multiline field on `line`: what a test, or the devtool, looks for.
+pub fn lineCaretId(name: []const u8, line: usize) cl.ElementId {
+    return .IDI(name, lineCaretIndex(line));
+}
+
+// The single-line caret's Clay id: a focused field draws exactly one bar, under this id.
+pub fn caretId(name: []const u8) cl.ElementId {
+    return .IDI(name, 2);
+}
+
+// The single-line body of a field: the selection as three runs, or the draft as one with the caret floated after it.
+fn drawSingleLine(field: *Field, draft: []const u8, blink_on: bool, fg: Color, name: []const u8) void {
+    const input = &field.editor;
+    if (input.caret.hasSelection()) {
+        const span = input.caret.selection().?;
+        const s = span.start;
+        const e = span.end;
+        if (s > 0) cl.text(draft[0..s], .{ .font_size = field.font_size, .color = fg.toClay() });
+        cl.UI()(.{
+            .id = .IDI(name, 1),
+            .layout = .{
+                .sizing = .{ .w = .fit, .h = .grow },
+                .padding = .{ .top = 1, .bottom = 1 },
+            },
+            .background_color = field.sel_bg.toClay(),
+        })({
+            cl.text(draft[s..e], .{ .font_size = field.font_size, .color = field.sel_fg.toClay() });
+        });
+        if (e < draft.len) cl.text(draft[e..], .{ .font_size = field.font_size, .color = fg.toClay() });
+        return;
+    }
+    // One run for the value, caret floated over it; an empty one draws a space so `.fit` keeps a line.
+    cl.text(if (draft.len == 0) " " else draft, .{ .font_size = field.font_size, .color = fg.toClay() });
+    if (blink_on) caretBar(field, draft);
+}
+
+// A multiline field: one row per line, and the caret floated on the line the caret is actually on.
+fn drawLines(field: *Field, draft: []const u8, blink_on: bool, fg: Color, name: []const u8) void {
+    const ed = &field.editor;
+    const sel = ed.caret.selection();
+    const line_h = field.lineHeight();
+    const caret_offset = @min(ed.caret.offset, ed.len);
+    const caret_line = ed.lineNumber(caret_offset);
+    const line_count = @min(ed.lineCount(), max_lines);
+    var i: usize = 0;
+    while (i < line_count) : (i += 1) {
+        const start = ed.lineStartAt(i);
+        var end = start;
+        while (end < ed.len and draft[end] != '\n') end += 1;
+        const line = draft[start..end];
+        cl.UI()(.{
+            .id = .IDI(name, lineBoxIndex(i)),
+            .layout = .{
+                .direction = .left_to_right,
+                .sizing = .{ .w = .grow, .h = .fixed(line_h) },
+                .child_alignment = .{ .x = .left, .y = .center },
+                .child_gap = 0,
+            },
+        })({
+            drawLine(field, line, start, sel, fg, name, i);
+            // The caret is the line's own child, so it sits at that line's start even when the line is empty.
+            if (blink_on and i == caret_line) caretBarInLine(field, name, i, line, caret_offset - start);
+        });
+    }
+}
+
+// One line of a multiline field, split around the selection when the selection overlaps it.
+fn drawLine(field: *Field, line: []const u8, line_start: usize, sel: ?text_editor.Span, fg: Color, name: []const u8, index: usize) void {
+    // An empty line still draws a cell, so its box has a height for the caret to float in.
+    if (line.len == 0) {
+        cl.text(" ", .{ .font_size = field.font_size, .color = fg.toClay() });
+        return;
+    }
+    const span = sel orelse {
+        cl.text(line, .{ .font_size = field.font_size, .color = fg.toClay() });
+        return;
+    };
+    const line_end = line_start + line.len;
+    if (span.end <= line_start or span.start >= line_end) {
+        cl.text(line, .{ .font_size = field.font_size, .color = fg.toClay() });
+        return;
+    }
+    const a = @min(@max(span.start, line_start) - line_start, line.len);
+    const b = @min(@max(span.end, line_start) - line_start, line.len);
+    if (a > 0) cl.text(line[0..a], .{ .font_size = field.font_size, .color = fg.toClay() });
+    cl.UI()(.{
+        .id = .IDI(name, lineSelIndex(index)),
+        .layout = .{
+            .sizing = .{ .w = .fit, .h = .grow },
+            .padding = .{ .top = 1, .bottom = 1 },
+        },
+        .background_color = field.sel_bg.toClay(),
+    })({
+        cl.text(line[a..b], .{ .font_size = field.font_size, .color = field.sel_fg.toClay() });
+    });
+    if (b < line.len) cl.text(line[b..], .{ .font_size = field.font_size, .color = fg.toClay() });
+}
+
+// The caret inside a line row: the row already sits past the field's padding, so no extra offset is added.
+fn caretBarInLine(field: *Field, name: []const u8, index: usize, line: []const u8, at: usize) void {
+    const clamped = @min(at, line.len);
+    caret_mod.declare(.{
+        .id = .IDI(name, lineCaretIndex(index)),
+        .x = field.measure(line[0..clamped], field.font_size),
+        .height = @floatFromInt(field.font_size + 4),
+        .color = field.caret_fg orelse Color.rgb(0xd8, 0xd8, 0xd8),
+        .anchor = .center,
+    });
+}
+
 // Select the word under a double click, which is what every text field does.
 fn onFieldDoubleClick(ctx: ?*anyopaque) void {
     const field: *Field = @ptrCast(@alignCast(ctx.?));
     const data = cl.getElementData(cl.getElementId(field.name()));
     if (!data.found) return;
     const x = frame_mod.ptr_x - data.bounding_box.x - field.pad_lr;
-    text_editor.selectWordAt(&field.editor, text_editor.offsetAtX(field.editor.text(), x, field.font_size, field.measure));
+    const y = frame_mod.ptr_y - data.bounding_box.y - @as(f32, @floatFromInt(field.pad.top));
+    text_editor.selectWordAt(&field.editor, field.caretOffsetAtPoint(x, y));
     field.editor.idle = 0;
     frame_mod.setFocus(field.name());
     if (field.on_focus.f) |f| f(field.on_focus.ctx);
@@ -650,7 +788,8 @@ fn onFieldClick(ctx: ?*anyopaque) void {
     const data = cl.getElementData(cl.getElementId(field.name()));
     if (!data.found) return;
     const x = frame_mod.ptr_x - data.bounding_box.x - field.pad_lr;
-    field.editor.setCaret(text_editor.offsetAtX(field.editor.text(), x, field.font_size, field.measure), false);
+    const y = frame_mod.ptr_y - data.bounding_box.y - @as(f32, @floatFromInt(field.pad.top));
+    field.editor.setCaret(field.caretOffsetAtPoint(x, y), false);
     field.editor.idle = 0;
     frame_mod.setFocus(field.name());
     if (field.on_focus.f) |f| f(field.on_focus.ctx);
@@ -795,6 +934,82 @@ test "textField draws the value, declares its id and takes the keyboard" {
     // The engine types into it with no app handler at all.
     try std.testing.expect(dispatchText("!"));
     try std.testing.expectEqualStrings("jak!", test_field.text());
+}
+
+// How many rectangles a declared frame emits under one Clay id.
+fn rectsWithId(id: u32) usize {
+    const cmds = layoutCommands(declareTestField) catch return 0;
+    var n: usize = 0;
+    for (cmds) |c| {
+        if (c.command_type == .rectangle and c.id == id) n += 1;
+    }
+    return n;
+}
+
+// How many caret bars the field's frame emits: the caret is a floating rectangle under `IDI(field, 2)`.
+fn caretBars() usize {
+    return rectsWithId(cl.ElementId.IDI("test-field", 2).id);
+}
+
+test "the caret bar is drawn while typing, after a submit, and after a refused submit" {
+    frame_mod.setTime(0, 0);
+    try startField("");
+    try std.testing.expectEqual(@as(usize, 1), caretBars());
+    try std.testing.expect(dispatchText("ab"));
+    try std.testing.expectEqual(@as(usize, 1), caretBars());
+    // A refused submit: the draft stays, so the caret must stay with it.
+    submit_taken = false;
+    try std.testing.expect(dispatchKey(.{}, text_editor.KEY_ENTER));
+    try std.testing.expectEqualStrings("ab", test_field.text());
+    try std.testing.expectEqual(@as(usize, 1), caretBars());
+    // A taken submit clears the field, and the caret stays at the empty draft rather than vanishing.
+    submit_taken = true;
+    try std.testing.expect(dispatchKey(.{}, text_editor.KEY_ENTER));
+    try std.testing.expectEqualStrings("", test_field.text());
+    try std.testing.expectEqual(@as(usize, 1), caretBars());
+}
+
+test "Enter in a multiline field starts a new line, and the caret goes onto it" {
+    frame_mod.setTime(0, 0);
+    try startField("");
+    test_field.multiline = true;
+    try std.testing.expect(dispatchText("ab"));
+    try std.testing.expect(dispatchKey(.{}, text_editor.KEY_ENTER));
+    try std.testing.expectEqualStrings("ab\n", test_field.text());
+    try std.testing.expectEqual(@as(usize, 3), test_field.editor.caret.offset);
+    // Bare Enter raised no submit: it typed the line.
+    try std.testing.expectEqualStrings("", submitted());
+    // The caret bar is on the line Enter created, and not on the one before it.
+    try std.testing.expectEqual(@as(usize, 1), rectsWithId(cl.ElementId.IDI("test-field", lineCaretIndex(1)).id));
+    try std.testing.expectEqual(@as(usize, 0), rectsWithId(cl.ElementId.IDI("test-field", lineCaretIndex(0)).id));
+    // Every line gets its own row, so the new line has a box to put the caret in.
+    try std.testing.expect(cl.getElementData(cl.ElementId.IDI("test-field", lineBoxIndex(1))).found);
+}
+
+test "Ctrl+Enter submits a multiline field instead of typing another line" {
+    frame_mod.setTime(0, 0);
+    try startField("");
+    test_field.multiline = true;
+    try std.testing.expect(dispatchText("ab"));
+    try std.testing.expect(dispatchKey(.{ .ctrl = true }, text_editor.KEY_ENTER));
+    try std.testing.expectEqualStrings("ab", submitted());
+    try std.testing.expectEqualStrings("", test_field.text());
+}
+
+test "a click in a multiline field lands on the line and column under the pointer" {
+    var buf: [64]u8 = undefined;
+    var field = Field{ .id = .{ .text = "m" }, .multiline = true, .font_size = 14 };
+    field.bindTo(&buf);
+    field.setText("one\ntwo\nthree");
+    const line_h = field.lineHeight();
+    // The top-left corner is the first line's start.
+    try std.testing.expectEqual(@as(usize, 0), field.caretOffsetAtPoint(0, 0));
+    // Halfway down the second line at the left edge is its first byte.
+    try std.testing.expectEqual(@as(usize, 4), field.caretOffsetAtPoint(0, line_h * 1.5));
+    // Below the last line clamps to that line, not past the buffer.
+    try std.testing.expectEqual(@as(usize, 8), field.caretOffsetAtPoint(0, line_h * 100));
+    // Far right on the last line is its end.
+    try std.testing.expectEqual(@as(usize, 13), field.caretOffsetAtPoint(500, line_h * 2.5));
 }
 
 test "a value the caller changed replaces the draft, an unchanged one leaves it alone" {

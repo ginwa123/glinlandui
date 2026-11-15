@@ -240,6 +240,12 @@ Two components already do the plumbing an app would otherwise repeat: `component
 key at all — and `components.list` owns a list's rows, their ids, hover and per-row clicks (registering each
 row's target before its box, so a button inside the row wins the hit test).
 
+`Field.multiline = true` makes the same field a text area: Enter types a new line (the caret moves onto it, per
+line, with its selection drawn per line), Ctrl/Cmd+Enter raises `on_submit`, and a click picks a line before a
+column — so an app that needs a body editor, a query pane or a notes box no longer hand-rolls one.
+`components.box` takes `on_click` for the same reason: a clickable container registers its own hit target and
+cursor, and a clickable child still wins a click over the box that contains it.
+
 An app draws with components, never with Clay: `glinlandui` does not re-export the bindings, so a view that
 wants a box, a label or a field uses `components.*`. What an app may need from the engine is on `frame`
 (`elementId`, `clayId`, `bounds`) and `scroll` (`view`).
