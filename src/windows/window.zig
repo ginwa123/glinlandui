@@ -8,6 +8,7 @@ const adapter = @import("adapter.zig");
 const input_win = @import("input.zig");
 const present = @import("present.zig");
 const soft = @import("../core/render_software.zig");
+const frame_mod = @import("../core/frame.zig");
 
 // The shim header is plain C by design (see windows/shim.h), so @cImport never has to survive Direct3D's COM macros or typedefs.
 const c = @cImport({
@@ -143,6 +144,8 @@ pub const Window = struct {
 
         // The display's density, so the surface is rendered at device resolution instead of being upscaled by the compositor.
         soft.setRenderScale(@floatCast(c.glin_win_scale(handle)));
+        // The same density for the components, so a caret is one DEVICE pixel rather than one logical point (1.5 px at 150%).
+        frame_mod.setPixelScale(soft.renderScale());
 
         c.glin_win_window_set_callbacks(
             handle,

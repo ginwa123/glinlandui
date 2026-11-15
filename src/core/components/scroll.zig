@@ -155,12 +155,12 @@ pub fn applyReveals() void {
 
 /// Programmatic scroll: nudge the container's scroll position directly (positive dy scrolls down, matching Wayland axis coords — negated internally for.
 pub fn scrollBy(id: []const u8, dx: f32, dy: f32) void {
-    nudgeClamped(id, .both, dx, dy);
+    nudgeClamped(cl.getElementId(id), .both, dx, dy);
 }
 
 /// Clamped 1:1 nudge of one container along its axes (slider units, NOT Clay's x10 wheel factor).
-fn nudgeClamped(id: []const u8, dir: Direction, dx: f32, dy: f32) void {
-    const data = cl.getScrollContainerData(cl.getElementId(id));
+fn nudgeClamped(id: cl.ElementId, dir: Direction, dx: f32, dy: f32) void {
+    const data = cl.getScrollContainerData(id);
     if (!data.found) return;
     const axes = clipAxes(dir);
     if (axes.h) {
@@ -186,6 +186,7 @@ var scroll_reg_n: usize = 0;
 /// Reset the per-frame scroll registry. Call once per frame before declare.
 pub fn beginScrollFrame() void {
     scroll_reg_n = 0;
+    bar_n = 0;
 }
 
 fn registerScroll(id: []const u8, dir: Direction) void {
@@ -207,9 +208,95 @@ pub fn dragScroll(x: f32, y: f32, dx: f32, dy: f32) void {
         if (!el.found) continue;
         const bb = el.bounding_box;
         if (x < bb.x or x >= bb.x + bb.width or y < bb.y or y >= bb.y + bb.height) continue;
-        nudgeClamped(r.id, r.dir, dx, dy);
+        nudgeClamped(cl.getElementId(r.id), r.dir, dx, dy);
         return;
     }
+}
+
+// ---- The pill: the scrollbar thumb the pointer can grab and drag. A thumb travels less than the content does, so a grab maps pointer points onto content points instead of scrolling 1:1.
+
+const Bar = struct {
+    container: cl.ElementId,
+    thumb: cl.ElementId,
+    vertical: bool,
+    // Content points one thumb point is worth: (content - viewport) / (track - thumb), so the pill stays under the pointer.
+    ratio: f32,
+};
+
+var bars: [16]Bar = undefined;
+var bar_n: usize = 0;
+
+const Grab = struct {
+    active: bool = false,
+    container: cl.ElementId = undefined,
+    vertical: bool = true,
+    ratio: f32 = 1,
+    // The pointer position on the drag axis at the last move, so a delta is measured from where the button came down and no threshold is lost.
+    last: f32 = 0,
+};
+
+var grab: Grab = .{};
+
+/// Register one declared thumb, so a press can hit-test it and a drag can move the content through the ratio the track implies.
+fn registerBar(container: cl.ElementId, thumb: cl.ElementId, vertical: bool, viewport: f32, content: f32, track: f32, thumb_len: f32) void {
+    if (bar_n >= bars.len) return;
+    const travel = track - thumb_len;
+    const max_scroll = content - viewport;
+    // A thumb with no travel cannot move, and a ratio of zero would make a drag a no-op rather than a jump.
+    if (travel <= 0.5 or max_scroll <= 0) return;
+    bars[bar_n] = .{ .container = container, .thumb = thumb, .vertical = vertical, .ratio = max_scroll / travel };
+    bar_n += 1;
+}
+
+/// Grab the pill under (x, y), if there is one: the thumb reads its box from the frame that just laid out, exactly as a click does.
+pub fn beginThumbGrab(x: f32, y: f32) bool {
+    grab.active = false;
+    // Newest first: the innermost scrollbar is declared last, so it is the one on top.
+    var i = bar_n;
+    while (i > 0) {
+        i -= 1;
+        const b = bars[i];
+        const el = cl.getElementData(b.thumb);
+        if (!el.found) continue;
+        const bb = el.bounding_box;
+        if (bb.width <= 0 or bb.height <= 0) continue;
+        if (x < bb.x or x >= bb.x + bb.width or y < bb.y or y >= bb.y + bb.height) continue;
+        grab = .{
+            .active = true,
+            .container = b.container,
+            .vertical = b.vertical,
+            .ratio = b.ratio,
+            .last = if (b.vertical) y else x,
+        };
+        return true;
+    }
+    return false;
+}
+
+/// Move the grabbed pill with the pointer. True while a grab owns the motion, so the container's 1:1 drag does not also scroll.
+pub fn moveThumb(x: f32, y: f32) bool {
+    if (!grab.active) return false;
+    const pointer = if (grab.vertical) y else x;
+    const delta = pointer - grab.last;
+    if (delta == 0) return true;
+    grab.last = pointer;
+    const move = delta * grab.ratio;
+    if (grab.vertical) {
+        nudgeClamped(grab.container, .vertical, 0, move);
+    } else {
+        nudgeClamped(grab.container, .horizontal, move, 0);
+    }
+    return true;
+}
+
+/// Let go of the pill: the release, or a press somewhere else.
+pub fn endThumbGrab() void {
+    grab.active = false;
+}
+
+/// True while a thumb owns the pointer.
+pub fn thumbGrabbed() bool {
+    return grab.active;
 }
 
 fn toSizingAxis(s: box_mod.Size, min: prop.Len, max: prop.Len) cl.SizingAxis {
@@ -332,12 +419,14 @@ fn declareScrollbars(props: ScrollProps) void {
                         .attach_points = .{ .element = .right_top, .parent = .right_top },
                         .offset = .{ .x = -props.scrollbar_margin.pts(), .y = props.scrollbar_margin.pts() + off },
                         .z_index = props.z_index + 1,
-                        .pointer_capture_mode = .passthrough,
+                        // The pill is a control, not a decoration: it has to answer the pointer, or the only way to scroll is a drag over the content.
+                        .pointer_capture_mode = .capture,
                     },
                     .layout = .{ .sizing = .{ .w = .fixed(w), .h = .fixed(len) } },
-                    .background_color = (if (cl.hovered()) props.thumb_hover_bg else props.thumb_bg).toClay(),
+                    .background_color = (if (cl.pointerOver(cl.ElementId.IDI(props.id.str(), vthumb_index))) props.thumb_hover_bg else props.thumb_bg).toClay(),
                     .corner_radius = .all(props.thumb_radius.pts()),
                 })({});
+                registerBar(props.id.clay(), cl.ElementId.IDI(props.id.str(), vthumb_index), true, viewport, content, track, len);
             }
         }
     }
@@ -373,12 +462,14 @@ fn declareScrollbars(props: ScrollProps) void {
                         .attach_points = .{ .element = .left_bottom, .parent = .left_bottom },
                         .offset = .{ .x = props.scrollbar_margin.pts() + off, .y = -props.scrollbar_margin.pts() },
                         .z_index = props.z_index + 1,
-                        .pointer_capture_mode = .passthrough,
+                        // The pill is a control, not a decoration: it has to answer the pointer, or the only way to scroll is a drag over the content.
+                        .pointer_capture_mode = .capture,
                     },
                     .layout = .{ .sizing = .{ .w = .fixed(len), .h = .fixed(w) } },
-                    .background_color = (if (cl.hovered()) props.thumb_hover_bg else props.thumb_bg).toClay(),
+                    .background_color = (if (cl.pointerOver(cl.ElementId.IDI(props.id.str(), hthumb_index))) props.thumb_hover_bg else props.thumb_bg).toClay(),
                     .corner_radius = .all(props.thumb_radius.pts()),
                 })({});
+                registerBar(props.id.clay(), cl.ElementId.IDI(props.id.str(), hthumb_index), false, viewport, content, track, len);
             }
         }
     }
@@ -751,6 +842,79 @@ test "drag outside any container scrolls nothing" {
     dragFrame();
     const y1 = cl.getElementData(cl.getElementId("scroll-probe")).bounding_box.y;
     try std.testing.expectApproxEqAbs(h.y0, y1, 0.5);
+}
+
+// ---- The pill: a press on the scrollbar thumb grabs it, and the drag maps thumb travel onto content travel ----
+
+/// The vertical pill of the probe scroll, from the frame that just laid out.
+fn probeThumbBox() cl.BoundingBox {
+    return cl.getElementData(cl.ElementId.IDI("test-scroll-probe", vthumb_index)).bounding_box;
+}
+
+test "a press on the pill grabs it, and dragging it moves the content through the track ratio" {
+    var s = dispatch.PtrState{};
+    const h = try dragSetup(&s);
+    // A thumb is declared from the previous frame's scroll data, so the second frame is the one that has a box.
+    dragFrame();
+    const bb = probeThumbBox();
+    const cx = bb.x + bb.width * 0.5;
+    const cy = bb.y + bb.height * 0.5;
+    try std.testing.expect(beginThumbGrab(cx, cy));
+    try std.testing.expect(thumbGrabbed());
+    // 300 scrollable points over 68 points of thumb travel (a 92 point track, a 24 point thumb): one point of pill is 4.4 of content.
+    try std.testing.expect(moveThumb(cx, cy + 10));
+    dragFrame();
+    const y1 = cl.getElementData(cl.getElementId("scroll-probe")).bounding_box.y;
+    try std.testing.expectApproxEqAbs(h.y0 - 10 * (300.0 / 68.0), y1, 1.0);
+    endThumbGrab();
+    try std.testing.expect(!thumbGrabbed());
+    // A drag after the release is nobody's: the container's 1:1 path takes it again.
+    try std.testing.expect(!moveThumb(cx, cy + 20));
+}
+
+test "a press away from the pill grabs nothing, so a content drag stays 1:1" {
+    var s = dispatch.PtrState{};
+    const h = try dragSetup(&s);
+    dragFrame();
+    try std.testing.expect(!beginThumbGrab(h.cx, h.cy));
+    try std.testing.expect(!thumbGrabbed());
+    try std.testing.expect(!moveThumb(h.cx, h.cy + 10));
+}
+
+test "a pill drag past the end stops at the last content point" {
+    var s = dispatch.PtrState{};
+    const h = try dragSetup(&s);
+    dragFrame();
+    const bb = probeThumbBox();
+    const cx = bb.x + bb.width * 0.5;
+    const cy = bb.y + bb.height * 0.5;
+    try std.testing.expect(beginThumbGrab(cx, cy));
+    try std.testing.expect(moveThumb(cx, cy + 5000));
+    dragFrame();
+    const y1 = cl.getElementData(cl.getElementId("scroll-probe")).bounding_box.y;
+    try std.testing.expectApproxEqAbs(h.y0 - 300, y1, 1.0);
+    endThumbGrab();
+}
+
+test "the horizontal pill drags its content through its own ratio" {
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    beginScrollFrame();
+    cl.beginLayout();
+    declareOverflowHScroll();
+    _ = cl.endLayout();
+    beginScrollFrame();
+    cl.beginLayout();
+    declareOverflowHScroll();
+    _ = cl.endLayout();
+
+    const bb = cl.getElementData(cl.ElementId.IDI("test-scroll-h", hthumb_index)).bounding_box;
+    const cx = bb.x + bb.width * 0.5;
+    const cy = bb.y + bb.height * 0.5;
+    try std.testing.expect(beginThumbGrab(cx, cy));
+    try std.testing.expect(moveThumb(cx + 10, cy));
+    // 280 scrollable points over 112 points of travel: ten points of pill is twenty-five of content.
+    try std.testing.expectApproxEqAbs(@as(f32, -25), cl.getScrollContainerData(cl.getElementId("test-scroll-h")).scroll_position.x, 0.5);
+    endThumbGrab();
 }
 
 var ensure_child_h: f32 = 400;

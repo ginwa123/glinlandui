@@ -13,6 +13,7 @@ const semantics = @import("semantics.zig");
 const inspector_mod = @import("devtools/inspector.zig");
 const glyphs = @import("glyphs.zig");
 const text_face = @import("text_face.zig");
+const clock_mod = @import("clock.zig");
 
 /// App declare callback: builds the Clay tree for a w x h window.
 pub const RootFn = *const fn (?*anyopaque, u32, u32) void;
@@ -34,7 +35,7 @@ pub const Host = struct {
     win_w: u32 = 720,
     win_h: u32 = 480,
     ptr: dispatch.PtrState = .{},
-    /// Millisecond clock for double-click timing. The app supplies one (its own Io); null means no double clicks.
+    /// Millisecond clock for double-click timing and the caret blink. Defaults to the platform's monotonic clock; null means no double clicks and a fixed frame step.
     clock: ?*const fn (?*anyopaque) i64 = null,
     clock_ctx: ?*anyopaque = null,
     /// A monotonic frame clock in seconds. The host advances it; a component only reads it.
@@ -55,7 +56,8 @@ pub const Host = struct {
     service: ?ServiceHooks = null,
 
     pub fn init(alloc: std.mem.Allocator, ctx: ?*anyopaque, root_fn: RootFn) !Host {
-        var self = Host{ .alloc = alloc, .root_ctx = ctx, .root_fn = root_fn };
+        // The platform's monotonic clock by default: a double click and a 1 Hz caret need real time, and an app that never wires one has neither.
+        var self = Host{ .alloc = alloc, .root_ctx = ctx, .root_fn = root_fn, .clock = clock_mod.monoMs };
         // The glyph cache and the measured face spend the app's allocator, not a page-per-glyph one of their own.
         glyphs.initCache(alloc);
         text_face.setAllocator(alloc);
@@ -163,6 +165,11 @@ pub const Host = struct {
         // Stamp the event so a double click can be told from two clicks; with no clock every click is a single.
         self.ptr.now_ms = if (self.clock) |f| f(self.clock_ctx) else 0;
         dispatch.pointerEvent(&self.ptr, x, y, pressed, button, self.win_w, self.win_h);
+        // The scrollbar pill owns the pointer from the press that grabs it to the release: its travel is shorter than the content's, so it maps its own ratio.
+        if (pressed and button == dispatch.BTN_LEFT) _ = scroll_mod.beginThumbGrab(x, y);
+        const thumb_moved = scroll_mod.moveThumb(x, y);
+        if (button == dispatch.BTN_LEFT and !pressed) scroll_mod.endThumbGrab();
+        if (thumb_moved) return;
         // Slider-style drag: while a press-drag is in flight, nudge the scroll container under the pointer 1:1 (pointer down = scroll down).
         if (self.ptr.down and self.ptr.dragging and (x != last_x or y != last_y)) {
             scroll_mod.dragScroll(x, y, x - last_x, y - last_y);
@@ -460,4 +467,36 @@ test "host: press-drag down scrolls down slider-style (no click)" {
     const y1 = cl.getElementData(cl.getElementId("host-scroll-probe")).bounding_box.y;
     // Slider-style 1:1: pointer down 40 = content up 40.
     try std.testing.expectApproxEqAbs(y0 - 40, y1, 0.5);
+}
+
+test "host: a host starts with a clock, so two clicks can be told from a double click" {
+    var h: Host = undefined;
+    try testHost(&h, null, noopRoot);
+    // Without a clock the pointer state stays at 0 ms forever, and `fireClick` can only ever report a single click.
+    try std.testing.expect(h.clock != null);
+    if (h.clock) |read| {
+        // A test build resolves to the portable clock, which reports "no clock" rather than a guessed time.
+        try std.testing.expectEqual(@as(i64, 0), read(h.clock_ctx));
+    }
+}
+
+test "host: a press on the scrollbar pill drags its content instead of nudging it 1:1" {
+    var h: Host = undefined;
+    try testHost(&h, null, hostScrollProbeRoot);
+    h.frame(720, 480);
+    // The thumb is declared from the previous frame's scroll data, so the second frame is the one that has a box.
+    h.frame(720, 480);
+    const thumb = cl.getElementData(cl.ElementId.IDI("host-scroll", scroll_mod.vthumb_index)).bounding_box;
+    const cx = thumb.x + thumb.width * 0.5;
+    const cy = thumb.y + thumb.height * 0.5;
+    const content_y0 = cl.getElementData(cl.getElementId("host-scroll-probe")).bounding_box.y;
+    h.onPointerEvent(cx, cy, true, 272);
+    try std.testing.expect(scroll_mod.thumbGrabbed());
+    h.onPointerEvent(cx, cy + 10, false, 0);
+    h.frame(720, 480);
+    const content_y1 = cl.getElementData(cl.getElementId("host-scroll-probe")).bounding_box.y;
+    // Ten points of pill is more than ten points of content: the content moved further than the pointer did.
+    try std.testing.expect(content_y0 - content_y1 > 10.5);
+    h.onPointerEvent(cx, cy + 10, false, 272);
+    try std.testing.expect(!scroll_mod.thumbGrabbed());
 }

@@ -18,7 +18,7 @@ Rules for anyone (human or agent) changing this repository.
 
 ```sh
 zig build                  # the library, the demo, and the examples
-zig build test             # the cross-platform parity suite (847 tests on macOS)
+zig build test             # the cross-platform parity suite (969 tests on macOS)
 zig build native-test      # Linux only: the Wayland/EGL/GLES3 backend
 zig build run              # the demo window
 zig build run-calculator   # the calculator example
@@ -165,7 +165,9 @@ whenever an element earlier in the frame appears or disappears — a blinking ca
 its content for one frame, which is exactly the flash users report as "the list blinks".
 
 The scrollbar thumb floats over the viewport, so an **overflowing** container insets its content by the bar's width plus its margin: without
-that gutter a right-aligned value (a column type in a schema tree) runs under the thumb and is unreadable. A click target declared inside a
+that gutter a right-aligned value (a column type in a schema tree) runs under the thumb and is unreadable. The thumb is a **control**: a press on
+it grabs it and dragging it moves the content through the ratio its own travel implies (`scroll.beginThumbGrab` / `moveThumb`), so the pill stays
+under the pointer instead of nudging the content 1:1 the way a drag over the content itself does. A click target declared inside a
 scroll container answers **only inside that container** (`click_registry.pushClip`), so a row scrolled under a footer cannot swallow the
 footer's click — which is what the audit's `hit_target_not_self` was reporting.
 

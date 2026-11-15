@@ -14,6 +14,9 @@ pub const TextBackend = platform.text_impl;
 /// The system clipboard's text: the pasteboard on macOS, a no-op stub on a host with no backend and in every test build.
 pub const Clipboard = platform.clipboard;
 
+/// The monotonic millisecond clock: a real one on every native backend, none in a test build (which keeps a frame's delta deterministic).
+pub const Clock = platform.clock;
+
 /// The devtool service transport: a unix socket on Linux, "unavailable" everywhere else until that host's wake hook lands.
 pub const DevtoolsService = platform.devtools_service;
 
