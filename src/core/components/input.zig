@@ -366,6 +366,10 @@ pub const Field = struct {
     caret_fg: ?Color = null,
     // Multiline: Enter types a new line and the caret moves onto it; Ctrl/Cmd+Enter is the submit gesture instead.
     multiline: bool = false,
+    // Read only: the field still takes the caret, a selection and copy, but no key ever edits the text.
+    readonly: bool = false,
+    // The line starts the app already computed, plus the end offset, so a megabyte body never scans for a line.
+    lines: ?[]const usize = null,
     // The scroll container this field lives in: set it and a multiline field keeps the caret's line inside it.
     scroll_id: ?[]const u8 = null,
     // A field grows to the width it is given and fits its text vertically, unless the caller says otherwise.
@@ -421,6 +425,18 @@ pub const Field = struct {
         self.bound = true;
     }
 
+    // Point a READ-ONLY field at text the app owns: the same bytes, no copy, and no `bindTo` length limit.
+    pub fn show(self: *Field, shown: []const u8) void {
+        const bytes = @constCast(shown);
+        // Re-init only when the model handed over a different run, so the caret and the selection survive a redraw.
+        if (!self.bound or self.editor.buf.ptr != bytes.ptr or self.editor.buf.len != bytes.len) {
+            self.editor = text_editor.Editor.init(bytes);
+            self.bound = true;
+        }
+        self.editor.len = bytes.len;
+        self.editor.caret.clamp(bytes.len);
+    }
+
     // The draft, for an app that wants to read it.
     pub fn text(self: *const Field) []const u8 {
         return self.editor.text();
@@ -428,7 +444,7 @@ pub const Field = struct {
 
     // The line the caret is on, which is what an enclosing scroll has to keep in view.
     pub fn caretLine(self: *const Field) usize {
-        return self.editor.lineNumber(@min(self.editor.caret.offset, self.editor.len));
+        return lineIndexAt(self, @min(self.editor.caret.offset, self.editor.len));
     }
 
     // How tall one line of a multiline field is: the glyphs, plus the room the caret bar needs.
@@ -441,11 +457,11 @@ pub const Field = struct {
         const ed = &self.editor;
         if (!self.multiline) return text_editor.offsetAtX(ed.text(), x, self.font_size.whole(), self.measure);
         const raw = @floor(@max(y, 0) / self.lineHeight());
-        const last = ed.lineCount() - 1;
+        const total = lineTotal(self);
+        const last = if (total > 0) total - 1 else 0;
         const line = @min(@as(usize, @intFromFloat(raw)), last);
-        const start = ed.lineStartAt(line);
-        var end = start;
-        while (end < ed.len and ed.buf[end] != '\n') end += 1;
+        const start = lineStartOf(self, line);
+        const end = lineEndOf(self, line);
         return start + text_editor.offsetAtX(ed.buf[start..end], x, self.font_size.whole(), self.measure);
     }
 
@@ -548,6 +564,8 @@ pub fn beginFrame() void {
 // Type a composed run into the focused field; false when no field owns the keyboard.
 pub fn dispatchText(text: []const u8) bool {
     const field = active orelse return false;
+    // A read-only field never takes a composed run: the pasteboard cannot type into a response body.
+    if (field.readonly) return false;
     if (text.len == 0) return false;
     var before: [max_field_len]u8 = undefined;
     const before_len = field.editor.len;
@@ -563,6 +581,11 @@ pub fn dispatchKey(mods: Mods, keycode: u32) bool {
     const field = active orelse return false;
     // A single-line field has no newline: Enter is the submit gesture, and with no handler it is absorbed.
     if (keycode == text_editor.KEY_ENTER) {
+        // A read-only field types nothing; the submit shortcut still runs, so a response pane can re-send.
+        if (field.readonly) {
+            if (mods.shortcut()) _ = field.submit();
+            return true;
+        }
         // A multiline field types the newline instead, and only the shortcut submits; that is what puts the caret on a new line.
         if (field.multiline and !mods.shortcut()) {
             if (!field.editor.insertByte('\n')) return false;
@@ -575,9 +598,10 @@ pub fn dispatchKey(mods: Mods, keycode: u32) bool {
     // Copy, cut and paste are the field's: a person presses them, so an app should not have to wire them.
     if (mods.shortcut()) {
         switch (keycode) {
+            // Copy is the whole point of a read-only pane, so it stays; cut and paste would edit it, so they are absorbed.
             text_editor.KEY_C => return copyText(field),
-            text_editor.KEY_X => return cutText(field),
-            text_editor.KEY_V => return pasteText(field),
+            text_editor.KEY_X => if (field.readonly) return true else return cutText(field),
+            text_editor.KEY_V => if (field.readonly) return true else return pasteText(field),
             else => {},
         }
     }
@@ -585,6 +609,8 @@ pub fn dispatchKey(mods: Mods, keycode: u32) bool {
     const before_len = field.editor.len;
     const n = @min(before_len, before.len);
     @memcpy(before[0..n], field.editor.text()[0..n]);
+    // A read-only field follows the caret and the selection; anything else would be an edit, so it is absorbed.
+    if (field.readonly and !isNavigation(keycode, mods.shortcut())) return true;
     if (text_editor.handleKey(&field.editor, keycode, mods.shift, mods.shortcut()) == .ignored) return false;
     if (changed(before[0..n], before_len, field.editor.text())) field.report();
     return true;
@@ -594,6 +620,15 @@ pub fn dispatchKey(mods: Mods, keycode: u32) bool {
 fn changed(before: []const u8, before_len: usize, after: []const u8) bool {
     if (after.len != before_len) return true;
     return !std.mem.eql(u8, before, after[0..before.len]);
+}
+
+// The only keys a read-only field acts on: they move the caret and grow the selection, and change no byte.
+fn isNavigation(keycode: u32, shortcut: bool) bool {
+    return switch (keycode) {
+        text_editor.KEY_LEFT, text_editor.KEY_RIGHT, text_editor.KEY_UP, text_editor.KEY_DOWN, text_editor.KEY_HOME, text_editor.KEY_END => true,
+        text_editor.KEY_A => shortcut,
+        else => false,
+    };
 }
 
 // Copy the selection: the pasteboard copies at once, so it is handed the draft's own bytes and nothing is allocated.
@@ -731,17 +766,81 @@ pub fn lineBoxId(name: []const u8, line: usize) cl.ElementId {
     return .IDI(name, lineBoxIndex(line));
 }
 
-// The Clay ids a multiline field's per-line boxes live under: one space each for the line, its selection and its caret.
+// The Clay ids a multiline field's per-line boxes live under: three consecutive ids per line.
 fn lineBoxIndex(line: usize) u32 {
-    return @intCast(4096 + line);
+    return @intCast(4096 + line * 3);
 }
 
 fn lineSelIndex(line: usize) u32 {
-    return @intCast(4096 + max_lines + line);
+    return lineBoxIndex(line) + 1;
 }
 
 fn lineCaretIndex(line: usize) u32 {
-    return @intCast(4096 + 2 * max_lines + line);
+    return lineBoxIndex(line) + 2;
+}
+
+// The two gaps a virtualised field draws instead of the lines above and below the viewport, so the scrollbar stays honest.
+const gap_above_id: u32 = 4093;
+const gap_below_id: u32 = 4094;
+
+// How many lines a viewport of `height` at `y` covers, with an overscan so a flick of the wheel does not show a blank row.
+pub const LineWindow = struct { first: usize, count: usize };
+
+pub fn windowFor(total: usize, y: f32, height: f32, line_h: f32) LineWindow {
+    return lineWindow(total, y, height, line_h);
+}
+
+fn lineWindow(total: usize, y: f32, height: f32, line_h: f32) LineWindow {
+    if (line_h <= 0 or total == 0) return .{ .first = 0, .count = 0 };
+    const overscan: usize = 3;
+    const at: usize = if (y > 0) @intFromFloat(@max(y, 0) / line_h) else 0;
+    const first = if (at > overscan) at - overscan else 0;
+    const per_page: usize = @as(usize, @intFromFloat(@ceil(@max(height, 0) / line_h))) + 1 + 2 * overscan;
+    const remaining = if (total > first) total - first else 0;
+    return .{ .first = first, .count = @min(@min(per_page, remaining), max_lines) };
+}
+
+// How many lines the text has: the app's index when it handed one over, the editor's own count otherwise.
+fn lineTotal(field: *const Field) usize {
+    if (field.lines) |index| return if (index.len > 1) index.len - 1 else 0;
+    return field.editor.lineCount();
+}
+
+// Where line `line` starts.
+fn lineStartOf(field: *const Field, line: usize) usize {
+    if (field.lines) |index| {
+        if (index.len == 0) return 0;
+        return index[@min(line, index.len - 1)];
+    }
+    return field.editor.lineStartAt(line);
+}
+
+// Where line `line` ends, without the newline that closes it.
+fn lineEndOf(field: *const Field, line: usize) usize {
+    const ed = &field.editor;
+    if (field.lines) |index| {
+        if (index.len == 0) return 0;
+        var end = index[@min(line + 1, index.len - 1)];
+        if (end > 0 and end <= ed.len and ed.buf[end - 1] == '\n') end -= 1;
+        return @min(end, ed.len);
+    }
+    const start = lineStartOf(field, line);
+    var end = start;
+    while (end < ed.len and ed.buf[end] != '\n') end += 1;
+    return end;
+}
+
+// The line a byte offset falls on: a binary search over the app's index, a scan over the editor's own text.
+fn lineIndexAt(field: *const Field, offset: usize) usize {
+    const index = field.lines orelse return field.editor.lineNumber(offset);
+    if (index.len < 2) return 0;
+    var lo: usize = 0;
+    var hi: usize = index.len - 2;
+    while (lo < hi) {
+        const mid = lo + (hi - lo + 1) / 2;
+        if (index[mid] <= offset) lo = mid else hi = mid - 1;
+    }
+    return lo;
 }
 
 // The caret's Clay id inside a multiline field on `line`: what a test, or the devtool, looks for.
@@ -790,14 +889,25 @@ fn drawLines(field: *Field, draft: []const u8, blink_on: bool, fg: Color, name: 
     const sel = ed.caret.selection();
     const line_h = field.lineHeight();
     const caret_offset = @min(ed.caret.offset, ed.len);
-    const caret_line = ed.lineNumber(caret_offset);
-    const line_count = @min(ed.lineCount(), max_lines);
-    var i: usize = 0;
-    while (i < line_count) : (i += 1) {
-        const start = ed.lineStartAt(i);
-        var end = start;
-        while (end < ed.len and draft[end] != '\n') end += 1;
-        const line = draft[start..end];
+    const caret_line = lineIndexAt(field, caret_offset);
+    const total = lineTotal(field);
+    var window = windowForField(field, total);
+    // The caret's line is drawn even when it sits outside the viewport: the scroll reveal looks its box up after layout.
+    if (ed.focused and total > window.count) {
+        if (caret_line < window.first) {
+            window.first = caret_line;
+        } else if (caret_line >= window.first + window.count) {
+            window.first = caret_line + 1 - window.count;
+        }
+    }
+    // Everything above the window is ONE box of its exact height, which is what keeps a megabyte body's scrollbar honest.
+    if (window.first > 0) lineGap(name, gap_above_id, @as(f32, @floatFromInt(window.first)) * line_h);
+    var i: usize = window.first;
+    const last = window.first + window.count;
+    while (i < last) : (i += 1) {
+        const start = lineStartOf(field, i);
+        const end = lineEndOf(field, i);
+        const line = draft[@min(start, draft.len)..@min(end, draft.len)];
         cl.UI()(.{
             .id = .IDI(name, lineBoxIndex(i)),
             .layout = .{
@@ -812,6 +922,27 @@ fn drawLines(field: *Field, draft: []const u8, blink_on: bool, fg: Color, name: 
             if (blink_on and i == caret_line) caretBarInLine(field, name, i, line, caret_offset - start);
         });
     }
+    if (last < total) lineGap(name, gap_below_id, @as(f32, @floatFromInt(total - last)) * line_h);
+}
+
+// The window a field draws: everything it has, unless an enclosing scroll shows that it does not all fit.
+fn windowForField(field: *const Field, total: usize) LineWindow {
+    const all = LineWindow{ .first = 0, .count = @min(total, max_lines) };
+    const scroll_id = field.scroll_id orelse return all;
+    const v = scroll_mod.view(scroll_id);
+    // Only virtualise when the content really overflows: a field that fits keeps every line declared, ids and all.
+    if (!v.found or v.height <= 0 or v.content_height <= v.height) return all;
+    return lineWindow(total, v.y, v.height, field.lineHeight());
+}
+
+// One box standing in for the lines outside the viewport: no text, just the height they would have taken.
+fn lineGap(name: []const u8, id: u32, height: f32) void {
+    cl.UI()(.{
+        .id = .IDI(name, id),
+        .layout = .{
+            .sizing = .{ .w = .grow, .h = .fixed(height) },
+        },
+    })({});
 }
 
 // One line of a multiline field, split around the selection when the selection overlaps it.
@@ -1123,6 +1254,87 @@ test "Enter in a multiline field starts a new line, and the caret goes onto it" 
     try std.testing.expectEqual(@as(usize, 0), rectsWithId(cl.ElementId.IDI("test-field", lineCaretIndex(0)).id));
     // Every line gets its own row, so the new line has a box to put the caret in.
     try std.testing.expect(cl.getElementData(cl.ElementId.IDI("test-field", lineBoxIndex(1))).found);
+}
+
+var clip_out: [256]u8 = undefined;
+var clip_out_len: usize = 0;
+
+fn clipCapture(_: ?*anyopaque, text: []const u8) void {
+    clip_out_len = @min(text.len, clip_out.len);
+    @memcpy(clip_out[0..clip_out_len], text[0..clip_out_len]);
+}
+
+test "a read-only field keeps the caret and the selection, and no key edits its text" {
+    frame_mod.setTime(0, 0);
+    try startField("");
+    test_field.multiline = true;
+    test_field.readonly = true;
+    var bytes = [_]u8{ 'a', 'b', '\n', 'c', 'd' };
+    test_field.show(&bytes);
+    _ = try layoutCommands(declareTestField);
+    try std.testing.expectEqualStrings("ab\ncd", test_field.text());
+
+    // Every way of typing is absorbed: a composed run, Backspace, Delete, Enter, and a paste.
+    try std.testing.expect(!dispatchText("x"));
+    _ = dispatchKey(.{}, text_editor.KEY_BACKSPACE);
+    _ = dispatchKey(.{}, text_editor.KEY_DELETE);
+    _ = dispatchKey(.{}, text_editor.KEY_ENTER);
+    _ = dispatchKey(.{ .ctrl = true }, text_editor.KEY_V);
+    _ = dispatchKey(.{ .ctrl = true }, text_editor.KEY_X);
+    try std.testing.expectEqualStrings("ab\ncd", test_field.text());
+    try std.testing.expectEqual(@as(usize, 0), report_count);
+
+    // Select all and copy: the one thing a read-only pane is for.
+    clip_out_len = 0;
+    test_field.clipboard = .{ .write_fn = clipCapture };
+    _ = dispatchKey(.{ .ctrl = true }, text_editor.KEY_A);
+    try std.testing.expect(dispatchKey(.{ .ctrl = true }, text_editor.KEY_C));
+    try std.testing.expectEqualStrings("ab\ncd", clip_out[0..clip_out_len]);
+
+    // The caret still moves, so a person can put it where a selection should start.
+    test_field.editor.setCaret(2, false);
+    _ = dispatchKey(.{}, text_editor.KEY_LEFT);
+    try std.testing.expectEqual(@as(usize, 1), test_field.editor.caret.offset);
+    try std.testing.expectEqualStrings("ab\ncd", test_field.text());
+}
+
+test "a read-only field shows the app's bytes without copying them" {
+    frame_mod.setTime(0, 0);
+    try startField("");
+    test_field.multiline = true;
+    test_field.readonly = true;
+    var body = [_]u8{ 'x', '\n', 'y' };
+    test_field.show(&body);
+    try std.testing.expectEqualStrings("x\ny", test_field.text());
+    try std.testing.expectEqual(@as([*]u8, &body), test_field.editor.buf.ptr);
+
+    // A second body of a different length re-points the field, and the caret is clamped into it.
+    test_field.editor.setCaret(3, false);
+    var shorter = [_]u8{'z'};
+    test_field.show(&shorter);
+    try std.testing.expectEqualStrings("z", test_field.text());
+    // A new run is a new document: the caret starts at its beginning instead of pointing into the old body.
+    try std.testing.expectEqual(@as(usize, 0), test_field.editor.caret.offset);
+}
+
+test "the line window covers the viewport with an overscan, and never more than a frame can draw" {
+    // 20 px rows, a 100 px viewport: five rows, one for the half row at the bottom, three of overscan either side.
+    const top = windowFor(1000, 0, 100, 20);
+    try std.testing.expectEqual(@as(usize, 0), top.first);
+    try std.testing.expectEqual(@as(usize, 12), top.count);
+
+    // Scrolled down: the window follows, minus the overscan above it.
+    const scrolled = windowFor(1000, 400, 100, 20);
+    try std.testing.expectEqual(@as(usize, 17), scrolled.first);
+    try std.testing.expectEqual(@as(usize, 12), scrolled.count);
+
+    // Near the end the window is clipped to what is left, so no row is drawn past the text.
+    const tail = windowFor(20, 400, 100, 20);
+    try std.testing.expectEqual(@as(usize, 17), tail.first);
+    try std.testing.expectEqual(@as(usize, 3), tail.count);
+
+    // A single line of movement still requests a sane window, and an empty field requests nothing.
+    try std.testing.expectEqual(@as(usize, 0), windowFor(0, 0, 100, 20).count);
 }
 
 test "Ctrl+Enter submits a multiline field instead of typing another line" {
