@@ -44,9 +44,34 @@ pub fn main(init: std.process.Init) !void {
     var opts = devtools.cli.parse(args);
     if (opts.help) return print(io, devtools.cli.usage);
 
-    // Two modes: talk to a running app that serves itself, or run one here.
-    if (opts.attach) |name| return attachTo(io, opts, name);
+    // `devices` asks every known name; it is the one command that needs no target.
+    if (opts.verb) |v| {
+        if (eq(v, "devices")) return listDevices(io);
+        // `shot <path>` only works on an app this process runs: a running app has no surface to hand out.
+        if (eq(v, "shot") and opts.positional_count > 0) opts.shot = opts.positional[0];
+    }
     if (hasArg(args, "--devices")) return listDevices(io);
+
+    // A question goes to a running app when one is named, or when exactly one is serving and no --app says otherwise.
+    const asked = opts.verb != null or opts.json or opts.dump;
+    const device = opts.attach orelse (if (!opts.app_given and asked) onlyDevice(io) else null);
+    if (device) |name| return attachTo(io, opts, name);
+    if (opts.verb != null and !opts.app_given) {
+        std.debug.print("glinlanduidp: no app is serving (start one with GLIN_DEVTOOLS=1), and no --app was given\n", .{});
+        std.process.exit(2);
+    }
+    // Otherwise a verb replays here: it becomes the action the run performs before printing.
+    var action_buf: [128]u8 = undefined;
+    if (devtools.cli.actionText(opts, &action_buf)) |text| {
+        if (devtools.cli.parseAction(text)) |action| {
+            if (opts.action_count < devtools.cli.max_actions) {
+                opts.actions[opts.action_count] = action;
+                opts.action_text[opts.action_count] = text;
+                opts.action_count += 1;
+            }
+            opts.dump = true;
+        }
+    }
 
     const spec = find(opts.app) orelse {
         std.debug.print("glinlandui-inspect: no app named '{s}'.\n\n", .{opts.app});
@@ -77,10 +102,14 @@ pub fn main(init: std.process.Init) !void {
     try out.interface.flush();
 }
 
-// One request to a running app: the flags choose the question, and the answer goes to stdout verbatim.
+// One request to a running app: the verb chooses the question, and the answer goes to stdout verbatim.
 fn attachTo(io: std.Io, opts: devtools.cli.Options, name: []const u8) !void {
-    var line_buf: [256]u8 = undefined;
-    const line = requestLine(opts, &line_buf);
+    var line_buf: [192]u8 = undefined;
+    var scratch: [128]u8 = undefined;
+    const line = devtools.cli.requestFor(opts, &line_buf, &scratch) orelse {
+        std.debug.print("glinlanduidp: {s} needs an operand (see --help)\n", .{opts.verb orelse ""});
+        std.process.exit(2);
+    };
     var out_buf: [8192]u8 = undefined;
     var out = std.Io.File.stdout().writer(io, &out_buf);
     devtools.request(io, name, line, &out.interface) catch |err| {
@@ -90,25 +119,37 @@ fn attachTo(io: std.Io, opts: devtools.cli.Options, name: []const u8) !void {
     try out.interface.flush();
 }
 
-fn requestLine(opts: devtools.cli.Options, buf: []u8) []const u8 {
-    if (opts.action_count > 0) return std.fmt.bufPrint(buf, "do {s}", .{opts.action_text[0]}) catch "tree";
-    if (opts.pick) |p| return std.fmt.bufPrint(buf, "pick {d},{d}", .{ p.x, p.y }) catch "tree";
-    if (opts.json) return "json";
-    return "tree";
-}
+// The names the examples serve under, which is also what `--app` accepts.
+const app_names = [_][]const u8{ "demo", "calculator", "todo", "catalog", "file-dialog", "lazy-scroll" };
 
 // A running app is one that answers: there is no registry to read, so each name is asked a one-line question.
 fn listDevices(io: std.Io) !void {
-    const names = [_][]const u8{ "demo", "calculator", "todo", "catalog", "file-dialog", "lazy-scroll" };
     var buf: [1024]u8 = undefined;
     var out = std.Io.File.stdout().writer(io, &buf);
-    for (names) |name| {
+    for (app_names) |name| {
         var sink_buf: [1024]u8 = undefined;
         var sink = std.Io.Writer.fixed(&sink_buf);
         devtools.request(io, name, "pick 0,0", &sink) catch continue;
         try out.interface.print("{s}\n", .{name});
     }
     try out.interface.flush();
+}
+
+// The only app that answers, or null when none or several do: a client with two devices has to say which.
+fn onlyDevice(io: std.Io) ?[]const u8 {
+    var found: ?[]const u8 = null;
+    for (app_names) |name| {
+        var sink_buf: [512]u8 = undefined;
+        var sink = std.Io.Writer.fixed(&sink_buf);
+        devtools.request(io, name, "pick 0,0", &sink) catch continue;
+        if (found != null) return null;
+        found = name;
+    }
+    return found;
+}
+
+fn eq(a: []const u8, b: []const u8) bool {
+    return std.mem.eql(u8, a, b);
 }
 
 fn find(name: []const u8) ?*const AppSpec {

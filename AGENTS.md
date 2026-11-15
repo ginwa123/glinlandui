@@ -24,7 +24,8 @@ zig build run              # the demo window
 zig build run-calculator   # the calculator example
 zig build run-todo         # the MVVM todo example (see examples/todo/README.md)
 zig build test-todo        # the todo example's own tests, headless
-zig build inspect -- --app=todo --json   # the devtool: any example's component tree, headless
+zig build inspect -- --app=todo --json   # the devtool headless runner: any example's tree
+zig build test-dp          # glinlanduidp's own tests; the client is built by a plain `zig build`
 ```
 
 Plus the CI scripts, which are the real contract:

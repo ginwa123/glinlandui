@@ -397,7 +397,7 @@ pub fn build(b: *std.Build) void {
         catalog_test_step.dependOn(&b.addRunArtifact(catalog_test.?).step);
     }
 
-    // ---- The devtool ---- `glinlandui-inspect` runs any example app headless and prints its component tree, so an agent reads the nodes a developer sees.
+    // ---- The devtool ---- `glinlanduidp` (glinlandui debug process) is the adb of this toolkit: an INDEPENDENT client that speaks to a running app.
     if (!is_wasm) {
         const demo_mod = b.createModule(.{
             .root_source_file = b.path("src/demo_app.zig"),
@@ -405,8 +405,25 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{.{ .name = "glinlandui", .module = mod }},
         });
+        // The client imports nothing from the framework: no Clay, no examples, no library. It knows the socket and the protocol, like adb knows a phone.
+        const dp = b.addExecutable(.{
+            .name = "glinlanduidp",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/dp_main.zig"),
+                .target = target,
+                .optimize = optimize,
+                // A client needs the C runtime for `getenv` and nothing else.
+                .link_libc = true,
+            }),
+        });
+        b.installArtifact(dp);
+        const dp_test = b.addTest(.{ .root_module = dp.root_module });
+        const test_dp_step = b.step("test-dp", "Run glinlanduidp's own tests (verb parsing, protocol spellings)");
+        test_dp_step.dependOn(&b.addRunArtifact(dp_test).step);
+
+        // The repo's own headless runner: it LINKS the examples so an agent can read a tree without an app running.
         const inspect = b.addExecutable(.{
-            .name = "glinlandui-inspect",
+            .name = "glinlandui-replay",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/inspect_main.zig"),
                 .target = target,
@@ -423,13 +440,13 @@ pub fn build(b: *std.Build) void {
             }),
         });
         b.installArtifact(inspect);
-        const build_inspect_step = b.step("build-inspect", "Compile the devtool that dumps an app's component tree");
+        const build_inspect_step = b.step("build-dp", "Compile glinlanduidp, the devtool (installed by a plain `zig build`)");
         build_inspect_step.dependOn(&inspect.step);
 
         // `zig build inspect -- --app=todo --json`: the same tree the in-app inspector draws, on stdout, for a script or an agent.
         const run_inspect = b.addRunArtifact(inspect);
         if (b.args) |args| run_inspect.addArgs(args);
-        const inspect_step = b.step("inspect", "Dump an app's component tree headless (-- --app=todo --json)");
+        const inspect_step = b.step("inspect", "Run glinlanduidp headless (-- --app=todo --json)");
         inspect_step.dependOn(&run_inspect.step);
     }
 

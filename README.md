@@ -985,35 +985,50 @@ Nothing is added to the app's frame cost while the window is closed — the over
 attached devtool turns on `resolve_semantics`, the same per-frame tree `testing.Driver` reads, so the nodes keep the
 geometry the window draws from.
 
-### The same tree, headless, for an agent
+### `glinlanduidp`, the debug process
 
-`zig build inspect` runs an app with no window and prints the tree:
-
-```sh
-zig build inspect -- --app=todo                      # indented lines
-zig build inspect -- --app=calculator --json         # one JSON document
-zig build inspect -- --app=catalog --depth=2 --json  # stop at two levels
-zig build inspect -- --app=todo --pick=120,80        # the node under one point
-```
-
-`--app` is `demo`, `calculator`, `todo`, `catalog`, `file-dialog` or `lazy-scroll`. `--size=WxH` overrides the app's
-own window size and `--frames=N` how long to run before reading (default 3). The JSON is the shape a program wants:
-`{"frame":{"width":…,"height":…,"nodes":N},"roots":[{…,"children":[…]}]}`, each node carrying `tag`, `hash`, `role`,
-`label`, `source` (the component's `file:line`), `declared` (`{module, file, line}`, when the app recorded it),
-`bounds`, `visible`, `flags` and `actions`.
-
-`--shot=PATH.tga` writes the frame instead — the same tree, with the inspection window open — so a machine with no
-compositor can still see what it is describing. A `--pick` alongside it arms the picker over that point, which puts
-the outline and its badge in the picture too:
+`glinlanduidp` is an **independent binary**: it imports nothing from this framework — no Clay, no examples, no library —
+and drives a running app over its socket, the way `adb` drives a phone. `zig build` produces it once into
+`zig-out/bin/`; after that it is just a program, and nothing about it depends on the app it talks to.
 
 ```sh
-zig build inspect -- --app=todo --shot=/tmp/todo.tga
-zig build inspect -- --app=calculator --pick=40,300 --shot=/tmp/key.tga
+GLIN_DEVTOOLS=1 ./zig-out/bin/glinlandui-todo &    # the app serves itself
+./zig-out/bin/glinlanduidp devices                 # todo
+./zig-out/bin/glinlanduidp tree                    # the window's own tree, live
+./zig-out/bin/glinlanduidp text todo.field "buy milk"
+./zig-out/bin/glinlanduidp key 28                  # a new row appears, on screen
 ```
 
-### Driving an app from the CLI
+| verb | what it does |
+|---|---|
+| `devices` | the apps that are serving right now |
+| `tree` · `json` | the component tree, as indented lines or as JSON |
+| `pick X,Y` | the node under one point |
+| `tap TAG` · `tap @X,Y` | press and release it |
+| `longpress TAG` | hold the press, then release |
+| `press` · `release TAG` | one half of a click |
+| `move TAG` | move the pointer onto it |
+| `scroll TAG DX,DY` | wheel over it |
+| `swipe TAG DX,DY` | press on it and drag |
+| `text TAG TEXT` | focus it, then type |
+| `key CODE` | an evdev key code (28 Enter, 1 Escape) |
+| `quit` | ask the app to close |
 
-`--do=ACTION`, repeatable and played in order, acts on a component by the tag the tree printed. The tree is printed
+`-s NAME` picks the app when several are serving; with one, it is implied. The socket is
+`$XDG_RUNTIME_DIR/glinlandui-<name>.sock` (or `/tmp` when there is no runtime dir): per-user, no port allocated, and a
+file a killed app left behind is replaced on the next start. With `GLIN_DEVTOOLS` unset there is no socket, no thread
+and no pipe — `serve` returns null and the frame loop's two hooks are a null check.
+
+The service runs **in the app's own frame loop** — a request fires before the app declares, and its answer is
+serialised after the tree is resolved — so the socket thread only ever moves bytes and never touches Host or GL state.
+Linux has the wake path (the window polls the service's pipe beside the Wayland display fd, so a request wakes an idle
+window). macOS and Windows report the service as unavailable until their own wake hook lands; the library still
+compiles and runs there.
+
+### Driving a headless run
+
+`--do=ACTION`, repeatable and played in order, acts on a component by the tag the tree printed — the same actions
+`glinlanduidp` sends to a live app, played against a run this process owns. The tree is printed
 after the last action, in the same process, so the effect is visible:
 
 ```sh
@@ -1038,29 +1053,20 @@ a user does — nothing is faked, the app's own handlers run.
 `TAG` is the id the tree prints; `@x,y` addresses a point with no tag. A tag that is not found fails with the tag named
 and a non-zero exit, so a script knows its selector was wrong rather than the app.
 
-### Attaching to a running app
+### Reading a tree with no app running
 
-Point `--attach` at an app that serves itself and the request goes to *that* process: the tree is the window you are
-looking at, and an action changes it on screen.
+The repository also ships a headless runner that **links** the examples, so an agent can read a tree when nothing is
+running. This one is repo-specific by design, and it is what `zig build inspect` runs:
 
 ```sh
-GLIN_DEVTOOLS=1 ./zig-out/bin/glinlandui-todo &     # the app serves itself
-zig build inspect -- --devices                      # todo
-zig build inspect -- --attach=todo                  # its live tree
-zig build inspect -- --attach=todo --do=type:todo.field:from cli
-zig build inspect -- --attach=todo --do=key:28      # a new row appears, on screen
+zig build inspect -- --app=todo                      # indented lines
+zig build inspect -- --app=calculator --json         # one JSON document
+zig build inspect -- --app=todo --do=type:todo.field:ship it --do=key:28
 ```
 
-`--json`, `--pick` and the first `--do` choose the request; one request per connection, one connection per invocation.
-The socket is `$XDG_RUNTIME_DIR/glinlandui-<name>.sock` (or `/tmp` when there is no runtime dir), so it is per-user,
-needs no port, and a file a killed app left behind is replaced on the next start. With `GLIN_DEVTOOLS` unset there is
-no socket, no thread and no pipe: `serve` returns null, and the frame loop's two hooks are a null check.
-
-The service runs **in the app's own frame loop** — a request fires before the app declares, and its answer is
-serialised after the tree is resolved — so the socket thread only ever moves bytes and never touches Host or GL state.
-Linux has the wake path (the window polls the service's pipe beside the Wayland display fd, so a request wakes an idle
-window). macOS and Windows report the service as unavailable until their own wake hook lands; the library still
-compiles and runs there.
+`--app` is `demo`, `calculator`, `todo`, `catalog`, `file-dialog` or `lazy-scroll`; `--size=WxH`, `--frames=N`,
+`--depth=N`, `--pick=X,Y` and `--do=ACTION` behave as they do over the socket. `--shot=PATH.tga` writes the frame with
+the inspector window open, which is how a machine with no compositor can see what it is describing.
 
 ### Reading the tree from your own code
 
@@ -1086,7 +1092,8 @@ src/
 ├── platform.zig      the ONLY file that branches on builtin.os.tag.
 ├── native_test.zig   test root for the Linux-only native backends.
 ├── main.zig          demo app (dogfoods the public surface).
-├── inspect_main.zig  ★ the devtool binary: any example app's tree, headless.
+├── dp_main.zig       ★ `glinlanduidp`: the independent debug client (no framework import).
+├── inspect_main.zig  the repo's headless runner: any example app's tree, no app running.
 │
 ├── core/             platform-agnostic. Compiles identically everywhere.
 │   ├── semantics.zig         ★ per-frame semantics model (E2E + future a11y)

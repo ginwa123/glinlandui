@@ -52,6 +52,12 @@ pub const Options = struct {
     action_text: [max_actions][]const u8 = [_][]const u8{""} ** max_actions,
     // Attach to a running app by the name it serves under, instead of running one here.
     attach: ?[]const u8 = null,
+    // Whether --app was given, so an auto-detected device never overrides an explicit replay.
+    app_given: bool = false,
+    // The adb-style verb (`tree`, `tap`, `text`, …) and its operands.
+    verb: ?[]const u8 = null,
+    positional: [2][]const u8 = [_][]const u8{ "", "" },
+    positional_count: usize = 0,
     help: bool = false,
 };
 
@@ -77,9 +83,11 @@ pub fn parse(args: []const []const u8) Options {
             opts.depth = n;
         } else if (argValue(a, "--app", args, &i)) |v| {
             opts.app = v;
+            opts.app_given = true;
         } else if (argValue(a, "--shot", args, &i)) |v| {
             opts.shot = v;
-        } else if (argValue(a, "--attach", args, &i)) |v| {
+        } else if (argValue(a, "-s", args, &i) orelse argValue(a, "--attach", args, &i)) |v| {
+            // `-s NAME`, as adb spells a device.
             opts.attach = v;
         } else if (argValue(a, "--do", args, &i)) |v| {
             if (parseAction(v)) |action| {
@@ -98,6 +106,14 @@ pub fn parse(args: []const []const u8) Options {
                 opts.width = std.fmt.parseInt(u32, v[0..x], 10) catch opts.width;
                 opts.height = std.fmt.parseInt(u32, v[x + 1 ..], 10) catch opts.height;
                 opts.size_given = true;
+            }
+        } else if (!std.mem.startsWith(u8, a, "-") and opts.verb == null) {
+            // The first bare word is the verb; a bare word after it is an operand.
+            opts.verb = a;
+        } else if (!std.mem.startsWith(u8, a, "-")) {
+            if (opts.positional_count < opts.positional.len) {
+                opts.positional[opts.positional_count] = a;
+                opts.positional_count += 1;
             }
         } else if (argValue(a, "--pick", args, &i)) |v| {
             if (parsePoint(v)) |p| {
@@ -142,6 +158,36 @@ fn argValue(a: []const u8, flag: []const u8, args: []const []const u8, i: *usize
 fn number(comptime T: type, a: []const u8, flag: []const u8, args: []const []const u8, i: *usize) ?T {
     const v = argValue(a, flag, args, i) orelse return null;
     return std.fmt.parseInt(T, v, 10) catch null;
+}
+
+// The action a verb names, in the same `kind:TAG:ARGS` text `--do` takes; null for a verb that is not an action.
+pub fn actionText(opts: Options, buf: []u8) ?[]const u8 {
+    const verb = opts.verb orelse return null;
+    const a0 = opts.positional[0];
+    const a1 = opts.positional[1];
+    if (eq(verb, "tap") or eq(verb, "click")) return std.fmt.bufPrint(buf, "click:{s}", .{a0}) catch null;
+    if (eq(verb, "longpress")) return std.fmt.bufPrint(buf, "longpress:{s}", .{a0}) catch null;
+    if (eq(verb, "press")) return std.fmt.bufPrint(buf, "press:{s}", .{a0}) catch null;
+    if (eq(verb, "release")) return std.fmt.bufPrint(buf, "release:{s}", .{a0}) catch null;
+    if (eq(verb, "move") or eq(verb, "hover")) return std.fmt.bufPrint(buf, "move:{s}", .{a0}) catch null;
+    if (eq(verb, "scroll")) return std.fmt.bufPrint(buf, "scroll:{s}:{s}", .{ a0, a1 }) catch null;
+    if (eq(verb, "swipe") or eq(verb, "drag")) return std.fmt.bufPrint(buf, "drag:{s}:{s}", .{ a0, a1 }) catch null;
+    if (eq(verb, "text") or eq(verb, "type")) return std.fmt.bufPrint(buf, "type:{s}:{s}", .{ a0, a1 }) catch null;
+    if (eq(verb, "key")) return std.fmt.bufPrint(buf, "key:{s}", .{a0}) catch null;
+    return null;
+}
+
+// The one request a running app is sent: the verb as the service spells it. `scratch` holds the action text on the way.
+pub fn requestFor(opts: Options, out: []u8, scratch: []u8) ?[]const u8 {
+    const verb = opts.verb orelse return if (opts.json) "json" else "tree";
+    if (eq(verb, "tree")) return "tree";
+    if (eq(verb, "json")) return "json";
+    if (eq(verb, "pick")) {
+        if (opts.pick) |p| return std.fmt.bufPrint(out, "pick {d},{d}", .{ p.x, p.y }) catch null;
+        return std.fmt.bufPrint(out, "pick {s}", .{opts.positional[0]}) catch null;
+    }
+    const action = actionText(opts, scratch) orelse return null;
+    return std.fmt.bufPrint(out, "do {s}", .{action}) catch null;
 }
 
 // `X,Y`, the point a `@x,y` target names and the delta a drag or a scroll takes.
@@ -261,10 +307,29 @@ fn perform(driver: *testing.Driver, action: Action) !void {
 }
 
 pub const usage =
-    \\glinlandui-inspect: read and drive an app's component tree without a window.
+    \\glinlanduidp: attach to a running glinlandui app, or run one headless, and read or drive its components.
     \\
-    \\  --app=NAME          which example app to run: demo, calculator, todo, catalog,
-    \\                      file-dialog, lazy-scroll (default demo)
+    \\USAGE
+    \\  glinlanduidp <verb> [operands] [flags]
+    \\
+    \\VERBS (a running app is the one a `--attach` names, or the only one serving)
+    \\  devices                 list the apps that are serving right now
+    \\  tree | json             the component tree, as lines or as JSON
+    \\  pick X,Y                the node under one point
+    \\  tap TAG | tap @X,Y      press and release it
+    \\  longpress TAG           hold the press, then release
+    \\  press | release TAG     one half of a click
+    \\  move TAG                move the pointer onto it
+    \\  scroll TAG DX,DY        wheel over it
+    \\  swipe TAG DX,DY         press on it and drag
+    \\  text TAG TEXT           focus it, then type
+    \\  key CODE                an evdev key code (28 Enter, 1 Escape)
+    \\
+    \\FLAGS
+    \\
+    \\  -s, --attach=NAME   the app to talk to (default: the only one serving)
+    \\  --app=NAME          run this app here instead of attaching: demo, calculator, todo,
+    \\                      catalog, file-dialog, lazy-scroll
     \\  --dump, --inspect   print the tree
     \\  --json              JSON, for a program
     \\  --text              indented lines, for a person
@@ -274,9 +339,7 @@ pub const usage =
     \\  --depth=N           levels of children to print (default 16)
     \\  --pick=X,Y          the node under one point, not the whole tree
     \\  --do=ACTION         act on a component before the tree is printed; repeatable, in order
-    \\  --attach=NAME       talk to a RUNNING app that serves NAME (needs GLIN_DEVTOOLS=1), instead of
-    \\                      running one here; --json, --pick and the first --do choose the request
-    \\  --devices           list the apps that are serving right now
+    \\  --devices           the same as the `devices` verb
     \\  -h, --help          this text
     \\
     \\ACTIONS, each `kind:TAG` or `kind:TAG:ARGS` (TAG is the id the tree prints, or @x,y):
