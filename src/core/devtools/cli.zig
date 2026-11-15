@@ -43,6 +43,8 @@ pub const Options = struct {
     app: []const u8 = "demo",
     // Write the frame, devtool window up, to this TGA path instead of printing the tree.
     shot: ?[]const u8 = null,
+    // What the devtool's search box holds in that frame: a picture of the tree narrowed to a query.
+    query: ?[]const u8 = null,
     // The actions to play before the tree is read, in order.
     actions: [max_actions]Action = [_]Action{.{}} ** max_actions,
     action_count: usize = 0,
@@ -101,6 +103,8 @@ pub fn parse(args: []const []const u8) Options {
             } else {
                 opts.bad_action = true;
             }
+        } else if (argValue(a, "--query", args, &i)) |v| {
+            opts.query = v;
         } else if (argValue(a, "--size", args, &i)) |v| {
             if (std.mem.indexOfScalar(u8, v, 'x')) |x| {
                 opts.width = std.fmt.parseInt(u32, v[0..x], 10) catch opts.width;
@@ -334,6 +338,7 @@ pub const usage =
     \\  --json              JSON, for a program
     \\  --text              indented lines, for a person
     \\  --shot=PATH.tga     write the frame with the devtool window open, instead of the tree
+    \\  --query=TEXT        with --shot: what the devtool search box holds, so the tree is narrowed
     \\  --size=WxH          layout size (default: the app's own window size)
     \\  --frames=N          frames to run before reading (default 3)
     \\  --depth=N           levels of children to print (default 16)
@@ -427,6 +432,14 @@ test "an action with no tag, or one the parser does not know, is reported instea
     const wrong = parse(&.{ "app", "--do=explode:demo.btn" });
     try std.testing.expect(wrong.bad_action);
     try std.testing.expectEqual(@as(usize, 0), wrong.action_count);
+}
+
+test "`--query` names what the shot's search box holds" {
+    const opts = parse(&.{ "app", "--shot=/tmp/x.tga", "--query=todo.field" });
+    try std.testing.expectEqualStrings("/tmp/x.tga", opts.shot.?);
+    try std.testing.expectEqualStrings("todo.field", opts.query.?);
+    // No query is a null, not an empty string: a shot with no query draws the whole tree.
+    try std.testing.expect(parse(&.{"app"}).query == null);
 }
 
 test "flags an app owns are left alone, and a broken number keeps the default" {

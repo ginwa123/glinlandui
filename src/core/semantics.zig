@@ -113,6 +113,23 @@ var stack_len: usize = 0;
 pub fn beginFrame() void {
     count = 0;
     stack_len = 0;
+    paused = 0;
+}
+
+/// A devtool overlay declares REAL widgets that are not part of the app's tree, so registration is a no-op while it does.
+var paused: u32 = 0;
+
+/// Pause registration for the span of an overlay's declare; a counter, so an overlay inside an overlay resumes only its own.
+pub fn pause() void {
+    paused += 1;
+}
+
+pub fn unpause() void {
+    if (paused > 0) paused -= 1;
+}
+
+pub fn isPaused() bool {
+    return paused > 0;
 }
 
 /// Containers call these for the span of their children's declaration.
@@ -140,6 +157,7 @@ pub fn declaredAt(src: ?std.builtin.SourceLocation) ?Declared {
 
 /// Register a node during declare.
 pub fn register(node: Node) void {
+    if (paused > 0) return;
     if (count >= cap) return;
     var n = node;
     const depth = @min(stack_len, ancestor_cap);
@@ -448,4 +466,37 @@ test "byId finds a registered node and returns null for a stranger" {
     const n = byId(cl.getElementId("find-me")).?;
     try std.testing.expectEqual(Role.button, n.role);
     try std.testing.expect(byId(cl.getElementId("nope")) == null);
+}
+
+test "a paused overlay declares widgets the tree never sees, and unpausing gives them back" {
+    beginFrame();
+    register(.{ .id = cl.getElementId("app"), .tag = "app" });
+    // What an inspector's own search box does: a real field, drawn over the app, absent from the tree it searches.
+    pause();
+    try std.testing.expect(isPaused());
+    register(.{ .id = cl.getElementId("overlay"), .tag = "overlay" });
+    unpause();
+    try std.testing.expect(!isPaused());
+    register(.{ .id = cl.getElementId("app.after"), .tag = "app.after" });
+
+    try std.testing.expectEqual(@as(usize, 2), count);
+    try std.testing.expect(byId(cl.getElementId("overlay")) == null);
+    try std.testing.expect(byId(cl.getElementId("app.after")) != null);
+
+    // Nesting: the inner overlay's unpause must not switch registration back on for the outer one.
+    pause();
+    pause();
+    unpause();
+    try std.testing.expect(isPaused());
+    register(.{ .id = cl.getElementId("nested"), .tag = "nested" });
+    unpause();
+    try std.testing.expect(!isPaused());
+    try std.testing.expectEqual(@as(usize, 2), count);
+
+    // A new frame starts unpaused even if an overlay forgot its unpause (a panic between them must not poison every later frame).
+    pause();
+    beginFrame();
+    try std.testing.expect(!isPaused());
+    register(.{ .id = cl.getElementId("next"), .tag = "next" });
+    try std.testing.expectEqual(@as(usize, 1), count);
 }

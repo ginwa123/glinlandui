@@ -986,6 +986,29 @@ the selected node — box, clip rectangle, z, actions, flags, its label, its nea
 and `declared` is the app's own call site, when the app recorded one. `Escape` closes it, and the app underneath keeps
 running and staying clickable outside the window.
 
+A **search box** under the header narrows the tree to the nodes a query names: the tag (an id), the role, the label,
+the field's value, the component file and the app's call site, all case-insensitive. Each hit keeps the ancestor path
+that leads to it, drawn dim, so a hit is shown in the tree it belongs to and not in a flat result list, and the bar
+counts the hits. `Enter` walks them and scrolls each row into view; `Escape` empties the box, and only the next
+`Escape` closes the window, so a filtered tree never outlives its query. A query that *is* a number names a node by
+its Clay id — the decimal the JSON prints as `hash` — so `1293847561`, `#1293847561` and `0x4d2b8c19` all find the
+node whose tag you do not know. The box is the same `input.Field` an app declares, so the caret, the selection,
+double-click word select, paste and macOS's composed-text route all work, and the engine types into it.
+
+Every line of the footer is a target of its own: hovering lights it, a click marks it and puts its **value** on the
+system clipboard — `core/components/box.zig:69`, `catalog/view.zig:112`, the id, the label — so a path or a hash can
+be pasted where it is wanted instead of retyped. The mark stays on the line and the search bar says `copied`, which is
+the panel answering "what did I just copy?".
+
+Two things make an overlay inside the inspector work at all, and both are visible here: the overlay declares real
+widgets that are deliberately **not** part of the app's tree (`semantics.pause()`/`unpause()`), so its own search box
+never appears in the tree it searches; and a widget inside an overlay that swallows clicks passes a `click_z`, so its
+own target answers above the panel's. `--query=TEXT` fills the box for a picture:
+
+```sh
+zig build inspect -- --app=catalog --shot=/tmp/tree.tga --query=button
+```
+
 ### Where the code lives, and why the app has to say
 
 `component` is inferred. `declared` cannot be: Zig has no caller location — `@src()` describes the expression that

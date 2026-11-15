@@ -119,15 +119,25 @@ pub fn registerClick(id: cl.ElementId, cb: ClickFn, ctx: ?*anyopaque) void {
 
 /// Full click version storing cursor (button/toggle/checkbox/radio pass .pointer, slider passes .ew_resize, image on_click passes .pointer).
 pub fn registerClickCursor(id: cl.ElementId, cb: ClickFn, ctx: ?*anyopaque, cursor: Cursor) void {
+    registerClickCursorZ(id, cb, ctx, cursor, 0);
+}
+
+/// The same, with a dispatch priority: a field inside an overlay that swallows clicks must register ABOVE it, or the overlay eats the click.
+pub fn registerClickCursorZ(id: cl.ElementId, cb: ClickFn, ctx: ?*anyopaque, cursor: Cursor, z: i16) void {
     if (count >= cap) return;
-    entries[count] = .{ .id = id, .cb_click = cb, .ctx = ctx, .cursor = cursor, .clip = clip };
+    entries[count] = .{ .id = id, .cb_click = cb, .ctx = ctx, .z = z, .cursor = cursor, .clip = clip };
     count += 1;
 }
 
 /// Register a click target that also answers a double click (word select). One entry, two callbacks.
 pub fn registerClickDoubleCursor(id: cl.ElementId, cb: ClickFn, cb_double: ClickFn, ctx: ?*anyopaque, cursor: Cursor) void {
+    registerClickDoubleCursorZ(id, cb, cb_double, ctx, cursor, 0);
+}
+
+/// The same, with a dispatch priority (see `registerClickCursorZ`).
+pub fn registerClickDoubleCursorZ(id: cl.ElementId, cb: ClickFn, cb_double: ClickFn, ctx: ?*anyopaque, cursor: Cursor, z: i16) void {
     const before = count;
-    registerClickCursor(id, cb, ctx, cursor);
+    registerClickCursorZ(id, cb, ctx, cursor, z);
     // Only when it actually landed: a full registry must not rewrite somebody else's entry.
     if (count > before) entries[count - 1].cb_double = cb_double;
 }
