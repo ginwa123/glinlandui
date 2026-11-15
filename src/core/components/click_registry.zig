@@ -1,5 +1,6 @@
 // Engine-owned per-frame click registry (no alloc, fixed cap).
 const std = @import("std");
+const builtin = @import("builtin");
 const cl = @import("zclay");
 const headless = @import("../testing/headless.zig");
 
@@ -164,22 +165,38 @@ pub fn topmostAt(x: f32, y: f32) ?Entry {
     return best;
 }
 
+// A freestanding target (the browser build) must never ANALYSE `getenv` or `std.debug.print` — the latter reaches `std.Io.Threaded`, which cannot exist there — so both sit behind the same comptime guard core/log.zig uses, around a call to a separate function.
+const can_trace = !builtin.is_test and !builtin.cpu.arch.isWasm() and builtin.link_libc;
+
 /// `GLIN_CLICK_TRACE=1`: every dispatched click, the target it found and that target's box, or what was near the point when nothing answered.
 fn traceEnabled() bool {
+    if (comptime !can_trace) return false;
+    return traceFromEnv();
+}
+
+fn traceFromEnv() bool {
     const v = std.c.getenv("GLIN_CLICK_TRACE") orelse return false;
     return v[0] != 0 and v[0] != '0';
+}
+
+fn tracePrint(comptime fmt: []const u8, args: anytype) void {
+    if (comptime can_trace) tracePrintNative(fmt, args);
+}
+
+fn tracePrintNative(comptime fmt: []const u8, args: anytype) void {
+    std.debug.print(fmt, args);
 }
 
 pub fn describeAt(x: f32, y: f32) void {
     if (topmostAt(x, y)) |hit| {
         const data = cl.getElementData(hit.id);
-        std.debug.print("[click] ({d:.1},{d:.1}) -> id {d}/{d} z={d} box {d:.1},{d:.1} {d:.1}x{d:.1}\n", .{
+        tracePrint("[click] ({d:.1},{d:.1}) -> id {d}/{d} z={d} box {d:.1},{d:.1} {d:.1}x{d:.1}\n", .{
             x,                   y,                   hit.id.id,               hit.id.offset,            hit.z,
             data.bounding_box.x, data.bounding_box.y, data.bounding_box.width, data.bounding_box.height,
         });
         return;
     }
-    std.debug.print("[click] ({d:.1},{d:.1}) -> NOTHING ({d} entries)\n", .{ x, y, count });
+    tracePrint("[click] ({d:.1},{d:.1}) -> NOTHING ({d} entries)\n", .{ x, y, count });
     // The boxes that contain the x but not the y, which is what a vertical offset looks like.
     var i: usize = 0;
     while (i < count) : (i += 1) {
@@ -190,7 +207,7 @@ pub fn describeAt(x: f32, y: f32) void {
         const bb = data.bounding_box;
         if (bb.width <= 0 or bb.height <= 0) continue;
         if (x < bb.x or x >= bb.x + bb.width) continue;
-        std.debug.print("[click]   near: y {d:.1}..{d:.1} (point y {d:.1}, off by {d:.1}) z={d} clipped={}\n", .{
+        tracePrint("[click]   near: y {d:.1}..{d:.1} (point y {d:.1}, off by {d:.1}) z={d} clipped={}\n", .{
             bb.y, bb.y + bb.height, y, y - bb.y, e.z, !insideClip(e.clip, x, y),
         });
     }

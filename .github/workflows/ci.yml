@@ -573,12 +573,22 @@ jobs:
       - name: Report whether the example is wired on this platform
         run: |
           set -uo pipefail
-          if zig build --help 2>/dev/null | grep -q 'run-file-dialog'; then
-            echo "run-file-dialog step: PRESENT"
-          else
-            echo "::error::run-file-dialog step is absent; the example is not wired" >&2
-            exit 1
-          fi
+          # `zig build --help` COMPILES the build script, so it can fail for reasons that have nothing to do with
+          # the step list (a restored .zig-cache from another commit, a slow runner losing a race on it) — and
+          # `2>/dev/null` then turned that into a message nobody can act on: "the step is absent". Retry once, and
+          # when it still does not list the step, print what it actually said.
+          for attempt in 1 2; do
+            help="$(zig build --help 2>&1)"
+            if grep -q 'run-file-dialog' <<<"$help"; then
+              echo "run-file-dialog step: PRESENT"
+              exit 0
+            fi
+            echo "attempt $attempt: zig build --help did not list the step" >&2
+          done
+          echo "::error::run-file-dialog step is absent; the example is not wired" >&2
+          echo "--- zig build --help said ---" >&2
+          echo "$help" | tail -25 >&2
+          exit 1
 
       # The example's own tests are PORTABLE and are part of the parity count,
       # so `tests.lock` already covers them; nothing extra to run here.
