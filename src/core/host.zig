@@ -31,6 +31,8 @@ pub const ServiceHooks = struct {
 };
 
 pub const Host = struct {
+    /// True while a drag that BEGAN over a text target is in flight: selecting text must not also scroll the pane.
+    drag_selecting_text: bool = false,
     alloc: std.mem.Allocator,
     renderer: ?render.Renderer = null,
     renderer_attempted: bool = false,
@@ -171,6 +173,10 @@ pub const Host = struct {
         }
         // A left press belongs to an open card: inside it a row answers on release, outside it dismisses and goes no further.
         if (button == dispatch.BTN_LEFT and pressed and context_menu.leftPress(x, y)) return;
+        // Remember where a drag STARTED: over text it is a selection, and a selection must not drag the pane with it.
+        if (button == dispatch.BTN_LEFT) {
+            if (pressed) self.drag_selecting_text = registry.hoverCursorAt(x, y) == .text else self.drag_selecting_text = false;
+        }
         // A drag-to-reorder starts on a press over a draggable row, and reports on the release.
         if (button == dispatch.BTN_LEFT) {
             if (pressed) reorder_mod.press(x, y) else _ = reorder_mod.release(x, y);
@@ -189,9 +195,9 @@ pub const Host = struct {
         const thumb_moved = scroll_mod.moveThumb(x, y);
         if (button == dispatch.BTN_LEFT and !pressed) scroll_mod.endThumbGrab();
         if (thumb_moved) return;
-        // Slider-style drag: while a press-drag is in flight, nudge the scroll container under the pointer 1:1 (pointer down = scroll down).
+        // Slider-style drag: a press-drag nudges the scroll container under the pointer 1:1 — unless the press landed on text.
         if (self.ptr.down and self.ptr.dragging and (x != last_x or y != last_y)) {
-            scroll_mod.dragScroll(x, y, x - last_x, y - last_y);
+            if (!self.drag_selecting_text) scroll_mod.dragScroll(x, y, x - last_x, y - last_y);
             reorder_mod.move(x, y);
         }
     }
