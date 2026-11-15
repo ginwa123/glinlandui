@@ -250,6 +250,10 @@ cursor, and a clickable child still wins a click over the box that contains it.
 `components.sidebar` is the third: a resizable, collapsible panel that owns its width and its grab line, so an
 app hands it children and reads `state.width` next frame instead of tracking a drag itself — dragging the line
 past `collapse_below` snaps the panel shut, and clicking the line brings it back.
+`components.split` is the same gesture for one pane: `grip(props)` declares the draggable line, the app gives its
+pane `split.size(props)` and lays the two panes out around the call. `axis` picks a horizontal line (drags height,
+`ns_resize` cursor) or a vertical one, `side` says whether the sized pane sits before or after the line, and
+`min`/`max` clamp it. The line registers no click, only a hover cursor and a drag, so it never swallows one.
 
 An app draws with components, never with Clay: `glinlandui` does not re-export the bindings, so a view that
 wants a box, a label or a field uses `components.*`. What an app may need from the engine is on `frame`

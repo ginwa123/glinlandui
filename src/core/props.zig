@@ -102,7 +102,7 @@ pub const Click = struct {
 };
 
 // The pointer shape a click target asks for: the registry and a widget's props share this one definition.
-pub const Cursor = enum { default, pointer, text, ew_resize };
+pub const Cursor = enum { default, pointer, text, ew_resize, ns_resize };
 
 // A text handler and its model: the new text is handed back, so the model can hold the draft.
 

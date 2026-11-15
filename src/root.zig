@@ -118,6 +118,8 @@ pub const components = struct {
     // A resizable, collapsible panel: the app hands it children, it owns the width and the grab line.
     pub const sidebar = @import("core/components/sidebar.zig");
     pub const slider = @import("core/components/slider.zig");
+    // A draggable divider between two panes: the app owns the pane's size, the widget owns the drag.
+    pub const split = @import("core/components/split.zig");
     pub const text = @import("core/components/text.zig");
     pub const toggle = @import("core/components/toggle.zig");
     pub const tree = @import("core/components/tree.zig");
@@ -142,8 +144,9 @@ test {
     _ = @import("core/audit_cases.zig");
     _ = @import("core/font_io.zig");
     _ = @import("core/table.zig");
-    // The reusable sidebar: a panel whose width the pointer owns.
+    // The reusable sidebar: a panel whose width the pointer owns, and the splitter that does the same for a pane.
     _ = @import("core/components/sidebar.zig");
+    _ = @import("core/components/split.zig");
     // The MVVM runtime: the ViewModel store and the theme value.
     _ = @import("core/view_model.zig");
     _ = @import("core/theme.zig");

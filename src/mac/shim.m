@@ -825,6 +825,7 @@ void glin_cocoa_set_cursor(int shape) {
         case 4: [[NSCursor pointingHandCursor] set]; break;
         case 9: [[NSCursor IBeamCursor] set]; break;
         case 26: [[NSCursor resizeLeftRightCursor] set]; break;
+        case 27: [[NSCursor resizeUpDownCursor] set]; break;
         default: [[NSCursor arrowCursor] set]; break;
     }
 }

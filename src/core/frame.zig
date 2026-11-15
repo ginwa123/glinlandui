@@ -11,12 +11,13 @@ const semantics = @import("semantics.zig");
 const text_editor = @import("text_editor.zig");
 
 // ---- Wayland cursor-shape (wp_cursor_shape_manager_v1) ---- Contract (registry crew owns components/click_registry.zig).
-pub const Cursor = enum { default, pointer, text, ew_resize };
+pub const Cursor = enum { default, pointer, text, ew_resize, ns_resize };
 
 pub const shape_default: u32 = 1;
 pub const shape_pointer: u32 = 4;
 pub const shape_text: u32 = 9;
 pub const shape_ew_resize: u32 = 26;
+pub const shape_ns_resize: u32 = 27;
 // Sentinel for Window.last_shape: 0 is not a valid shape (valid range starts at 1), so the first real shape always counts as a change.
 pub const shape_sentinel: u32 = 0;
 
@@ -26,6 +27,7 @@ pub fn cursorShapeFromCursor(cursor: Cursor) u32 {
         .pointer => shape_pointer,
         .text => shape_text,
         .ew_resize => shape_ew_resize,
+        .ns_resize => shape_ns_resize,
     };
 }
 
@@ -37,6 +39,7 @@ pub fn hoverCursorShape(x: f32, y: f32) u32 {
         if (std.mem.eql(u8, name, "pointer")) return shape_pointer;
         if (std.mem.eql(u8, name, "text")) return shape_text;
         if (std.mem.eql(u8, name, "ew_resize")) return shape_ew_resize;
+        if (std.mem.eql(u8, name, "ns_resize")) return shape_ns_resize;
         return shape_default;
     }
     return shape_default;

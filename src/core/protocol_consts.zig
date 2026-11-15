@@ -7,6 +7,7 @@ pub const CursorShape = struct {
     pub const pointer: u32 = 4;
     pub const text: u32 = 9;
     pub const ew_resize: u32 = 26;
+    pub const ns_resize: u32 = 27;
 };
 
 /// wlr_layer_shell_v1 <enum name="anchor"> (wlr-layer-shell-unstable-v1.xml).
@@ -57,6 +58,7 @@ test "CursorShape values match cursor-shape-v1.xml" {
     try std.testing.expectEqual(@as(u32, 4), CursorShape.pointer);
     try std.testing.expectEqual(@as(u32, 9), CursorShape.text);
     try std.testing.expectEqual(@as(u32, 26), CursorShape.ew_resize);
+    try std.testing.expectEqual(@as(u32, 27), CursorShape.ns_resize);
 }
 
 test "LayerAnchor values match wlr-layer-shell-unstable-v1.xml" {
