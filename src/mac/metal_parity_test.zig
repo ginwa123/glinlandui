@@ -100,7 +100,7 @@ test "Metal matches the CPU on an image quad" {
             src[i + 3] = 255;
         }
     }
-    const path = "/tmp/pabrik/glin_parity_image.tga";
+    const path = "/tmp/glin_parity_image.tga";
     try writeTestTga(path, iw, ih, src);
 
     const max_dim: u16 = 256;
