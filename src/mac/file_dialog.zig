@@ -87,19 +87,21 @@ fn run(alloc: std.mem.Allocator, opts: Options, kind: Kind) !Selection {
     var scratch: model.FilterScratch = .{};
     const filters = model.flattenFilters(effective.filters, &scratch);
 
-    // NUL-terminated copies for the C strings.
-    const title_z = nulTerminate(config.title);
-    const dir_z: ?[*:0]const u8 = if (config.directory) |d| nulTerminate(d) else null;
-    const name_z: ?[*:0]const u8 = if (config.file_name) |n| nulTerminate(n) else null;
-    const prompt_z: ?[*:0]const u8 = if (config.prompt) |p| nulTerminate(p) else null;
+    // NUL-terminated copies for the C strings: a caller's slice has no reason to carry a sentinel, and asserting one it does not have is how "Browse…" used to abort the process on the first click.
+    var zs = ZStrings{};
+    defer zs.deinit(alloc);
+    const title_z = try zs.add(alloc, config.title);
+    const dir_z: ?[*:0]const u8 = if (config.directory) |d| try zs.add(alloc, d) else null;
+    const name_z: ?[*:0]const u8 = if (config.file_name) |n| try zs.add(alloc, n) else null;
+    const prompt_z: ?[*:0]const u8 = if (config.prompt) |pr| try zs.add(alloc, pr) else null;
 
     var c_filters: [model.max_filters]c.GlinCocoaFileFilter = undefined;
     var filter_count: c_int = 0;
     if (filters) |list| {
         for (list) |f| {
             c_filters[@intCast(filter_count)] = .{
-                .name = nulTerminate(f.name),
-                .patterns = nulTerminate(f.patterns),
+                .name = try zs.add(alloc, f.name),
+                .patterns = try zs.add(alloc, f.patterns),
             };
             filter_count += 1;
         }
@@ -152,7 +154,20 @@ fn run(alloc: std.mem.Allocator, opts: Options, kind: Kind) !Selection {
     return .{ .status = .selected, .paths = paths };
 }
 
-/// A NUL-terminated view of `text` that lives as long as the caller's frame.
-fn nulTerminate(text: []const u8) [*:0]const u8 {
-    return text.ptr[0..text.len :0];
-}
+/// Owns the NUL-terminated copies the C request points at, and frees them on the way out — the shim needs C strings and the app's slices are not sentinel-terminated.
+const ZStrings = struct {
+    buf: [4 + model.max_filters * 2][:0]u8 = undefined,
+    n: usize = 0,
+
+    fn add(self: *ZStrings, alloc: std.mem.Allocator, text: []const u8) ![*:0]const u8 {
+        const z = try alloc.dupeZ(u8, text);
+        self.buf[self.n] = z;
+        self.n += 1;
+        return z.ptr;
+    }
+
+    fn deinit(self: *ZStrings, alloc: std.mem.Allocator) void {
+        for (self.buf[0..self.n]) |z| alloc.free(z);
+        self.n = 0;
+    }
+};
