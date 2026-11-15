@@ -14,7 +14,7 @@ A platform-agnostic **Clay GUI library** in Zig 0.16. Clay (in `vendor/clay`) do
 layout + render-command emission; this library owns the window, the event loop,
 the renderer, text measurement, input dispatch, and a widget set.
 
-Two real backends: **Wayland/EGL/GLES3/pangocairo** on Linux, **Cocoa/CoreGraphics**
+Two real backends: **Wayland/EGL/GLES3** on Linux, **Cocoa/CoreGraphics**
 on macOS. Consumers write `@import("glinlandui")` and get the same surface on both.
 
 ```
@@ -73,8 +73,8 @@ counts carry the information:
 | `present.zig` | finished frame → screen | 42 | 221 | 216 | 347 |
 | `renderer.zig` | renderer for this OS | 1378 | 27 | 33 | 38 |
 | `text.zig` | text engine for this OS | 261 | 38 | 196 | 97 |
-| `shim.h` | this platform's C shim header | 30 | 111 | 190 | 254 |
-| `shim.c` / `shim.m` / `web/shim.js` | this platform's shim TU | 101 | 415 | 1032 | 418 |
+| `shim.h` | this platform's C shim header | — | 111 | 190 | 254 |
+| `shim.c` / `shim.m` / `web/shim.js` | this platform's shim TU | — | 415 | 1032 | 418 |
 | `file_dialog.zig` | the system file dialog | 1041 | 225 | 210 | — |
 | `file_dialog_model.zig` | the dialog's decisions, pure | — | 317 | 347 | — |
 
@@ -311,11 +311,11 @@ A gate that has never been seen to fail is not a gate.
 
 ### I4 — One C TU per platform folder
 
-`linux/` owns exactly `shim.c` (+ `shim.h`); `mac/` owns exactly `shim.m`
+`linux/` owns no C shim: its GLES text path draws with the shared `core/glyphs.zig` face. `mac/` owns exactly `shim.m`
 (+ `shim.h`); `windows/` owns exactly `shim.c` (+ `shim.h`). Vendored-library TUs
 (`stb_*_impl.c`) live in `core/`.
 
-Consequence you must respect: **all three folders have a file called `shim.h` with
+Consequence you must respect: **`mac/` and `windows/` both have a file called `shim.h` with
 different contents**, so the include paths are mutually exclusive —
 `addIncludePath("src/mac")` is gated inside `if (is_macos)`, and the Windows
 one inside `if (is_windows)`. If you ever make a
@@ -340,7 +340,7 @@ zig build test --summary all              # expect: 443/458 (15 skipped)  ← se
 ./ci/check_test_parity.sh                 # expect: parity: 458 tests (matches tests.lock)
 ./ci/check_layering.sh                    # expect: layering: ok
 
-# Linux native backends (Wayland/EGL/GLES3/pango). NOT part of the parity count.
+# Linux native backends (Wayland/EGL/GLES3). NOT part of the parity count.
 zig build native-test --summary all       # expect: 99/99
 
 # Real build + a headless smoke test that proves pixels were painted.

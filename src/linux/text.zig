@@ -1,16 +1,11 @@
+//! The Linux text backend: which font file this host has, and the coverage rasteriser the GLES renderer blits.
 const std = @import("std");
-
-// Text measurement shaped for Clay.
-
-const shim = @cImport({
-    @cInclude("shim.h");
-});
+const glyphs = @import("../core/glyphs.zig");
+const text_face = @import("../core/text_face.zig");
+const estimator = @import("../core/text_estimator.zig");
 
 /// Clay-shaped text extent.
-pub const TextExtent = struct {
-    w: f32,
-    h: f32,
-};
+pub const TextExtent = text_face.TextExtent;
 
 pub const ResolveFontError = error{
     FontNotFound,
@@ -61,15 +56,14 @@ pub fn readFontBytes(path: [:0]const u8, alloc: std.mem.Allocator) ![]u8 {
 }
 
 /// Pure-Zig fallback: deterministic, no C deps.
-pub fn estimatorExtent(text: []const u8, font_size: u16) TextExtent {
-    const size: f32 = @floatFromInt(font_size);
-    const h = size * 1.2;
-    if (text.len == 0) return .{ .w = 0, .h = h };
-    const len: f32 = @floatFromInt(text.len);
-    return .{ .w = len * size * 0.6, .h = h };
-}
+pub const estimatorExtent = estimator.estimatorExtent;
+pub const hashMeasureKey = estimator.hashMeasureKey;
+pub const extentCacheReset = estimator.extentCacheReset;
 
-/// Pango family for measurement + rendering.
+/// The extent Clay lays a box out with: measured by the face that draws the run, exactly as every other backend does it.
+pub const measureText = text_face.measureText;
+
+/// Family name of the resolved face, for a host that would rather ask a system text engine than carry the glyphs itself.
 var cached_family: ?[:0]const u8 = null;
 
 pub fn pangoFamily() [:0]const u8 {
@@ -94,108 +88,225 @@ pub fn pangoFamily() [:0]const u8 {
     return fam;
 }
 
-/// Small extent cache: hover motion re-measures the same ~20 static labels every frame (once in Clay layout via clayMeasure, once in drawTextPango).
-const extent_cache_size: usize = 128;
+// ---- the rasteriser ----
 
-const ExtentEntry = struct {
-    hash: u64 = 0,
-    w: f32 = 0,
-    h: f32 = 0,
-    valid: bool = false,
+/// One run as 8-bit coverage, one byte per pixel: the red channel the GLES text shader samples.
+pub const RunBitmap = struct {
+    pixels: []u8,
+    width: u32,
+    height: u32,
+
+    /// Release the coverage buffer. The bitmap owns nothing else.
+    pub fn deinit(self: RunBitmap, alloc: std.mem.Allocator) void {
+        alloc.free(self.pixels);
+    }
 };
 
-var extent_cache: [extent_cache_size]ExtentEntry = [_]ExtentEntry{.{}} ** extent_cache_size;
-var extent_cache_next: usize = 0;
-pub var extent_hits: u64 = 0;
-pub var extent_misses: u64 = 0;
+/// Rasterise `run` at (`origin_x`, `origin_y`) into coverage of `box_h`, pen advances and glyph snapping exactly as the CPU reference does.
+pub fn rasterizeRun(
+    alloc: std.mem.Allocator,
+    run: []const u8,
+    font_size: u16,
+    origin_x: f32,
+    origin_y: f32,
+    box_h: f32,
+) ?RunBitmap {
+    if (run.len == 0) return null;
+    const face = text_face.font() orelse return null;
+    const fs: u16 = if (font_size == 0) 16 else font_size;
+    const m = glyphs.measure(face, run, fs);
+    if (m.width <= 0) return null;
 
-/// Pure + headless-testable hash for the extent cache.
-pub fn hashMeasureKey(text_bytes: []const u8, font_size: u16) u64 {
-    var h: u64 = 0xcbf29ce484222325;
-    for (text_bytes) |b| {
-        h ^= b;
-        h *%= 0x100000001b3;
+    const line_h = text_face.lineHeight(fs);
+    const box = if (box_h > 0) box_h else line_h;
+    // One spare column each way: the pen may round up on the first glyph and down on the last.
+    const w: u32 = @intFromFloat(@ceil(m.width) + 2);
+    const h: u32 = @intFromFloat(@ceil(@max(box, line_h)) + 1);
+    if (w == 0 or h == 0) return null;
+
+    const pixels = alloc.alloc(u8, @as(usize, w) * @as(usize, h)) catch return null;
+    @memset(pixels, 0);
+
+    const baseline = origin_y + (if (glyphs.capBox(face, fs)) |cap|
+        (if (box_h > 0) (box_h - cap.height) * 0.5 else 0) - cap.top
+    else
+        (if (box_h > 0) box_h - line_h else 0) * 0.5 + m.ascent);
+    // The bitmap is blitted on this whole pixel, so glyph rows and columns are measured from it.
+    const grid_x: f32 = @floor(origin_x);
+    const grid_y: f32 = @floor(origin_y);
+
+    var pen = origin_x;
+    var i: usize = 0;
+    while (i < run.len) {
+        const cp = glyphs.nextCodepoint(run, &i);
+        const gm = face.glyphMetrics(cp, fs);
+        if (glyphs.cachedGlyph(face, cp, fs)) |mask| {
+            const gx: f32 = @floor(pen + mask.xoff) - grid_x;
+            const gy: f32 = @floor(baseline + mask.yoff) - grid_y;
+            blitCoverage(pixels, w, h, gx, gy, mask.data[0 .. mask.w * mask.h], mask.w, mask.h);
+        }
+        pen += gm.advance;
     }
-    h ^= @as(u64, font_size);
-    h *%= 0x100000001b3;
-    h ^= @as(u64, text_bytes.len);
-    h *%= 0x100000001b3;
-    return h;
+    return .{ .pixels = pixels, .width = w, .height = h };
 }
 
-fn extentLookup(hash: u64) ?TextExtent {
-    for (extent_cache) |e| {
-        if (e.valid and e.hash == hash) return .{ .w = e.w, .h = e.h };
+/// OR one glyph's coverage into the run bitmap, clipping to the bitmap's edges.
+fn blitCoverage(dst: []u8, w: u32, h: u32, gx: f32, gy: f32, src: []const u8, sw: usize, sh: usize) void {
+    const wi: i64 = @intCast(w);
+    const hi: i64 = @intCast(h);
+    const ox: i64 = @intFromFloat(gx);
+    const oy: i64 = @intFromFloat(gy);
+    var row: usize = 0;
+    while (row < sh) : (row += 1) {
+        const y = oy + @as(i64, @intCast(row));
+        if (y < 0 or y >= hi) continue;
+        var col: usize = 0;
+        while (col < sw) : (col += 1) {
+            const x = ox + @as(i64, @intCast(col));
+            if (x < 0 or x >= wi) continue;
+            const coverage = src[row * sw + col];
+            if (coverage == 0) continue;
+            const o = @as(usize, @intCast(y)) * @as(usize, w) + @as(usize, @intCast(x));
+            dst[o] = @max(dst[o], coverage);
+        }
+    }
+}
+
+// ===================== tests (Linux-only `native-test` leg) =====================
+
+fn requireFace() ?*glyphs.Font {
+    // Both caches are process-lifetime singletons that outlive a test, so they take the page allocator, the same rule `text_face.zig` follows.
+    text_face.setAllocator(std.heap.page_allocator);
+    glyphs.initCache(std.heap.page_allocator);
+    return text_face.font();
+}
+
+/// The rightmost column that carries ink, plus one — how wide the run actually paints.
+fn inkWidth(b: RunBitmap) u32 {
+    var last: u32 = 0;
+    var y: u32 = 0;
+    while (y < b.height) : (y += 1) {
+        var x: u32 = 0;
+        while (x < b.width) : (x += 1) {
+            if (b.pixels[@as(usize, y) * b.width + x] != 0) last = @max(last, x + 1);
+        }
+    }
+    return last;
+}
+
+/// The topmost row that carries ink, or null for a run with none.
+fn firstInkRow(b: RunBitmap) ?u32 {
+    for (0..b.height) |y| {
+        for (0..b.width) |x| {
+            if (b.pixels[y * b.width + x] != 0) return @intCast(y);
+        }
     }
     return null;
 }
 
-fn extentStore(hash: u64, ext: TextExtent) void {
-    extent_cache[extent_cache_next] = .{ .hash = hash, .w = ext.w, .h = ext.h, .valid = true };
-    extent_cache_next = (extent_cache_next + 1) % extent_cache_size;
-}
-
-/// Test seam: clear the cache + stats.
-pub fn extentCacheReset() void {
-    for (&extent_cache) |*e| e.valid = false;
-    extent_cache_next = 0;
-    extent_hits = 0;
-    extent_misses = 0;
-}
-
-/// Build "Family 18px" Pango font-desc string into buf (NUL-terminated).
-pub fn pangoDescInto(buf: *[128]u8, font_size: u16) ?[*:0]const u8 {
-    if (font_size == 0) return null;
-    const family = pangoFamily();
-    _ = std.fmt.bufPrint(buf, "{s} {d}px\x00", .{ family, font_size }) catch return null;
-    return @ptrCast(buf);
-}
-
-test "pangoDescInto marks the size absolute (px), never points" {
-    // Points would be x4/3 larger at Pango's default 96 dpi, which is exactly the Linux-vs-macOS size mismatch this pins shut.
-    var buf: [128]u8 = undefined;
-    const desc = pangoDescInto(&buf, 18) orelse return error.TestUnexpectedResult;
-    try std.testing.expect(std.mem.endsWith(u8, std.mem.span(desc), " 18px"));
-    try std.testing.expect(pangoDescInto(&buf, 0) == null);
-}
-
-/// Try Pango measurement via the C shim.
-fn measurePango(text: []const u8, font_size: u16) ?TextExtent {
-    if (font_size == 0) return null;
-    if (text.len == 0) {
-        // Keep Clay contract (w=0, full height) but use Pango line height when available: measure "M" once.
-        if (measurePango("M", font_size)) |m| return .{ .w = 0, .h = m.h };
-        return null;
+/// The row after the last one that carries ink, or null for a run with none.
+fn inkBottom(b: RunBitmap) ?u32 {
+    var y = b.height;
+    while (y > 0) {
+        y -= 1;
+        for (0..b.width) |x| {
+            if (b.pixels[y * b.width + x] != 0) return @intCast(y + 1);
+        }
     }
-    if (text.len > 4095) return null;
-
-    var desc_buf: [128]u8 = undefined;
-    const desc_str = pangoDescInto(&desc_buf, font_size) orelse return null;
-
-    var w: c_int = 0;
-    var h: c_int = 0;
-    const ok = shim.glinlandui_text_measure(
-        @ptrCast(text.ptr),
-        @intCast(text.len),
-        desc_str,
-        &w,
-        &h,
-    );
-    if (!ok or w < 0 or h <= 0) return null;
-    return .{ .w = @floatFromInt(w), .h = @floatFromInt(h) };
+    return null;
 }
 
-/// Pixel extent of `text` at `font_size` for Clay layout.
-pub fn measureText(text_bytes: []const u8, font_size: u16) TextExtent {
-    const key = hashMeasureKey(text_bytes, font_size);
-    if (extentLookup(key)) |hit| {
-        extent_hits += 1;
-        return hit;
+test "a run paints no wider than the box the layout measured for it" {
+    // The Linux renderer used to lay text out with the bundled face and paint it with a 1.333x wider one: every label overflowed.
+    if (requireFace() == null) return error.SkipZigTest;
+    const runs = [_][]const u8{ "Run query", "Explain", "Include view", "background surface" };
+    for (runs) |run| {
+        for ([_]u16{ 12, 13, 14, 18 }) |size| {
+            const measured = measureText(run, size).w;
+            const bmp = rasterizeRun(std.testing.allocator, run, size, 0, 0, 0) orelse continue;
+            defer bmp.deinit(std.testing.allocator);
+            try std.testing.expect(@as(f32, @floatFromInt(inkWidth(bmp))) <= measured + 2);
+        }
     }
-    extent_misses += 1;
-    const ext: TextExtent = if (measurePango(text_bytes, font_size)) |m| m else estimatorExtent(text_bytes, font_size);
-    extentStore(key, ext);
-    return ext;
+}
+
+test "a run fills most of the width it was measured at" {
+    // The other half of the same contract: a run that paints a fraction of its box is the mirror bug (too-wide boxes, drifting carets).
+    if (requireFace() == null) return error.SkipZigTest;
+    for ([_][]const u8{ "Run query", "background surface" }) |run| {
+        const measured = measureText(run, 14).w;
+        const bmp = rasterizeRun(std.testing.allocator, run, 14, 0, 0, 0) orelse return error.SkipZigTest;
+        defer bmp.deinit(std.testing.allocator);
+        try std.testing.expect(@as(f32, @floatFromInt(inkWidth(bmp))) > measured * 0.8);
+    }
+}
+
+test "a taller box centres the ink in it instead of clipping it" {
+    // Clay hands the run a line box; a taller one (a button's content box) must move the glyphs with it, not clip them.
+    if (requireFace() == null) return error.SkipZigTest;
+    const line_h = text_face.lineHeight(14);
+    const tight = rasterizeRun(std.testing.allocator, "Ag", 14, 0, 0, 0) orelse return error.SkipZigTest;
+    defer tight.deinit(std.testing.allocator);
+    const tall = rasterizeRun(std.testing.allocator, "Ag", 14, 0, 0, line_h * 3) orelse return error.SkipZigTest;
+    defer tall.deinit(std.testing.allocator);
+    const tight_top = firstInkRow(tight) orelse return error.SkipZigTest;
+    const tall_top = firstInkRow(tall) orelse return error.SkipZigTest;
+    try std.testing.expect(@as(f32, @floatFromInt(tall_top)) > @as(f32, @floatFromInt(tight_top)) + line_h * 0.5);
+}
+
+test "the same run on the same sub-pixel phase paints identical coverage" {
+    // The texture depends on the box and the sub-pixel phase alone, which is why the phase is in the cache key.
+    if (requireFace() == null) return error.SkipZigTest;
+    const here = rasterizeRun(std.testing.allocator, "Run query", 13, 40.25, 100.75, 16.8) orelse return error.SkipZigTest;
+    defer here.deinit(std.testing.allocator);
+    const far = rasterizeRun(std.testing.allocator, "Run query", 13, 743.25, 850.75, 16.8) orelse return error.SkipZigTest;
+    defer far.deinit(std.testing.allocator);
+    try std.testing.expectEqualSlices(u8, here.pixels, far.pixels);
+}
+
+test "a label sits inside the pill the layout drew around it" {
+    // A button's content box starts at y = 166.4 and is 16.8 tall: no glyph row may land on the border above or below it.
+    if (requireFace() == null) return error.SkipZigTest;
+    const box_h = text_face.lineHeight(13);
+    const bmp = rasterizeRun(std.testing.allocator, "Run query", 13, 36.4, 166.4, box_h) orelse return error.SkipZigTest;
+    defer bmp.deinit(std.testing.allocator);
+    const bottom = inkBottom(bmp) orelse return error.SkipZigTest;
+    try std.testing.expect(firstInkRow(bmp) != null);
+    try std.testing.expect(@as(f32, @floatFromInt(bottom)) <= box_h);
+}
+
+test "a space advances the pen without inking it" {
+    // A missing space advance is what runs words together; a spaced-out run is what proves the advance is real.
+    if (requireFace() == null) return error.SkipZigTest;
+    const spaced = rasterizeRun(std.testing.allocator, "a a", 14, 0, 0, 0) orelse return error.SkipZigTest;
+    defer spaced.deinit(std.testing.allocator);
+    const tight = rasterizeRun(std.testing.allocator, "aa", 14, 0, 0, 0) orelse return error.SkipZigTest;
+    defer tight.deinit(std.testing.allocator);
+    try std.testing.expect(spaced.width > tight.width);
+
+    const blank = rasterizeRun(std.testing.allocator, "   ", 14, 0, 0, 0) orelse return error.SkipZigTest;
+    defer blank.deinit(std.testing.allocator);
+    var inked: usize = 0;
+    for (blank.pixels) |p| {
+        if (p != 0) inked += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 0), inked);
+}
+
+test "rasterising the same run twice paints the same coverage" {
+    if (requireFace() == null) return error.SkipZigTest;
+    const a = rasterizeRun(std.testing.allocator, "Invoice 42", 15, 12, 40, 0) orelse return error.SkipZigTest;
+    defer a.deinit(std.testing.allocator);
+    const b = rasterizeRun(std.testing.allocator, "Invoice 42", 15, 12, 40, 0) orelse return error.SkipZigTest;
+    defer b.deinit(std.testing.allocator);
+    try std.testing.expectEqual(a.width, b.width);
+    try std.testing.expectEqual(a.height, b.height);
+    try std.testing.expectEqualSlices(u8, a.pixels, b.pixels);
+}
+
+test "an empty run paints nothing rather than allocating a texture" {
+    if (requireFace() == null) return error.SkipZigTest;
+    try std.testing.expect(rasterizeRun(std.testing.allocator, "", 14, 0, 0, 0) == null);
 }
 
 test "resolveFont returns an existing .ttf/.otf/.ttc path" {
@@ -205,47 +316,4 @@ test "resolveFont returns an existing .ttf/.otf/.ttc path" {
         std.mem.endsWith(u8, path, ".otf") or
         std.mem.endsWith(u8, path, ".ttc");
     try std.testing.expect(ok);
-}
-
-test "measureText returns positive extent for non-empty, zero width for empty" {
-    const m = measureText("Settings", 18);
-    try std.testing.expect(m.w > 0);
-    try std.testing.expect(m.h > 0);
-    const e = measureText("", 18);
-    try std.testing.expectEqual(@as(f32, 0), e.w);
-}
-
-test "measureText is deterministic and pango height sane" {
-    const a = measureText("Settings", 18);
-    const b = measureText("Settings", 18);
-    try std.testing.expectApproxEqAbs(a.w, b.w, 1e-6);
-    try std.testing.expectApproxEqAbs(a.h, b.h, 1e-6);
-    // Line height should be in a sane range (0.8x..2.0x font size).
-    try std.testing.expect(a.h >= 18 * 0.8 and a.h <= 18 * 2.0);
-}
-
-test "estimatorExtent matches legacy 0.6 advance contract" {
-    const e = estimatorExtent("AB", 18);
-    try std.testing.expectApproxEqAbs(@as(f32, 2 * 18 * 0.6), e.w, 1e-4);
-    try std.testing.expectApproxEqAbs(@as(f32, 18 * 1.2), e.h, 1e-6);
-}
-
-test "hashMeasureKey differs by bytes/size/len" {
-    const a = hashMeasureKey("Settings", 18);
-    const b = hashMeasureKey("Settings", 18);
-    try std.testing.expectEqual(a, b);
-    try std.testing.expect(hashMeasureKey("Settings", 16) != a);
-    try std.testing.expect(hashMeasureKey("Setting", 18) != a);
-}
-
-test "measureText caches repeats (hit after miss)" {
-    extentCacheReset();
-    const a = measureText("CacheMe", 18);
-    try std.testing.expectEqual(@as(u64, 0), extent_hits);
-    try std.testing.expectEqual(@as(u64, 1), extent_misses);
-    const b = measureText("CacheMe", 18);
-    try std.testing.expectEqual(@as(u64, 1), extent_hits);
-    try std.testing.expectApproxEqAbs(a.w, b.w, 1e-6);
-    try std.testing.expectApproxEqAbs(a.h, b.h, 1e-6);
-    extentCacheReset();
 }

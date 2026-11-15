@@ -135,15 +135,11 @@ pub fn build(b: *std.Build) void {
         // Linker stub: cursor-shape-v1-protocol.c references zwp_tablet_tool_v2_interface (its get_tablet_tool_v2 request takes a tablet-tool object) but.
         addTabletToolStub(b, mod);
 
-        // Pangocairo shim TU + includes + system libs.
-        addPangoShim(b, mod);
-
         // System libs propagate to consumers via linkLibrary chain.
         mod.linkSystemLibrary("wayland-client", .{});
         mod.linkSystemLibrary("wayland-egl", .{});
         mod.linkSystemLibrary("EGL", .{});
         mod.linkSystemLibrary("GLESv2", .{});
-        linkTextEngine(mod);
     }
     // Clay is a portable C implementation, and every NATIVE host needs libc alongside it; all remaining native dependencies above are platform-gated.
     if (is_wasm) {
@@ -706,40 +702,6 @@ fn stbFlags(is_wasm: bool) []const []const u8 {
     return if (is_wasm) &.{ "-DSTBI_NO_STDIO=1", "-DSTBIR_NO_SIMD=1" } else &.{};
 }
 
-// Pangocairo shim: compiles src/linux/shim.c (real pango/cairo includes) and exposes src/linux/ for @cImport("shim.h").
-fn addPangoShim(b: *std.Build, m: *std.Build.Module) void {
-    // src/linux, not src/: the shim header moved into the Linux backend folder with its TU, and @cInclude("shim.h") from linux/text.zig and.
-    m.addIncludePath(b.path("src/linux"));
-    m.addCSourceFile(.{
-        .file = b.path("src/linux/shim.c"),
-        .flags = &.{
-            "-I/usr/include/pango-1.0",
-            "-I/usr/include/cairo",
-            "-I/usr/include/glib-2.0",
-            "-I/usr/lib/glib-2.0/include",
-            "-I/usr/include/harfbuzz",
-            "-I/usr/include/freetype2",
-            "-I/usr/include/fribidi",
-            "-I/usr/include/pixman-1",
-            "-I/usr/include/libpng16",
-            "-I/usr/include/sysprof-6",
-            "-D_GNU_SOURCE=1",
-        },
-    });
-}
-
-// Text-engine system libs: pangocairo stack.
-fn linkTextEngine(m: *std.Build.Module) void {
-    m.linkSystemLibrary("cairo", .{});
-    m.linkSystemLibrary("pango-1.0", .{});
-    m.linkSystemLibrary("pangocairo-1.0", .{});
-    m.linkSystemLibrary("fontconfig", .{});
-    m.linkSystemLibrary("freetype", .{});
-    m.linkSystemLibrary("harfbuzz", .{});
-    m.linkSystemLibrary("gobject-2.0", .{});
-    m.linkSystemLibrary("glib-2.0", .{});
-}
-
 const WaylandProtocol = struct {
     header: std.Build.LazyPath,
     code: std.Build.LazyPath,
@@ -783,7 +745,8 @@ fn makeNativeTestStep(
     m.addCSourceFile(.{ .file = protocols.cursor_shape.code });
     addTabletToolStub(b, m);
     addVendoredStbInclude(b, m);
-    addPangoShim(b, m);
+    m.addCSourceFile(.{ .file = b.path("src/core/stb_truetype_impl.c"), .flags = stbFlags(false) });
+    m.addCSourceFile(.{ .file = b.path("src/core/stb_image_impl.c"), .flags = stbFlags(false) });
     const test_exe = b.addTest(.{ .root_module = m });
     test_exe.root_module.linkSystemLibrary("c", .{});
     test_exe.root_module.linkSystemLibrary("GLESv2", .{});
@@ -791,7 +754,6 @@ fn makeNativeTestStep(
     test_exe.root_module.linkSystemLibrary("wayland-client", .{});
     test_exe.root_module.linkSystemLibrary("wayland-egl", .{});
     test_exe.root_module.linkSystemLibrary("EGL", .{});
-    linkTextEngine(test_exe.root_module);
     return &b.addRunArtifact(test_exe).step;
 }
 

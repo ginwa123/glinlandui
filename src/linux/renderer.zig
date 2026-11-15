@@ -15,17 +15,9 @@ const gl = @cImport({
     @cInclude("GLES3/gl3.h");
 });
 
-const stb = @cImport({
-    @cInclude("stb/stb_truetype.h");
-});
-
 const stbi = @cImport({
     @cInclude("stb/stb_image.h");
     @cInclude("stb/stb_image_resize2.h");
-});
-
-const shim = @cImport({
-    @cInclude("shim.h");
 });
 
 /// Headless-testable draw command: rect fill or text run.
@@ -76,37 +68,26 @@ pub fn extentToClay(ext: text.TextExtent) cl.Dimensions {
     return .{ .w = ext.w, .h = ext.h };
 }
 
-/// Normalize a Clay 0-255 color (or 0-1 GL color) to cairo 0-1 RGBA.
-fn clayToCairo(clay_color: [4]f32) [4]f64 {
+/// Normalize a Clay 0-255 color (or an already-0-1 one) to 0-1 GL RGBA.
+fn straightColor(clay_color: [4]f32) [4]f32 {
     const mx = @max(@max(clay_color[0], clay_color[1]), @max(clay_color[2], clay_color[3]));
-    if (mx <= 1.0) {
-        return .{
-            @floatCast(clay_color[0]),
-            @floatCast(clay_color[1]),
-            @floatCast(clay_color[2]),
-            @floatCast(clay_color[3]),
-        };
-    }
+    if (mx <= 1.0) return clay_color;
     return .{
-        @floatCast(clay_color[0] / 255.0),
-        @floatCast(clay_color[1] / 255.0),
-        @floatCast(clay_color[2] / 255.0),
-        @floatCast(clay_color[3] / 255.0),
+        clay_color[0] / 255.0,
+        clay_color[1] / 255.0,
+        clay_color[2] / 255.0,
+        clay_color[3] / 255.0,
     };
 }
 
 // ---- GLES3 renderer (exe only; guarded in tests) ----
 
-const atlas_w: c_int = 512;
-const atlas_h: c_int = 512;
-const atlas_font_px: f32 = 18.0;
+// Largest run this renderer will build a coverage texture for; past it the rect fallback draws instead of a 4 MB upload.
+const text_max_w: u32 = 2048;
+const text_max_h: u32 = 512;
+const text_max_bytes: usize = 4095;
 
-// Max single text-run surface (w*h*4 bytes).
-const pango_max_w: i32 = 2048;
-const pango_max_h: i32 = 256;
-const pango_max_bytes: usize = 4095;
-
-/// Pango texture cache: static settings labels (~20) re-rendered every hover frame cost ~35 Pango/cairo calls + alloc + upload + delete each.
+/// Text texture cache: a run's coverage is the same pixels whatever colour it is drawn in, so a hover repaint re-uses it.
 pub const text_cache_size: usize = 64;
 
 pub const TextCacheEntry = struct {
@@ -118,8 +99,8 @@ pub const TextCacheEntry = struct {
     last_used: u64 = 0,
 };
 
-/// Pure + headless-testable key for the texture cache.
-pub fn hashTextKey(text_bytes: []const u8, font_size: u16, clay_color: [4]f32) u64 {
+/// Pure + headless-testable key for the texture cache: the run, its size, its box, and the sub-pixel origin the glyphs snap from.
+pub fn hashTextKey(text_bytes: []const u8, font_size: u16, box_height: i32, origin_x: f32, origin_y: f32) u64 {
     var h: u64 = 0xcbf29ce484222325;
     for (text_bytes) |b| {
         h ^= b;
@@ -129,11 +110,19 @@ pub fn hashTextKey(text_bytes: []const u8, font_size: u16, clay_color: [4]f32) u
     h *%= 0x100000001b3;
     h ^= @as(u64, text_bytes.len);
     h *%= 0x100000001b3;
-    for (clay_color) |c| {
-        h ^= @as(u64, @as(u32, @bitCast(c)));
-        h *%= 0x100000001b3;
-    }
+    h ^= @as(u64, @as(u32, @bitCast(box_height)));
+    h *%= 0x100000001b3;
+    h ^= phaseByte(origin_x);
+    h *%= 0x100000001b3;
+    h ^= phaseByte(origin_y);
+    h *%= 0x100000001b3;
     return h;
+}
+
+/// The fraction of a coordinate, quantised to 1/256 of a pixel.
+fn phaseByte(v: f32) u8 {
+    const frac = v - @floor(v);
+    return @intFromFloat(@floor(frac * 256.0));
 }
 
 /// Pure LRU victim pick: first invalid slot, else smallest last_used.
@@ -331,8 +320,8 @@ const text_frag_src: [:0]const u8 =
     \\}
 ;
 
-// Pango path: color is baked into the cairo image, so the shader outputs the texture directly (keeps subpixel AA + correct premultiplied alpha after.
-const pango_frag_src: [:0]const u8 =
+// Image path: the decoded pixels carry their own colour, so the shader outputs the texture directly.
+const image_frag_src: [:0]const u8 =
     \\#version 300 es
     \\precision mediump float;
     \\in vec2 v_uv;
@@ -381,41 +370,13 @@ fn linkProgram(vs: c_uint, fs: c_uint) !c_uint {
     return prog;
 }
 
-/// Load an entire file via libc fopen/fread (no Io needed in run()).
-fn loadFileC(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (path.len + 1 > path_buf.len) return error.NameTooLong;
-    @memcpy(path_buf[0..path.len], path);
-    path_buf[path.len] = 0;
-    const cpath: [*:0]const u8 = @ptrCast(&path_buf);
-    const f = std.c.fopen(cpath, "rb") orelse return error.FileNotFound;
-    defer _ = std.c.fclose(f);
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(allocator);
-    var chunk: [8192]u8 = undefined;
-    while (true) {
-        const n = std.c.fread(@ptrCast(&chunk), 1, chunk.len, f);
-        if (n == 0) break;
-        try out.appendSlice(allocator, chunk[0..n]);
-        if (n < chunk.len) break;
-    }
-    if (out.items.len == 0) return error.EmptyFile;
-    return out.toOwnedSlice(allocator);
-}
-
 pub const Renderer = struct {
     alloc: std.mem.Allocator,
     prog_rect: c_uint = 0,
     prog_text: c_uint = 0,
-    prog_pango: c_uint = 0,
+    prog_image: c_uint = 0,
     vao: c_uint = 0,
     vbo: c_uint = 0,
-    atlas_tex: c_uint = 0,
-    has_atlas: bool = false,
-    baked: [96]stb.stbtt_bakedchar = undefined,
-    font_data: []u8 = &.{},
-    font_info: stb.stbtt_fontinfo = std.mem.zeroes(stb.stbtt_fontinfo),
-    has_font: bool = false,
     /// Cached uniform locations (queried once at init, reused per quad).
     loc_rect_res: c_int = -1,
     loc_rect_pos: c_int = -1,
@@ -424,16 +385,16 @@ pub const Renderer = struct {
     loc_rect_rad: c_int = -1,
     loc_rect_mode: c_int = -1,
     loc_rect_border: c_int = -1,
-    loc_pango_res: c_int = -1,
-    loc_pango_pos: c_int = -1,
-    loc_pango_size: c_int = -1,
-    loc_pango_tex: c_int = -1,
+    loc_image_res: c_int = -1,
+    loc_image_pos: c_int = -1,
+    loc_image_size: c_int = -1,
+    loc_image_tex: c_int = -1,
     loc_text_res: c_int = -1,
     loc_text_pos: c_int = -1,
     loc_text_size: c_int = -1,
     loc_text_col: c_int = -1,
     loc_text_tex: c_int = -1,
-    /// Pango texture LRU (see text_cache_size docs).
+    /// Text coverage texture LRU (see text_cache_size docs).
     text_cache: [text_cache_size]TextCacheEntry = [_]TextCacheEntry{.{}} ** text_cache_size,
     text_cache_clock: u64 = 0,
     text_cache_hits: u64 = 0,
@@ -463,12 +424,12 @@ pub const Renderer = struct {
         defer gl.glDeleteShader(fs_text);
         self.prog_text = try linkProgram(vs_text, fs_text);
 
-        // Pango RGBA program shares the text vertex shader.
-        const vs_pango = try compileShader(gl.GL_VERTEX_SHADER, text_vert_src);
-        defer gl.glDeleteShader(vs_pango);
-        const fs_pango = try compileShader(gl.GL_FRAGMENT_SHADER, pango_frag_src);
-        defer gl.glDeleteShader(fs_pango);
-        self.prog_pango = try linkProgram(vs_pango, fs_pango);
+        // The image program shares the text vertex shader.
+        const vs_image = try compileShader(gl.GL_VERTEX_SHADER, text_vert_src);
+        defer gl.glDeleteShader(vs_image);
+        const fs_image = try compileShader(gl.GL_FRAGMENT_SHADER, image_frag_src);
+        defer gl.glDeleteShader(fs_image);
+        self.prog_image = try linkProgram(vs_image, fs_image);
 
         // Cache uniform locations once (per-quad string lookups are pure overhead — see struct docs).
         self.loc_rect_res = gl.glGetUniformLocation(self.prog_rect, "u_res");
@@ -478,10 +439,10 @@ pub const Renderer = struct {
         self.loc_rect_rad = gl.glGetUniformLocation(self.prog_rect, "u_radius");
         self.loc_rect_mode = gl.glGetUniformLocation(self.prog_rect, "u_mode");
         self.loc_rect_border = gl.glGetUniformLocation(self.prog_rect, "u_border");
-        self.loc_pango_res = gl.glGetUniformLocation(self.prog_pango, "u_res");
-        self.loc_pango_pos = gl.glGetUniformLocation(self.prog_pango, "u_pos");
-        self.loc_pango_size = gl.glGetUniformLocation(self.prog_pango, "u_size");
-        self.loc_pango_tex = gl.glGetUniformLocation(self.prog_pango, "u_tex");
+        self.loc_image_res = gl.glGetUniformLocation(self.prog_image, "u_res");
+        self.loc_image_pos = gl.glGetUniformLocation(self.prog_image, "u_pos");
+        self.loc_image_size = gl.glGetUniformLocation(self.prog_image, "u_size");
+        self.loc_image_tex = gl.glGetUniformLocation(self.prog_image, "u_tex");
         self.loc_text_res = gl.glGetUniformLocation(self.prog_text, "u_res");
         self.loc_text_pos = gl.glGetUniformLocation(self.prog_text, "u_pos");
         self.loc_text_size = gl.glGetUniformLocation(self.prog_text, "u_size");
@@ -505,41 +466,7 @@ pub const Renderer = struct {
         gl.glEnableVertexAttribArray(1);
         gl.glVertexAttribPointer(1, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(2 * @sizeOf(f32)));
         gl.glBindVertexArray(0);
-
-        // stb fallback atlas (ASCII 32..126 at 18px).
-        self.initAtlas() catch |err| {
-            log.warn("glyph atlas unavailable ({s}); stb fallback uses rects, pango primary unaffected", .{@errorName(err)});
-            self.has_atlas = false;
-            self.atlas_tex = 0;
-        };
         return self;
-    }
-
-    fn initAtlas(self: *Renderer) !void {
-        const font_path = text.resolveFont() catch return error.FontNotFound;
-        const data = try loadFileC(self.alloc, font_path);
-        errdefer self.alloc.free(data);
-        var info: stb.stbtt_fontinfo = undefined;
-        if (stb.stbtt_InitFont(&info, data.ptr, 0) == 0) return error.FontInitFailed;
-        var bitmap: [atlas_w * atlas_h]u8 = undefined;
-        @memset(&bitmap, 0);
-        const baked_n = stb.stbtt_BakeFontBitmap(data.ptr, 0, atlas_font_px, &bitmap, atlas_w, atlas_h, 32, 96, &self.baked);
-        if (baked_n <= 0) return error.BakeFailed;
-        var tex: c_uint = 0;
-        gl.glGenTextures(1, @ptrCast(&tex));
-        gl.glBindTexture(gl.GL_TEXTURE_2D, tex);
-        gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1);
-        gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_R8, atlas_w, atlas_h, 0, gl.GL_RED, gl.GL_UNSIGNED_BYTE, @ptrCast(&bitmap));
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR);
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR);
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE);
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE);
-        gl.glBindTexture(gl.GL_TEXTURE_2D, 0);
-        self.atlas_tex = tex;
-        self.has_atlas = true;
-        self.font_data = data;
-        self.font_info = info;
-        self.has_font = true;
     }
 
     pub fn deinit(self: *Renderer) void {
@@ -559,10 +486,6 @@ pub const Renderer = struct {
                 e.valid = false;
             }
         }
-        if (self.atlas_tex != 0) {
-            var t = self.atlas_tex;
-            gl.glDeleteTextures(1, @ptrCast(&t));
-        }
         if (self.vbo != 0) {
             var v = self.vbo;
             gl.glDeleteBuffers(1, @ptrCast(&v));
@@ -573,24 +496,8 @@ pub const Renderer = struct {
         }
         if (self.prog_rect != 0) gl.glDeleteProgram(self.prog_rect);
         if (self.prog_text != 0) gl.glDeleteProgram(self.prog_text);
-        if (self.prog_pango != 0) gl.glDeleteProgram(self.prog_pango);
-        if (self.font_data.len != 0) self.alloc.free(self.font_data);
+        if (self.prog_image != 0) gl.glDeleteProgram(self.prog_image);
         self.* = undefined;
-    }
-
-    fn setRectUniforms(self: *Renderer, win_w: i32, win_h: i32, x: f32, y: f32, w: f32, h: f32, color: [4]f32) void {
-        _ = self;
-        const res_w: f32 = @floatFromInt(win_w);
-        const res_h: f32 = @floatFromInt(win_h);
-        const prog: c_uint = 0; // placeholder to keep helper shape; real binds happen in callers
-        _ = prog;
-        _ = res_w;
-        _ = res_h;
-        _ = x;
-        _ = y;
-        _ = w;
-        _ = h;
-        _ = color;
     }
 
     fn drawQuad(self: *Renderer, prog: c_uint, win_w: i32, win_h: i32, x: f32, y: f32, w: f32, h: f32, color: [4]f32) void {
@@ -697,90 +604,6 @@ pub const Renderer = struct {
         }
     }
 
-    /// Draw a straight-RGBA texture (Pango run) with the unit-quad VBO.
-    fn drawRgbaQuad(self: *Renderer, tex: c_uint, win_w: i32, win_h: i32, x: f32, y: f32, w: f32, h: f32) void {
-        if (w <= 0 or h <= 0 or tex == 0) return;
-        const prog = self.prog_pango;
-        gl.glUseProgram(prog);
-        gl.glActiveTexture(gl.GL_TEXTURE0);
-        gl.glBindTexture(gl.GL_TEXTURE_2D, tex);
-        // Unit-quad VBO already bound via VAO (pos + uv 0..1).
-        gl.glBindVertexArray(self.vao);
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.vbo);
-        gl.glEnableVertexAttribArray(0);
-        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(0));
-        gl.glEnableVertexAttribArray(1);
-        gl.glVertexAttribPointer(1, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(2 * @sizeOf(f32)));
-        const rw: f32 = @floatFromInt(win_w);
-        const rh: f32 = @floatFromInt(win_h);
-        const loc_res = self.loc_pango_res;
-        const loc_pos = self.loc_pango_pos;
-        const loc_size = self.loc_pango_size;
-        const loc_tex = self.loc_pango_tex;
-        if (loc_res >= 0) gl.glUniform2f(loc_res, rw, rh);
-        if (loc_pos >= 0) gl.glUniform2f(loc_pos, x, y);
-        if (loc_size >= 0) gl.glUniform2f(loc_size, w, h);
-        if (loc_tex >= 0) gl.glUniform1i(loc_tex, 0);
-        gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4);
-        gl.glBindVertexArray(0);
-        gl.glBindTexture(gl.GL_TEXTURE_2D, 0);
-    }
-
-    fn drawGlyph(self: *Renderer, win_w: i32, win_h: i32, x: f32, y: f32, w: f32, h: f32, uu0: f32, vv0: f32, uu1: f32, vv1: f32, clay_color: [4]f32) void {
-        if (w <= 0 or h <= 0) return;
-        const prog = self.prog_text;
-        gl.glUseProgram(prog);
-        gl.glActiveTexture(gl.GL_TEXTURE0);
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self.atlas_tex);
-        const loc_tex = self.loc_text_tex;
-        if (loc_tex >= 0) gl.glUniform1i(loc_tex, 0);
-        // Custom UV path: bind a temp VBO with this glyph's UVs.
-        var verts: [4][4]f32 = .{
-            .{ 0, 0, uu0, vv0 },
-            .{ 1, 0, uu1, vv0 },
-            .{ 0, 1, uu0, vv1 },
-            .{ 1, 1, uu1, vv1 },
-        };
-        var tmp: c_uint = 0;
-        gl.glGenBuffers(1, @ptrCast(&tmp));
-        gl.glBindVertexArray(self.vao);
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, tmp);
-        gl.glBufferData(gl.GL_ARRAY_BUFFER, @sizeOf(@TypeOf(verts)), @ptrCast(&verts), gl.GL_STREAM_DRAW);
-        gl.glEnableVertexAttribArray(0);
-        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(0));
-        gl.glEnableVertexAttribArray(1);
-        gl.glVertexAttribPointer(1, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(2 * @sizeOf(f32)));
-        const rw: f32 = @floatFromInt(win_w);
-        const rh: f32 = @floatFromInt(win_h);
-        const loc_res = self.loc_text_res;
-        const loc_pos = self.loc_text_pos;
-        const loc_size = self.loc_text_size;
-        const loc_col = self.loc_text_col;
-        if (loc_res >= 0) gl.glUniform2f(loc_res, rw, rh);
-        if (loc_pos >= 0) gl.glUniform2f(loc_pos, x, y);
-        if (loc_size >= 0) gl.glUniform2f(loc_size, w, h);
-        if (loc_col >= 0) {
-            const mx = @max(@max(clay_color[0], clay_color[1]), @max(clay_color[2], clay_color[3]));
-            if (mx <= 1.0) {
-                gl.glUniform4f(loc_col, clay_color[0], clay_color[1], clay_color[2], clay_color[3]);
-            } else {
-                gl.glUniform4f(loc_col, clay_color[0] / 255.0, clay_color[1] / 255.0, clay_color[2] / 255.0, clay_color[3] / 255.0);
-            }
-        }
-        gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4);
-        gl.glBindVertexArray(0);
-        gl.glDeleteBuffers(1, @ptrCast(&tmp));
-        // Restore unit-quad VBO binding for rect path.
-        gl.glBindVertexArray(self.vao);
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.vbo);
-        gl.glEnableVertexAttribArray(0);
-        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(0));
-        gl.glEnableVertexAttribArray(1);
-        gl.glVertexAttribPointer(1, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(2 * @sizeOf(f32)));
-        gl.glBindVertexArray(0);
-        gl.glBindTexture(gl.GL_TEXTURE_2D, 0);
-    }
-
     fn drawTextFallback(self: *Renderer, win_w: i32, win_h: i32, bbox_x: f32, bbox_y: f32, text_bytes: []const u8, font_size: u16, clay_color: [4]f32) void {
         const adv = estimatorAdvance(if (font_size == 0) 16 else font_size);
         const fs: f32 = @floatFromInt(if (font_size == 0) 16 else font_size);
@@ -791,105 +614,91 @@ pub const Renderer = struct {
         }
     }
 
-    /// Primary text path: PangoLayout -> cairo ARGB32 -> RGBA GL texture.
-    fn drawTextPango(self: *Renderer, win_w: i32, win_h: i32, bbox_x: f32, bbox_y: f32, text_bytes: []const u8, font_size: u16, clay_color: [4]f32) bool {
-        if (comptime builtin.is_test) return false;
-        if (text_bytes.len == 0 or text_bytes.len > pango_max_bytes) return false;
+    /// One run of text: coverage rasterised with the face the layout measured it with, cached as an R8 texture, tinted by u_color.
+    fn drawTextCmd(self: *Renderer, win_w: i32, win_h: i32, bbox_x: f32, bbox_y: f32, bbox_h: f32, text_bytes: []const u8, font_size: u16, clay_color: [4]f32) void {
+        if (comptime builtin.is_test) return;
+        if (text_bytes.len == 0 or text_bytes.len > text_max_bytes) return;
         const fs: u16 = if (font_size == 0) 16 else font_size;
+        const box_h: i32 = @intFromFloat(@round(bbox_h));
+        // The bitmap is blitted on whole pixels and its glyphs snap from the same fractional origin, so it goes here.
+        const grid_x = @floor(bbox_x);
+        const grid_y = @floor(bbox_y);
 
-        // Cheap pure hash first — hits skip Pango measure + render entirely.
-        const key = hashTextKey(text_bytes, fs, clay_color);
+        // A run's coverage does not depend on its colour, so a hover repaint finds it by (run, size, box, sub-pixel origin).
+        const key = hashTextKey(text_bytes, fs, box_h, bbox_x, bbox_y);
         self.text_cache_clock += 1;
         for (&self.text_cache) |*e| {
             if (e.valid and e.hash == key and e.tex != 0) {
                 e.last_used = self.text_cache_clock;
                 self.text_cache_hits += 1;
-                self.drawRgbaQuad(e.tex, win_w, win_h, bbox_x, bbox_y, @floatFromInt(e.w), @floatFromInt(e.h));
-                gl.glBindTexture(gl.GL_TEXTURE_2D, 0);
-                return true;
+                self.drawCoverageQuad(e.tex, win_w, win_h, grid_x, grid_y, @floatFromInt(e.w), @floatFromInt(e.h), clay_color);
+                return;
             }
         }
         self.text_cache_misses += 1;
 
-        const ext = text.measureText(text_bytes, fs);
-        var iw: i32 = @intFromFloat(@ceil(ext.w));
-        var ih: i32 = @intFromFloat(@ceil(ext.h));
-        if (iw <= 0 or ih <= 0) return true; // empty but measured — nothing to draw
-        if (iw > pango_max_w or ih > pango_max_h) return false;
-        iw = @max(iw, 1);
-        ih = @max(ih, 1);
-
-        var desc_buf: [128]u8 = undefined;
-        const desc_str = text.pangoDescInto(&desc_buf, fs) orelse return false;
-        const rgba = clayToCairo(clay_color);
-
-        var stride: c_int = 0;
-        const surface = shim.glinlandui_text_render(iw, ih, @ptrCast(text_bytes.ptr), @intCast(text_bytes.len), desc_str, rgba[0], rgba[1], rgba[2], rgba[3], &stride) orelse return false;
-        defer shim.glinlandui_surface_destroy(surface);
-        if (stride < iw * 4) return false;
-        const src_ptr = shim.glinlandui_surface_data(surface) orelse return false;
-        const src: [*]const u8 = @ptrCast(src_ptr);
-        const src_len: usize = @intCast(stride * ih);
-
-        // Un-premultiply BGRA (cairo native LE) -> straight RGBA for GL.
-        const out = self.alloc.alloc(u8, src_len) catch return false;
-        defer self.alloc.free(out);
-        var y: i32 = 0;
-        while (y < ih) : (y += 1) {
-            const row: usize = @intCast(y * stride);
-            var x: i32 = 0;
-            while (x < iw) : (x += 1) {
-                const o: usize = row + @as(usize, @intCast(x * 4));
-                const b = src[o + 0];
-                const g = src[o + 1];
-                const r = src[o + 2];
-                const a = src[o + 3];
-                if (a == 0) {
-                    out[o + 0] = 0;
-                    out[o + 1] = 0;
-                    out[o + 2] = 0;
-                    out[o + 3] = 0;
-                } else if (a == 255) {
-                    out[o + 0] = r;
-                    out[o + 1] = g;
-                    out[o + 2] = b;
-                    out[o + 3] = 255;
-                } else {
-                    const af: f32 = @as(f32, @floatFromInt(a)) / 255.0;
-                    out[o + 0] = @intFromFloat(@min(@as(f32, @floatFromInt(r)) / af, 255.0));
-                    out[o + 1] = @intFromFloat(@min(@as(f32, @floatFromInt(g)) / af, 255.0));
-                    out[o + 2] = @intFromFloat(@min(@as(f32, @floatFromInt(b)) / af, 255.0));
-                    out[o + 3] = a;
-                }
-            }
+        const bmp = text.rasterizeRun(self.alloc, text_bytes, fs, bbox_x, bbox_y, bbox_h) orelse {
+            self.drawTextFallback(win_w, win_h, bbox_x, bbox_y, text_bytes, font_size, clay_color);
+            return;
+        };
+        defer bmp.deinit(self.alloc);
+        if (bmp.width > text_max_w or bmp.height > text_max_h) {
+            self.drawTextFallback(win_w, win_h, bbox_x, bbox_y, text_bytes, font_size, clay_color);
+            return;
         }
 
         var tex: c_uint = 0;
         gl.glGenTextures(1, @ptrCast(&tex));
-        if (tex == 0) return false;
+        if (tex == 0) {
+            self.drawTextFallback(win_w, win_h, bbox_x, bbox_y, text_bytes, font_size, clay_color);
+            return;
+        }
         gl.glBindTexture(gl.GL_TEXTURE_2D, tex);
-        gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4);
-        gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, iw, ih, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, @ptrCast(out.ptr));
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR);
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR);
+        gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1);
+        gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_R8, @intCast(bmp.width), @intCast(bmp.height), 0, gl.GL_RED, gl.GL_UNSIGNED_BYTE, @ptrCast(bmp.pixels.ptr));
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST);
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST);
         gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE);
         gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE);
-        // Store in LRU (evict oldest, deleting its GL texture), then draw.
-        if (lruVictim(&self.text_cache)) |idx| {
-            const ev = &self.text_cache[idx];
-            if (ev.valid and ev.tex != 0) {
-                var old = ev.tex;
-                gl.glDeleteTextures(1, @ptrCast(&old));
-            }
-            ev.* = .{ .hash = key, .tex = tex, .w = iw, .h = ih, .valid = true, .last_used = self.text_cache_clock };
-        } else {
+        gl.glBindTexture(gl.GL_TEXTURE_2D, 0);
+
+        const slot = lruVictim(&self.text_cache) orelse {
             var t = tex;
             gl.glDeleteTextures(1, @ptrCast(&t));
-            return false;
+            return;
+        };
+        const ev = &self.text_cache[slot];
+        if (ev.valid and ev.tex != 0) {
+            var old = ev.tex;
+            gl.glDeleteTextures(1, @ptrCast(&old));
         }
-        self.drawRgbaQuad(tex, win_w, win_h, bbox_x, bbox_y, @floatFromInt(iw), @floatFromInt(ih));
+        ev.* = .{ .hash = key, .tex = tex, .w = @intCast(bmp.width), .h = @intCast(bmp.height), .valid = true, .last_used = self.text_cache_clock };
+        self.drawCoverageQuad(tex, win_w, win_h, grid_x, grid_y, @floatFromInt(bmp.width), @floatFromInt(bmp.height), clay_color);
+    }
+
+    /// Blit an 8-bit coverage texture with the text program: the coverage is the alpha, `clay_color` the ink.
+    fn drawCoverageQuad(self: *Renderer, tex: c_uint, win_w: i32, win_h: i32, x: f32, y: f32, w: f32, h: f32, clay_color: [4]f32) void {
+        if (w <= 0 or h <= 0 or tex == 0) return;
+        gl.glUseProgram(self.prog_text);
+        gl.glActiveTexture(gl.GL_TEXTURE0);
+        gl.glBindTexture(gl.GL_TEXTURE_2D, tex);
+        gl.glBindVertexArray(self.vao);
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.vbo);
+        gl.glEnableVertexAttribArray(0);
+        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(0));
+        gl.glEnableVertexAttribArray(1);
+        gl.glVertexAttribPointer(1, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(2 * @sizeOf(f32)));
+        const rw: f32 = @floatFromInt(win_w);
+        const rh: f32 = @floatFromInt(win_h);
+        if (self.loc_text_res >= 0) gl.glUniform2f(self.loc_text_res, rw, rh);
+        if (self.loc_text_pos >= 0) gl.glUniform2f(self.loc_text_pos, x, y);
+        if (self.loc_text_size >= 0) gl.glUniform2f(self.loc_text_size, w, h);
+        if (self.loc_text_tex >= 0) gl.glUniform1i(self.loc_text_tex, 0);
+        const c = straightColor(clay_color);
+        if (self.loc_text_col >= 0) gl.glUniform4f(self.loc_text_col, c[0], c[1], c[2], c[3]);
+        gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4);
+        gl.glBindVertexArray(0);
         gl.glBindTexture(gl.GL_TEXTURE_2D, 0);
-        return true;
     }
 
     /// Max source side accepted for decode (refuse absurd headers before allocating).
@@ -969,14 +778,14 @@ pub const Renderer = struct {
         return up;
     }
 
-    /// Draw an RGBA texture with custom UVs (temp VBO, prog_pango — same pattern as drawGlyph's per-glyph UV path).
+    /// Draw an RGBA texture with custom UVs (temp VBO), for a fit-mapped image.
     fn drawImageQuad(self: *Renderer, tex: c_uint, win_w: i32, win_h: i32, x: f32, y: f32, w: f32, h: f32, uv: [4]f32) void {
         if (w <= 0 or h <= 0 or tex == 0) return;
-        const prog = self.prog_pango;
+        const prog = self.prog_image;
         gl.glUseProgram(prog);
         gl.glActiveTexture(gl.GL_TEXTURE0);
         gl.glBindTexture(gl.GL_TEXTURE_2D, tex);
-        if (self.loc_pango_tex >= 0) gl.glUniform1i(self.loc_pango_tex, 0);
+        if (self.loc_image_tex >= 0) gl.glUniform1i(self.loc_image_tex, 0);
         var verts: [4][4]f32 = .{
             .{ 0, 0, uv[0], uv[1] },
             .{ 1, 0, uv[2], uv[1] },
@@ -994,9 +803,9 @@ pub const Renderer = struct {
         gl.glVertexAttribPointer(1, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(2 * @sizeOf(f32)));
         const rw: f32 = @floatFromInt(win_w);
         const rh: f32 = @floatFromInt(win_h);
-        if (self.loc_pango_res >= 0) gl.glUniform2f(self.loc_pango_res, rw, rh);
-        if (self.loc_pango_pos >= 0) gl.glUniform2f(self.loc_pango_pos, x, y);
-        if (self.loc_pango_size >= 0) gl.glUniform2f(self.loc_pango_size, w, h);
+        if (self.loc_image_res >= 0) gl.glUniform2f(self.loc_image_res, rw, rh);
+        if (self.loc_image_pos >= 0) gl.glUniform2f(self.loc_image_pos, x, y);
+        if (self.loc_image_size >= 0) gl.glUniform2f(self.loc_image_size, w, h);
         gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4);
         gl.glBindVertexArray(0);
         gl.glDeleteBuffers(1, @ptrCast(&tmp));
@@ -1039,56 +848,6 @@ pub const Renderer = struct {
         }
     }
 
-    /// stb fallback: fixed-advance atlas blits (ASCII 32..126).
-    fn drawTextStb(self: *Renderer, win_w: i32, win_h: i32, bbox_x: f32, bbox_y: f32, text_bytes: []const u8, font_size: u16, clay_color: [4]f32) void {
-        if (text_bytes.len == 0) return;
-        if (!self.has_atlas or !self.has_font) {
-            self.drawTextFallback(win_w, win_h, bbox_x, bbox_y, text_bytes, font_size, clay_color);
-            return;
-        }
-        const fs: f32 = @floatFromInt(if (font_size == 0) 16 else font_size);
-        const scale = stb.stbtt_ScaleForPixelHeight(&self.font_info, fs);
-        var ascent: c_int = 0;
-        var descent: c_int = 0;
-        var line_gap: c_int = 0;
-        stb.stbtt_GetFontVMetrics(&self.font_info, &ascent, &descent, &line_gap);
-        const baseline = bbox_y + @as(f32, @floatFromInt(ascent)) * scale;
-        const adv = estimatorAdvance(if (font_size == 0) 16 else font_size);
-        var cursor: f32 = 0;
-        const aw: f32 = @floatFromInt(atlas_w);
-        const ah: f32 = @floatFromInt(atlas_h);
-        for (text_bytes) |ch| {
-            if (ch < 32 or ch > 126) {
-                cursor += adv;
-                continue;
-            }
-            const bc = self.baked[ch - 32];
-            const gw: f32 = @floatFromInt(bc.x1 - bc.x0);
-            const gh: f32 = @floatFromInt(bc.y1 - bc.y0);
-            if (gw > 0 and gh > 0) {
-                const dx = bbox_x + cursor + @as(f32, bc.xoff);
-                const dy = baseline + @as(f32, bc.yoff);
-                self.drawGlyph(win_w, win_h, dx, dy, gw, gh, @as(f32, @floatFromInt(bc.x0)) / aw, @as(f32, @floatFromInt(bc.y0)) / ah, @as(f32, @floatFromInt(bc.x1)) / aw, @as(f32, @floatFromInt(bc.y1)) / ah, clay_color);
-            }
-            cursor += adv;
-        }
-    }
-
-    fn drawTextCmd(self: *Renderer, win_w: i32, win_h: i32, bbox_x: f32, bbox_y: f32, text_bytes: []const u8, font_size: u16, clay_color: [4]f32) void {
-        if (text_bytes.len == 0) return;
-        // Primary: pangocairo. Falls back to stb atlas, then rects.
-        if (self.drawTextPango(win_w, win_h, bbox_x, bbox_y, text_bytes, font_size, clay_color)) return;
-        // drawTextPango returns false in tests / on C failure — but it returns true for empty-after-measure (nothing to draw).
-        if (comptime builtin.is_test) {
-            self.drawTextFallback(win_w, win_h, bbox_x, bbox_y, text_bytes, font_size, clay_color);
-            return;
-        }
-        // If Pango declined because the run was empty-but-measured, don't double-draw via stb: re-check measured width.
-        const ext = text.measureText(text_bytes, if (font_size == 0) 16 else font_size);
-        if (ext.w <= 0) return;
-        self.drawTextStb(win_w, win_h, bbox_x, bbox_y, text_bytes, font_size, clay_color);
-    }
-
     /// Draw a full Clay render-command list.
     pub fn drawCommands(self: *Renderer, commands: []cl.RenderCommand, win_w: i32, win_h: i32) void {
         gl.glViewport(0, 0, win_w, win_h);
@@ -1107,7 +866,7 @@ pub const Renderer = struct {
                     const bb = cmd.bounding_box;
                     const td = cmd.render_data.text;
                     const bytes = td.string_contents.chars[0..@intCast(td.string_contents.length)];
-                    self.drawTextCmd(win_w, win_h, bb.x, bb.y, bytes, td.font_size, td.text_color);
+                    self.drawTextCmd(win_w, win_h, bb.x, bb.y, bb.height, bytes, td.font_size, td.text_color);
                 },
                 .scissor_start => {
                     const bb = cmd.bounding_box;
@@ -1180,20 +939,22 @@ test "cornerRadiusVec4 maps TL,TR,BL,BR and clamps negatives" {
     try std.testing.expectEqual([4]f32{ 0, 5, 0, 6 }, neg);
 }
 
-test "clayToCairo normalizes 0-255 and passes through 0-1" {
-    const c255 = clayToCairo(.{ 255, 128, 0, 255 });
-    try std.testing.expectApproxEqAbs(@as(f64, 1.0), c255[0], 1e-6);
-    try std.testing.expectApproxEqAbs(@as(f64, 128.0 / 255.0), c255[1], 1e-6);
-    const c1 = clayToCairo(.{ 1, 1, 1, 1 });
-    try std.testing.expectApproxEqAbs(@as(f64, 1.0), c1[0], 1e-6);
+test "straightColor normalizes 0-255 and passes 0-1 through" {
+    const c255 = straightColor(.{ 255, 128, 0, 255 });
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), c255[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 128.0 / 255.0), c255[1], 1e-6);
+    const c1 = straightColor(.{ 1, 1, 1, 1 });
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), c1[0], 1e-6);
 }
 
-test "hashTextKey differs by bytes/size/color" {
-    const a = hashTextKey("Settings", 18, .{ 232, 232, 232, 255 });
-    try std.testing.expectEqual(a, hashTextKey("Settings", 18, .{ 232, 232, 232, 255 }));
-    try std.testing.expect(hashTextKey("Settings", 16, .{ 232, 232, 232, 255 }) != a);
-    try std.testing.expect(hashTextKey("Setting", 18, .{ 232, 232, 232, 255 }) != a);
-    try std.testing.expect(hashTextKey("Settings", 18, .{ 255, 0, 0, 255 }) != a);
+test "hashTextKey tells runs, sizes, boxes and sub-pixel origins apart" {
+    const a = hashTextKey("Settings", 18, 22, 40, 100);
+    try std.testing.expectEqual(a, hashTextKey("Settings", 18, 22, 40, 100));
+    try std.testing.expect(hashTextKey("Settings", 16, 22, 40, 100) != a);
+    try std.testing.expect(hashTextKey("Setting", 18, 22, 40, 100) != a);
+    try std.testing.expect(hashTextKey("Settings", 18, 40, 40, 100) != a);
+    // Half a pixel lower is a different texture: the glyphs snap to a different row.
+    try std.testing.expect(hashTextKey("Settings", 18, 22, 40, 100.5) != a);
 }
 
 test "lruVictim prefers invalid slot, else oldest" {
