@@ -953,6 +953,11 @@ floating window with the component tree: id, role and label per row, expandable 
 node's box, clip rectangle, z, actions and flags in the footer. `Escape` closes it, and the app underneath keeps
 running and staying clickable outside the window.
 
+The header's **pick** button arms a picker, like a browser's element inspector: whatever the pointer is over is
+outlined and labelled in place — the deepest node under it, so a key inside a row names the key — and the next click
+opens that node in the window. The outline also appears while the right-click menu is up, so you can see what you are
+about to inspect before you choose it.
+
 The tree holds every widget that registers semantics (`button`, `input`, `list`, `tree`, `scroll`, …), every container
 declared with `box`, and the parent of each. Text runs are not nodes: a Clay text element has no id, so it has no box a
 devtool could point at.
@@ -978,10 +983,12 @@ own window size and `--frames=N` how long to run before reading (default 3). The
 `label`, `bounds`, `visible`, `flags` and `actions`.
 
 `--shot=PATH.tga` writes the frame instead — the same tree, with the inspection window open — so a machine with no
-compositor can still see what it is describing:
+compositor can still see what it is describing. A `--pick` alongside it arms the picker over that point, which puts
+the outline and its badge in the picture too:
 
 ```sh
 zig build inspect -- --app=todo --shot=/tmp/todo.tga
+zig build inspect -- --app=calculator --pick=40,300 --shot=/tmp/key.tga
 ```
 
 ### Reading the tree from your own code

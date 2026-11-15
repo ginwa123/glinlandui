@@ -138,6 +138,8 @@ pub const Host = struct {
             if (pressed) if (self.inspect) |dev| dev.onSecondaryClick(x, y);
             return;
         }
+        // The picker follows the pointer between frames, so the outline is under the cursor before the click lands.
+        if (self.inspect) |dev| dev.onPointerMove(x, y);
         const last_x = self.ptr.x;
         const last_y = self.ptr.y;
         // Keep the frame-visible pointer current, so a click handler dispatched below places the caret where the release happened.

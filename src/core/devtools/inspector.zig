@@ -36,6 +36,11 @@ pub const Inspector = struct {
     height: u32 = 0,
     // Whether the first declare after opening has already revealed the top of the tree.
     seeded: bool = false,
+    // Whether the picker is armed: the node under the pointer is outlined, and the next click takes it.
+    picking: bool = false,
+    // The last pointer position, in window coordinates, and the node it was over.
+    pointer: cl.Vector2 = .{ .x = 0, .y = 0 },
+    hover_index: ?usize = null,
 
     // The width of the panel: a little over half a narrow window, and never so little that a row cannot show its role.
     fn panelWidth(self: *const Inspector) f32 {
@@ -51,7 +56,7 @@ pub const Inspector = struct {
 
     // A commit to memory: nothing is open, so the overlay draws nothing at all.
     pub fn isIdle(self: *const Inspector) bool {
-        return self.menu == null and !self.open;
+        return self.menu == null and !self.open and !self.picking;
     }
 
     // A right click: snapshot the frame that was resolved most recently, remember the node under the pointer, and summon the menu there.
@@ -61,9 +66,14 @@ pub const Inspector = struct {
         self.menu = .{ .x = x, .y = y };
     }
 
-    // Escape closes the menu first, then the window; true means the key was consumed.
+    // Escape closes the picker, then the menu, then the window; true means the key was consumed.
     pub fn onKey(self: *Inspector, keycode: u32) bool {
         if (keycode != key_escape) return false;
+        if (self.picking) {
+            self.picking = false;
+            self.hover_index = null;
+            return true;
+        }
         if (self.menu != null) {
             self.menu = null;
             return true;
@@ -73,6 +83,30 @@ pub const Inspector = struct {
             return true;
         }
         return false;
+    }
+
+    // Track the pointer between frames: the picker's outline follows it, one frame behind the app's own layout.
+    pub fn onPointerMove(self: *Inspector, x: f32, y: f32) void {
+        self.pointer = .{ .x = x, .y = y };
+        if (self.picking) self.hover_index = self.snapshot.pick(x, y);
+    }
+
+    // Arm the picker: whatever is under the pointer is outlined, and the next click opens the window on it.
+    pub fn startPicking(self: *Inspector) void {
+        self.snapshot = Snapshot.build(self.width, self.height);
+        self.picking = true;
+        self.menu = null;
+        self.hover_index = self.snapshot.pick(self.pointer.x, self.pointer.y);
+    }
+
+    // Take the node under the pointer: what a click does while the picker is armed.
+    pub fn takePick(self: *Inspector) void {
+        self.picking = false;
+        if (self.hover_index) |i| {
+            self.open = true;
+            self.selectNode(i);
+        }
+        self.hover_index = null;
     }
 
     // Open the tree window on the node the menu was summoned over.
@@ -133,8 +167,14 @@ pub const Inspector = struct {
             }
         }
         self.flatten();
+        // What the outline frames: the node the menu was summoned over, or the one under the picker's pointer.
+        const outlined: ?usize = if (self.picking) self.hover_index else self.picked;
+        if (self.menu != null or self.picking) {
+            if (outlined) |i| self.declareOutline(i);
+        }
         if (self.menu) |m| self.declareMenu(m);
         if (self.open) self.declarePanel();
+        if (self.picking) self.declarePickCatcher();
     }
 
     // Flatten the open branches into the row list the window draws.
@@ -154,6 +194,61 @@ pub const Inspector = struct {
         while (c >= 0) : (c = self.snapshot.items[@intCast(c)].next_sibling) {
             self.flattenNode(@intCast(c), depth + 1);
         }
+    }
+
+    // The outline the pointer puts on a node: a tinted fill and an accent border over the box, plus a badge naming it.
+    fn declareOutline(self: *Inspector, index: usize) void {
+        if (index >= self.snapshot.count) return;
+        const item = self.snapshot.items[index];
+        const r = item.visibleRect();
+        if (r.width < 1 or r.height < 1) return;
+        cl.UI()(.{
+            .id = outlineId(),
+            .floating = .{
+                .attach_to = .to_root,
+                .offset = .{ .x = r.x, .y = r.y },
+                .z_index = panel_z - 3,
+                .pointer_capture_mode = .passthrough,
+            },
+            .layout = .{ .sizing = .{ .w = .fixed(r.width), .h = .fixed(r.height) } },
+            .background_color = tint.toClay(),
+            .border = .{ .color = accent.toClay(), .width = .outside(1) },
+        })({});
+        // The badge sits just above the node, or inside its top-left corner when the node has no room above it.
+        const above = r.y >= badge_h + 2;
+        cl.UI()(.{
+            .id = outlineBadgeId(),
+            .floating = .{
+                .attach_to = .to_root,
+                .offset = .{ .x = r.x, .y = if (above) r.y - badge_h - 1 else r.y + 1 },
+                .z_index = panel_z - 2,
+                .pointer_capture_mode = .passthrough,
+            },
+            .layout = .{
+                .sizing = .{ .w = .fit, .h = .fixed(badge_h) },
+                .padding = .{ .left = 6, .right = 6 },
+                .child_alignment = .center,
+            },
+            .background_color = accent.toClay(),
+            .corner_radius = .all(3),
+        })({
+            const tag = if (item.tag.len > 0) item.tag else "(unnamed)";
+            cl.text(frame.formatText("{s}  {s}", .{ tag, @tagName(item.role) }), .{ .font_size = 11, .color = badge_fg.toClay() });
+        });
+    }
+
+    // A full-window catcher, armed with the picker: a click takes the outlined node and the app never sees it.
+    fn declarePickCatcher(self: *Inspector) void {
+        const win_w: f32 = @floatFromInt(@max(self.width, 1));
+        const win_h: f32 = @floatFromInt(@max(self.height, 1));
+        cl.UI()(.{
+            .id = pickCatcherId(),
+            .floating = .{ .attach_to = .to_root, .offset = .{ .x = 0, .y = 0 }, .z_index = panel_z - 4 },
+            .layout = .{ .sizing = .{ .w = .fixed(win_w), .h = .fixed(win_h) } },
+            .background_color = Color.rgba(0, 0, 0, 0).toClay(),
+        })({});
+        // One step under the window's own controls, so an armed picker never makes the panel unusable.
+        registry.registerZCursor(pickCatcherId(), onPickCatcher, self, 0, hit_z - 2, .pointer);
     }
 
     fn declareMenu(self: *Inspector, at: cl.Vector2) void {
@@ -237,6 +332,18 @@ pub const Inspector = struct {
                 .id = headerSpacerId(),
                 .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(1) } },
             })({});
+            // The picker: armed, the next click in the app takes the node under the pointer, like a browser's element inspector.
+            cl.UI()(.{
+                .id = pickButtonId(),
+                .layout = .{
+                    .sizing = .{ .w = .fixed(34), .h = .fixed(20) },
+                    .child_alignment = .center,
+                },
+                .background_color = (if (self.picking) accent.toClay() else if (cl.hovered()) hover.toClay() else surface.toClay()),
+                .corner_radius = .all(5),
+            })({
+                cl.text("pick", .{ .font_size = 10, .color = if (self.picking) badge_fg.toClay() else fg.toClay() });
+            });
             cl.UI()(.{
                 .id = closeId(),
                 .layout = .{
@@ -250,6 +357,7 @@ pub const Inspector = struct {
             });
         });
         registry.registerZCursor(closeId(), onClose, self, 0, hit_z, .pointer);
+        registry.registerZCursor(pickButtonId(), onPickButton, self, 0, hit_z, .pointer);
     }
 
     // The scrolling tree. Only the rows inside the viewport are declared, and spacers keep the content as tall as the full list.
@@ -339,6 +447,7 @@ pub const Inspector = struct {
 
     const row_h: f32 = 21;
     const detail_h: f32 = 92;
+    const badge_h: f32 = 18;
     // Render z of the overlay: above any app float, which keeps the panel on top of popovers and dropdowns.
     const panel_z: i16 = 4000;
     // Click priority: above every app target (which register at z 0 or a small float z), so the panel answers first.
@@ -354,6 +463,9 @@ pub const Inspector = struct {
     const dim = Color.hexC("#8a8a94");
     const accent = Color.hexC("#7aa2c4");
     const sel_bg = Color.hexC("#233043");
+    // The outline's fill: the accent at 15 %, so the node stays readable under it.
+    const tint = Color.rgba(0x7a, 0xa2, 0xc4, 38);
+    const badge_fg = Color.hexC("#101014");
 };
 
 fn pickedLine(self: *const Inspector) []const u8 {
@@ -385,6 +497,22 @@ fn headerSpacerId() cl.ElementId {
 
 fn closeId() cl.ElementId {
     return .ID("glinlandui.inspector.close");
+}
+
+fn pickButtonId() cl.ElementId {
+    return .ID("glinlandui.inspector.pick");
+}
+
+fn pickCatcherId() cl.ElementId {
+    return .ID("glinlandui.inspector.pick.catcher");
+}
+
+fn outlineId() cl.ElementId {
+    return .ID("glinlandui.inspector.outline");
+}
+
+fn outlineBadgeId() cl.ElementId {
+    return .ID("glinlandui.inspector.outline.badge");
 }
 
 fn bodyId() cl.ElementId {
@@ -429,6 +557,22 @@ fn onClose(ctx: ?*anyopaque, _: usize) void {
     self.open = false;
 }
 
+// The header's pick button: arm the picker, or stand it down when it is already armed.
+fn onPickButton(ctx: ?*anyopaque, _: usize) void {
+    const self: *Inspector = @ptrCast(@alignCast(ctx.?));
+    if (self.picking) {
+        self.picking = false;
+        self.hover_index = null;
+        return;
+    }
+    self.startPicking();
+}
+
+fn onPickCatcher(ctx: ?*anyopaque, _: usize) void {
+    const self: *Inspector = @ptrCast(@alignCast(ctx.?));
+    self.takePick();
+}
+
 fn onRow(ctx: ?*anyopaque, index: usize) void {
     const self: *Inspector = @ptrCast(@alignCast(ctx.?));
     const row = if (index < self.row_count) self.rows[index] else return;
@@ -441,12 +585,22 @@ fn swallow(_: ?*anyopaque, _: usize) void {}
 
 const host_mod = @import("../host.zig");
 const button_mod = @import("../components/button.zig");
+const box_mod = @import("../components/box.zig");
 const dispatch = @import("../components/dispatch.zig");
 
 const TestApp = struct {
     clicks: u32 = 0,
 
     fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
+        box_mod.box(.{
+            .id = .{ .text = "dev.root" },
+            .direction = .column,
+            .w = .grow,
+            .h = .grow,
+        }, ctx, children);
+    }
+
+    fn children(ctx: ?*anyopaque) void {
         const self: *TestApp = @ptrCast(@alignCast(ctx.?));
         button_mod.button(.{
             .id = .{ .text = "dev.btn" },
@@ -574,4 +728,51 @@ test "a right click on a menu that is already up just moves it" {
     h.rightClick(120, 90);
     try std.testing.expectApproxEqAbs(@as(f32, 120), h.insp.menu.?.x, 0.001);
     try std.testing.expect(first.x != h.insp.menu.?.x);
+}
+
+test "the picker outlines the node under the pointer, and a click opens the window on it" {
+    var h = Harness{};
+    try h.init();
+    h.host.frame(480, 360);
+
+    // Arm the picker, then walk over the button and over the container behind it: the outline follows the deepest node.
+    h.insp.startPicking();
+    h.host.onPointerEvent(20, 20, false, 0);
+    h.host.frame(480, 360);
+    const over_button = cl.getElementData(outlineId()).bounding_box;
+    const btn = cl.getElementData(cl.getElementId("dev.btn")).bounding_box;
+    try std.testing.expectApproxEqAbs(btn.x, over_button.x, 0.5);
+    try std.testing.expectApproxEqAbs(btn.width, over_button.width, 0.5);
+    // The badge names what is about to be taken.
+    try std.testing.expect(cl.getElementData(outlineBadgeId()).found);
+    try std.testing.expectEqualStrings("dev.btn", h.insp.snapshot.items[h.insp.hover_index.?].tag);
+
+    h.host.onPointerEvent(300, 300, false, 0);
+    h.host.frame(480, 360);
+    const over_root = cl.getElementData(outlineId()).bounding_box;
+    try std.testing.expectEqualStrings("dev.root", h.insp.snapshot.items[h.insp.hover_index.?].tag);
+    try std.testing.expectApproxEqAbs(@as(f32, 480), over_root.width, 0.5);
+
+    // Back over the button, then click: that node is taken and the window opens; the app's own button never fires.
+    h.host.onPointerEvent(20, 20, false, 0);
+    h.host.frame(480, 360);
+    h.click(20, 20);
+    try std.testing.expect(h.insp.open);
+    try std.testing.expect(!h.insp.picking);
+    try std.testing.expectEqual(@as(u32, 0), h.app.clicks);
+    try std.testing.expectEqualStrings("dev.btn", h.insp.snapshot.items[h.insp.selected.?].tag);
+
+    h.host.frame(480, 360);
+    try std.testing.expect(cl.getElementData(panelId()).found);
+}
+
+test "escape stands the picker down before it closes anything else" {
+    var h = Harness{};
+    try h.init();
+    h.host.frame(480, 360);
+    h.insp.startPicking();
+    try std.testing.expect(!h.host.onKeyEvent(1, true));
+    try std.testing.expect(!h.insp.picking);
+    // The app is not closed by the key, and the devtool has nothing else to close.
+    try std.testing.expect(!h.host.isQuit());
 }

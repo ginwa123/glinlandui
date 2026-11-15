@@ -34,9 +34,14 @@ pub fn shoot(
     driver.headless = true;
     const insp = attach(alloc, driver.host);
     try driver.start(.{ .width = opts.width, .height = opts.height });
-    // One frame so the tree is resolved, then open the window on its first node: the shot is the devtool looking at the app.
+    // One frame so the tree is resolved, then open the window on its root: the shot is the devtool looking at the app.
     driver.frame();
     if (insp) |i| i.openOnRoot();
+    // A point also arms the picker over it, so the picture shows the outline and its badge as well as the window.
+    if (opts.pick) |p| {
+        driver.host.onPointerEvent(p.x, p.y, false, 0);
+        if (insp) |i| i.startPicking();
+    }
     var i: usize = 1;
     while (i < opts.frames) : (i += 1) driver.frame();
 
