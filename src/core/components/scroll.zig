@@ -23,6 +23,8 @@ pub const hthumb_index: u32 = 2;
 /// Toolkit-style scroll props.
 pub const ScrollProps = struct {
     id: prop.Id,
+    // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
+    src: ?std.builtin.SourceLocation = null,
     direction: Direction = .vertical,
     w: box_mod.Size = .grow,
     h: box_mod.Size = .grow,
@@ -230,6 +232,7 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
     });
     // The container's own node is registered AFTER the pop, so it does not list itself as an ancestor.
     semantics.registerAt(@src(), .{
+        .declared = semantics.declaredAt(props.src),
         .id = props.id.clay(),
         .tag = props.id.str(),
         .role = .scroll,

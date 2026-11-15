@@ -66,6 +66,8 @@ pub const Node = struct {
     value: []const u8 = "",
     // Where the widget that declared this node lives, as `file:line` — what the devtool shows as the component's origin.
     source: []const u8 = "",
+    // Where the APP declared it, when the app passed `.src = @src()`: Zig has no caller location, so only the call site can say.
+    declared: ?Declared = null,
     actions: Actions = .{},
     flags: Flags = .{},
     z: i16 = 0,
@@ -121,6 +123,19 @@ pub fn pushAncestor(id: cl.ElementId, clips: bool) void {
 
 pub fn popAncestor() void {
     if (stack_len > 0) stack_len -= 1;
+}
+
+/// A place in an app's own source: the module it was compiled as, and the file and line inside it.
+pub const Declared = struct {
+    module: []const u8 = "",
+    file: []const u8 = "",
+    line: u32 = 0,
+};
+
+/// Turn the `@src()` a widget was handed into the value a node stores; null stays null, so a widget nobody annotated costs nothing.
+pub fn declaredAt(src: ?std.builtin.SourceLocation) ?Declared {
+    const loc = src orelse return null;
+    return .{ .module = loc.module, .file = loc.file, .line = loc.line };
 }
 
 /// Register a node during declare.

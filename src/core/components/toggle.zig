@@ -13,6 +13,8 @@ pub const ClickFn = ?*const fn (?*anyopaque) void;
 /// Toolkit-style toggle switch props.
 pub const ToggleProps = struct {
     id: prop.Id,
+    // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
+    src: ?std.builtin.SourceLocation = null,
     on: bool = false,
     w: u32 = 32,
     h: u32 = 18,
@@ -57,6 +59,7 @@ pub fn toggle(props: ToggleProps) void {
     });
     // Semantics: `.on` is the toggle's checked state.
     semantics.registerAt(@src(), .{
+        .declared = semantics.declaredAt(props.src),
         .id = props.id.clay(),
         .tag = props.id.str(),
         .role = .toggle,

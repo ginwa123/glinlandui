@@ -13,6 +13,8 @@ pub const ClickFn = ?*const fn (?*anyopaque) void;
 /// Toolkit-style button props: a label that carries its own type, a size per axis, padding, a border, a radius, and the tones a pointer can put it in.
 pub const ButtonProps = struct {
     id: prop.Id,
+    // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
+    src: ?std.builtin.SourceLocation = null,
     label: prop.Label = .{},
     bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
     fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
@@ -50,6 +52,7 @@ pub fn button(p: ButtonProps) void {
     });
     // Semantics: registered for EVERY button, not only the ones with a click callback.
     semantics.registerAt(@src(), .{
+        .declared = semantics.declaredAt(p.src),
         .id = p.id.clay(),
         .tag = p.id.str(),
         .role = .button,

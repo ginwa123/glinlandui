@@ -108,6 +108,8 @@ fn section(scope: *Scope, s: *const state_mod.Section) void {
     const c = scope.theme.colors;
     box_mod.box(.{
         .id = .{ .text = s.id },
+        // The inspector's "declared" line: Zig has no caller location, so the app says where it built this card.
+        .src = @src(),
         .w = .grow,
         .direction = .column,
         .bg = c.surface,
@@ -121,6 +123,7 @@ fn section(scope: *Scope, s: *const state_mod.Section) void {
 fn sectionChildren(ctx: SectionCtx) void {
     box_mod.box(.{
         .id = .{ .text = frame.formatText("{s}.head", .{ctx.section.id}) },
+        .src = @src(),
         .w = .grow,
         .direction = .column,
         .gap = 2,

@@ -16,6 +16,8 @@ pub const ClickFn = ?*const fn (?*anyopaque) void;
 /// Toolkit-style image props.
 pub const ImageProps = struct {
     id: prop.Id,
+    // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
+    src: ?std.builtin.SourceLocation = null,
     path: []const u8 = "",
     w: u32 = 0,
     h: u32 = 0,
@@ -62,6 +64,7 @@ pub fn image(props: ImageProps) void {
     })({});
     // Semantics: an image is a leaf with no state and no text.
     semantics.registerAt(@src(), .{
+        .declared = semantics.declaredAt(props.src),
         .id = props.id.clay(),
         .tag = props.id.str(),
         .role = .image,

@@ -13,6 +13,8 @@ pub const ClickFn = ?*const fn (?*anyopaque) void;
 /// Toolkit-style checkbox props.
 pub const CheckboxProps = struct {
     id: prop.Id,
+    // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
+    src: ?std.builtin.SourceLocation = null,
     checked: bool = false,
     size: u32 = 16,
     radius: u32 = 4,
@@ -63,6 +65,7 @@ pub fn checkbox(props: CheckboxProps) void {
     });
     // Semantics: `checked` is the state a test asserts on, and the node is registered even when disabled so `assertIsDisabled` can find it.
     semantics.registerAt(@src(), .{
+        .declared = semantics.declaredAt(props.src),
         .id = props.id.clay(),
         .tag = props.id.str(),
         .role = .checkbox,

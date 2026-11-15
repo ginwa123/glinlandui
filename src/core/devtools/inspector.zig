@@ -438,9 +438,13 @@ pub const Inspector = struct {
                     snapshot_mod.actionList(it.actions, &action_buf),
                     snapshot_mod.flagList(it.flags, &flag_buf),
                 }), .{ .font_size = 11, .color = dim.toClay() });
-                // Where the code that declared this node lives, which is the first thing to read after its name.
+                // Where the code lives: the widget that drew the node, and — when the app passed `.src = @src()` — its call site.
                 if (it.source.len > 0) {
-                    cl.text(it.source, .{ .font_size = 11, .color = accent.toClay() });
+                    cl.text(frame.formatText("component  {s}", .{it.source}), .{ .font_size = 11, .color = accent.toClay() });
+                }
+                if (it.declared) |declared| {
+                    const where = frame.formatText("declared   {s}/{s}:{d}", .{ declared.module, declared.file, declared.line });
+                    cl.text(where, .{ .font_size = 11, .color = accent.toClay() });
                 }
                 if (it.label.len > 0) {
                     cl.text(frame.formatText("\"{s}\"", .{it.label}), .{ .font_size = 11, .color = accent.toClay() });
@@ -483,7 +487,7 @@ pub const Inspector = struct {
     // ---- ids, colours, constants ----
 
     const row_h: f32 = 21;
-    const detail_h: f32 = 124;
+    const detail_h: f32 = 140;
     const badge_h: f32 = 18;
     // Render z of the overlay: above any app float, which keeps the panel on top of popovers and dropdowns.
     const panel_z: i16 = 4000;
@@ -634,6 +638,7 @@ const TestApp = struct {
     fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
         box_mod.box(.{
             .id = .{ .text = "dev.root" },
+            .src = @src(),
             .direction = .column,
             .w = .grow,
             .h = .grow,
@@ -917,4 +922,10 @@ test "every node names the component that declared it" {
     try std.testing.expect(std.mem.startsWith(u8, btn.source, "core/components/button.zig:"));
     const root = snap.find(cl.getElementId("dev.root").id).?;
     try std.testing.expect(std.mem.startsWith(u8, root.source, "core/components/box.zig:"));
+    // ...and the box that passed `.src = @src()` also names the app's own call site.
+    try std.testing.expect(root.declared != null);
+    try std.testing.expect(std.mem.endsWith(u8, root.declared.?.file, "inspector.zig"));
+    // The module name is whatever the build called it, so only its presence is asserted here.
+    try std.testing.expect(root.declared.?.module.len > 0);
+    try std.testing.expect(btn.declared == null);
 }

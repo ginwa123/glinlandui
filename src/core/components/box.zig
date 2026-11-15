@@ -18,6 +18,8 @@ pub const Direction = enum {
 /// Toolkit-style box props: an id, a size per axis, padding, a radius, a border, and the layout it arranges.
 pub const BoxProps = struct {
     id: prop.Id,
+    // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
+    src: ?std.builtin.SourceLocation = null,
     direction: Direction = .column,
     w: prop.Size = .fit,
     h: prop.Size = .fit,
@@ -58,6 +60,7 @@ pub fn box(p: BoxProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void)
     });
     // Registered AFTER the pop, so a container is never its own ancestor.
     semantics.registerAt(@src(), .{
+        .declared = semantics.declaredAt(p.src),
         .id = p.id.clay(),
         .tag = p.id.str(),
         .role = .container,

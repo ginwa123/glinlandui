@@ -47,6 +47,8 @@ pub fn filter(query: []const u8, items: []const []const u8, out: []usize) usize 
 pub const DropdownProps = struct {
     field_id: []const u8 = "",
     list_id: []const u8 = "",
+    // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
+    src: ?std.builtin.SourceLocation = null,
     /// The search field, when there is one: the app owns it, and the dropdown only paints it. Null draws no field.
     field: ?*input.Field = null,
     font_size: u16 = 14,
@@ -117,6 +119,7 @@ pub fn dropdown(
 ) void {
     // Semantics: the closed field is the dropdown's identity; the expanded rows come from list.zig and register themselves as list items.
     semantics.registerAt(@src(), .{
+        .declared = semantics.declaredAt(props.src),
         .id = cl.getElementId(props.field_id),
         .tag = props.field_id,
         .role = .dropdown,

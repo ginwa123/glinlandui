@@ -22,6 +22,8 @@ pub const SelectFn = ?*const fn (?*anyopaque, usize) void;
 
 pub const TabsProps = struct {
     id: prop.Id,
+    // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
+    src: ?std.builtin.SourceLocation = null,
     tabs: []const Tab = &.{},
     h: u32 = 34,
     bg: Color = Color.rgb(0x1a, 0x1a, 0x1d),
@@ -46,6 +48,7 @@ fn innerId(base: []const u8, i: usize, slot: u32) cl.ElementId {
 /// Declare a tab bar.
 pub fn tabs(props: TabsProps) void {
     semantics.registerAt(@src(), .{
+        .declared = semantics.declaredAt(props.src),
         .id = props.id.clay(),
         .tag = props.id.str(),
         .role = .list,
@@ -105,6 +108,7 @@ fn tabUi(props: TabsProps, tab: Tab, i: usize) void {
     });
 
     semantics.registerAt(@src(), .{
+        .declared = semantics.declaredAt(props.src),
         .id = tabId(props.id.str(), i),
         .role = .list_item,
         .flags = .{ .enabled = true, .selected = tab.active },

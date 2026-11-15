@@ -950,10 +950,24 @@ _ = glinlandui.devtools.attach(alloc, &host);
 
 Right-click anywhere in the window and a context menu names the node under the pointer. **Inspect element** opens a
 floating window with the component tree: id, role and label per row, expandable and scrollable. The footer describes
-the selected node — box, clip rectangle, z, actions, flags, its label, and the file and line of the widget that
-declared it (`core/components/button.zig:52`, the path Zig reports relative to the module), plus its nearest ancestors
-so a row has a place in the app and not only a parent. `Escape` closes it, and the app underneath keeps running and
-staying clickable outside the window.
+the selected node — box, clip rectangle, z, actions, flags, its label, its nearest ancestors — and two source lines:
+`component` is the widget that drew it (`core/components/box.zig:62`, the path Zig reports relative to the module),
+and `declared` is the app's own call site, when the app recorded one. `Escape` closes it, and the app underneath keeps
+running and staying clickable outside the window.
+
+### Where the code lives, and why the app has to say
+
+`component` is inferred. `declared` cannot be: Zig has no caller location — `@src()` describes the expression that
+calls it, there are no default arguments, and neither a generic nor an `inline fn` sees its call site (all three were
+tried). So a widget takes the call site from the app:
+
+```zig
+box_mod.box(.{ .id = .{ .text = s.id }, .src = @src(), /* … */ }, ctx, children);
+```
+
+`examples/catalog/view.zig` does that for its cards and their heads, which is why those rows show
+`declared catalog/view.zig:126` — module, file and line, so the name is unambiguous. Every other widget simply omits
+it and shows only `component`.
 
 The outline is how the two halves stay connected, and it works in both directions. Click a row in the tree and that
 component is outlined and labelled in the app, so a name in the list is a place on the screen. The header's **pick**
@@ -985,7 +999,8 @@ zig build inspect -- --app=todo --pick=120,80        # the node under one point
 `--app` is `demo`, `calculator`, `todo`, `catalog`, `file-dialog` or `lazy-scroll`. `--size=WxH` overrides the app's
 own window size and `--frames=N` how long to run before reading (default 3). The JSON is the shape a program wants:
 `{"frame":{"width":…,"height":…,"nodes":N},"roots":[{…,"children":[…]}]}`, each node carrying `tag`, `hash`, `role`,
-`label`, `source` (the component's `file:line`), `bounds`, `visible`, `flags` and `actions`.
+`label`, `source` (the component's `file:line`), `declared` (`{module, file, line}`, when the app recorded it),
+`bounds`, `visible`, `flags` and `actions`.
 
 `--shot=PATH.tga` writes the frame instead — the same tree, with the inspection window open — so a machine with no
 compositor can still see what it is describing. A `--pick` alongside it arms the picker over that point, which puts

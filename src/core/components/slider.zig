@@ -18,6 +18,8 @@ pub const thumb_index: u32 = 3;
 /// Toolkit-style slider props.
 pub const SliderProps = struct {
     id: prop.Id,
+    // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
+    src: ?std.builtin.SourceLocation = null,
     value: f32 = 0.5,
     min: f32 = 0,
     max: f32 = 1,
@@ -111,6 +113,7 @@ pub fn slider(props: SliderProps) void {
     });
     // Semantics: a slider is draggable, so it reports `drag` rather than a plain click.
     semantics.registerAt(@src(), .{
+        .declared = semantics.declaredAt(props.src),
         .id = props.id.clay(),
         .tag = props.id.str(),
         .role = .slider,

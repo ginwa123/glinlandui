@@ -13,6 +13,8 @@ pub const ClickFn = ?*const fn (?*anyopaque) void;
 /// Toolkit-style radio button props.
 pub const RadioProps = struct {
     id: prop.Id,
+    // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
+    src: ?std.builtin.SourceLocation = null,
     selected: bool = false,
     size: u32 = 16,
     outer_bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
@@ -60,6 +62,7 @@ pub fn radio(props: RadioProps) void {
     });
     // Semantics: radios report SELECTED, not checked.
     semantics.registerAt(@src(), .{
+        .declared = semantics.declaredAt(props.src),
         .id = props.id.clay(),
         .tag = props.id.str(),
         .role = .radio,

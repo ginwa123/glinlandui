@@ -23,6 +23,8 @@ pub const Direction = enum {
 /// List props.
 pub const ListProps = struct {
     id: prop.Id,
+    // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
+    src: ?std.builtin.SourceLocation = null,
     direction: Direction = .vertical,
     /// Grid only: fixed column count for this frame (see gridCols).
     cols: usize = 3,
@@ -106,6 +108,7 @@ pub fn list(
     if (ti != .pointer or ti.pointer.size != .slice) @compileError("list: items must be a slice");
     // Semantics: the container is a list; each cell registers itself below.
     semantics.registerAt(@src(), .{
+        .declared = semantics.declaredAt(props.src),
         .id = props.id.clay(),
         .tag = props.id.str(),
         .role = .list,
@@ -134,6 +137,7 @@ pub fn list(
 fn registerCell(props: ListProps, i: usize) void {
     // Semantics FIRST, before the disabled early-return: a disabled row must still be discoverable so `assertIsDisabled` has something to assert on.
     semantics.registerAt(@src(), .{
+        .declared = semantics.declaredAt(props.src),
         .id = rowId(props.id.str(), i),
         .role = .list_item,
         .flags = .{

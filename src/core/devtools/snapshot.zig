@@ -18,6 +18,8 @@ pub const Item = struct {
     value: []const u8 = "",
     // Where the widget that declared the node lives, as `file:line`.
     source: []const u8 = "",
+    // Where the app declared it, when it passed `.src = @src()`.
+    declared: ?semantics.Declared = null,
     actions: semantics.Actions = .{},
     flags: semantics.Flags = .{},
     z: i16 = 0,
@@ -88,6 +90,7 @@ pub const Snapshot = struct {
                 .label = node.label,
                 .value = node.value,
                 .source = node.source,
+                .declared = node.declared,
                 .actions = node.actions,
                 .flags = node.flags,
                 .z = node.z,
@@ -257,6 +260,15 @@ pub const Snapshot = struct {
             try w.writeAll(",\"source\":");
             try writeJsonString(w, item.source);
         }
+        if (item.declared) |declared| {
+            try w.writeAll(",\"declared\":{\"module\":");
+            try writeJsonString(w, declared.module);
+            try w.writeAll(",\"file\":");
+            try writeJsonString(w, declared.file);
+            try w.writeAll(",\"line\":");
+            try w.print("{d}", .{declared.line});
+            try w.writeAll("}");
+        }
         try w.writeAll(",\"label\":");
         try writeJsonString(w, item.label);
         if (item.value.len > 0) {
@@ -345,7 +357,8 @@ fn writeTextItem(w: *std.Io.Writer, item: Item) std.Io.Writer.Error!void {
     var action_buf: [96]u8 = undefined;
     const actions = actionList(item.actions, &action_buf);
     if (actions.len > 0) try w.print(" [{s}]", .{actions});
-    if (item.source.len > 0) try w.print("  @{s}", .{item.source});
+    if (item.source.len > 0) try w.print("  src={s}", .{item.source});
+    if (item.declared) |declared| try w.print("  app={s}/{s}:{d}", .{ declared.module, declared.file, declared.line });
 }
 
 fn writeRectJson(w: *std.Io.Writer, r: cl.BoundingBox) std.Io.Writer.Error!void {
@@ -589,6 +602,24 @@ test "a pick with nothing under the point still answers" {
     var w = std.Io.Writer.fixed(&buf);
     try s.writeTextPick(&w, 5, 5);
     try std.testing.expectEqualStrings("pick 5.0,5.0 -> nothing\n", w.buffered());
+}
+
+test "the app's own call site is a separate field from the component's" {
+    var s = buildTree();
+    s.items[1].source = "core/components/button.zig:52";
+    s.items[1].declared = .{ .module = "catalog", .file = "view.zig", .line = 126 };
+
+    var json_buf: [4096]u8 = undefined;
+    var jw = std.Io.Writer.fixed(&json_buf);
+    try s.writeJson(&jw, .{ .pretty = false });
+    try std.testing.expect(std.mem.indexOf(u8, jw.buffered(), "\"source\":\"core/components/button.zig:52\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, jw.buffered(), "\"declared\":{\"module\":\"catalog\",\"file\":\"view.zig\",\"line\":126}") != null);
+
+    var text_buf: [2048]u8 = undefined;
+    var tw = std.Io.Writer.fixed(&text_buf);
+    try s.writeText(&tw, 16);
+    try std.testing.expect(std.mem.indexOf(u8, tw.buffered(), "src=core/components/button.zig:52") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tw.buffered(), "app=catalog/view.zig:126") != null);
 }
 
 test "the action and flag lists name only what is set" {

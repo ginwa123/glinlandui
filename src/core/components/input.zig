@@ -348,6 +348,9 @@ pub fn handleText(buf: []u8, len: *usize, st: *EditState, text: []const u8) Acti
 // One text field: what it looks like, the intents it raises, and the state it owns.
 pub const Field = struct {
     // ---- what it looks like ----
+
+    // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
+    src: ?std.builtin.SourceLocation = null,
     id: prop.Id = .{ .text = "" },
     // The text the field shows. It wins whenever it CHANGES, so an app can drive the field from its state.
     value: []const u8 = "",
@@ -604,6 +607,7 @@ pub fn textField(field: *Field) void {
     // Semantics: an editable field declares `set_text`, so a test can type into it by name and a reader can find it.
     if (!field.disabled and name.len > 0) {
         semantics.registerAt(@src(), .{
+            .declared = semantics.declaredAt(field.src),
             .id = field.id.clay(),
             .tag = name,
             .role = .text_field,

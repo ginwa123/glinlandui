@@ -27,6 +27,8 @@ pub const SelectFn = ?*const fn (?*anyopaque, usize) void;
 
 pub const TreeProps = struct {
     id: prop.Id,
+    // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
+    src: ?std.builtin.SourceLocation = null,
     rows: []const Row = &.{},
     row_h: u32 = 26,
     indent: u16 = 17,
@@ -60,6 +62,7 @@ fn innerId(base: []const u8, i: usize, slot: u32) cl.ElementId {
 /// Declare a tree: one clickable row per entry, indented by `depth`.
 pub fn tree(props: TreeProps) void {
     semantics.registerAt(@src(), .{
+        .declared = semantics.declaredAt(props.src),
         .id = props.id.clay(),
         .tag = props.id.str(),
         .role = .list,
@@ -133,6 +136,7 @@ fn rowUi(props: TreeProps, row: Row, i: usize) void {
     });
 
     semantics.registerAt(@src(), .{
+        .declared = semantics.declaredAt(props.src),
         .id = rowId(props.id.str(), i),
         .role = .list_item,
         .flags = .{ .enabled = true, .selected = row.selected },
