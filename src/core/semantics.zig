@@ -4,8 +4,8 @@ const cl = @import("zclay");
 const headless = @import("testing/headless.zig");
 const registry = @import("components/click_registry.zig");
 
-/// Node capacity.
-pub const cap: usize = 256;
+/// Node capacity. Containers register a node too (a component tree without them is a flat list), so the cap covers a whole screen's worth.
+pub const cap: usize = 512;
 
 /// Ancestor chain depth kept per node.
 pub const ancestor_cap: usize = 8;

@@ -29,6 +29,9 @@ pub const testing = @import("core/testing/root.zig");
 // Per-frame semantics model: the queryable node tree behind `testing.Driver.onNode*`, and the intended home for accessibility and the debug inspector.
 pub const semantics = @import("core/semantics.zig");
 
+// The devtool: the component tree as a printable value, the in-app inspector that draws it, and the headless CLI that dumps it.
+pub const devtools = @import("core/devtools/root.zig");
+
 // The text model every field uses: buffer, caret, selection, and every edit and movement. A single-line field is this with the newline ignored.
 pub const text_editor = @import("core/text_editor.zig");
 
@@ -125,6 +128,11 @@ test {
     _ = @import("core/testing/root.zig");
     // The semantics model and the E2E test surface built on it.
     _ = @import("core/semantics.zig");
+    // The devtool's tree snapshot, its in-app inspector, its headless CLI and the two calls that wire them into an app.
+    _ = @import("core/devtools/snapshot.zig");
+    _ = @import("core/devtools/inspector.zig");
+    _ = @import("core/devtools/cli.zig");
+    _ = @import("core/devtools/root.zig");
     _ = @import("core/text_editor.zig");
     _ = @import("core/text_face.zig");
     _ = @import("core/audit.zig");

@@ -4,7 +4,8 @@ const builtin = @import("builtin");
 const cl = @import("zclay");
 const headless = @import("../testing/headless.zig");
 
-pub const cap: usize = 256;
+/// Every click target of one frame. The devtool overlay claims a slice of this for its own rows, so it sits above an app's own ceiling.
+pub const cap: usize = 384;
 
 /// Cursor kind for Wayland wl_pointer cursor shape.
 pub const Cursor = enum { default, pointer, text, ew_resize };

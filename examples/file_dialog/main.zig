@@ -22,6 +22,8 @@ pub fn main(init: std.process.Init) !void {
 
     var host = try glinlandui.host.Host.init(alloc, &app, file_dialog.app.App.content);
     defer host.deinit();
+    // The devtool: right-click anywhere for this app's component tree. One line, and the app itself is untouched.
+    _ = glinlandui.devtools.attach(alloc, &host);
 
     var window = glinlandui.Window.init(alloc, .{
         .app_id = "glinlandui-file-dialog",

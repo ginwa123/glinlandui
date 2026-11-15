@@ -79,6 +79,8 @@ pub fn main(init: std.process.Init) !void {
     // `setContent { ... }`: the Host hands the composable the ctx it was built with.
     var host = try glinlandui.host.Host.init(gpa, &app, lazy.app.App.content);
     defer host.deinit();
+    // The devtool: right-click anywhere for this app's component tree. One line, and the app itself is untouched.
+    _ = glinlandui.devtools.attach(gpa, &host);
     window.delegate = host.delegate();
 
     // Space, Home and End are the screen's intents, so the handler is the model's and the window's events reach it through here.

@@ -397,6 +397,42 @@ pub fn build(b: *std.Build) void {
         catalog_test_step.dependOn(&b.addRunArtifact(catalog_test.?).step);
     }
 
+    // ---- The devtool ---- `glinlandui-inspect` runs any example app headless and prints its component tree, so an agent reads the nodes a developer sees.
+    if (!is_wasm) {
+        const demo_mod = b.createModule(.{
+            .root_source_file = b.path("src/demo_app.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "glinlandui", .module = mod }},
+        });
+        const inspect = b.addExecutable(.{
+            .name = "glinlandui-inspect",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/inspect_main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "glinlandui", .module = mod },
+                    .{ .name = "demo_app", .module = demo_mod },
+                    .{ .name = "calculator", .module = exampleModule(b, "calculator", target, optimize, mod) },
+                    .{ .name = "todo", .module = exampleModule(b, "todo", target, optimize, mod) },
+                    .{ .name = "catalog", .module = exampleModule(b, "catalog", target, optimize, mod) },
+                    .{ .name = "file_dialog", .module = exampleModule(b, "file_dialog", target, optimize, mod) },
+                    .{ .name = "lazy_scroll", .module = exampleModule(b, "lazy_scroll", target, lazy_optimize, mod) },
+                },
+            }),
+        });
+        b.installArtifact(inspect);
+        const build_inspect_step = b.step("build-inspect", "Compile the devtool that dumps an app's component tree");
+        build_inspect_step.dependOn(&inspect.step);
+
+        // `zig build inspect -- --app=todo --json`: the same tree the in-app inspector draws, on stdout, for a script or an agent.
+        const run_inspect = b.addRunArtifact(inspect);
+        if (b.args) |args| run_inspect.addArgs(args);
+        const inspect_step = b.step("inspect", "Dump an app's component tree headless (-- --app=todo --json)");
+        inspect_step.dependOn(&run_inspect.step);
+    }
+
     // The parity suite is a NATIVE concern: a wasm target has no test runner here, and `-Dtarget=wasm32-freestanding` is for shipping the webapp, not for.
     var run_mod_tests: ?*std.Build.Step.Run = null;
     var run_exe_tests: ?*std.Build.Step.Run = null;

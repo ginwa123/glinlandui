@@ -482,6 +482,8 @@ pub const FrameOptions = struct {
     probe_user_data: ?*anyopaque = null,
     // Resolve the semantics tree (core/semantics.zig) immediately after layout, once Clay has computed every bounding box.
     resolve_semantics: bool = false,
+    // Skip the renderer entirely: a headless CLI has no window to present to, and a shipping binary is not under `is_test`.
+    no_present: bool = false,
 };
 
 const default_frame_options: FrameOptions = .{};
@@ -587,8 +589,8 @@ pub fn clayFrameWithOptions(
     // Registries are populated by declare above — resolve the cursor now.
     const shape = hoverCursorShape(pointer_x, pointer_y);
     current_shape = shape;
-    // Headless tests: layout ran (element data populated), renderer pruned (no GL context) — callback wiring stays testable headless.
-    if (builtin.is_test) return shape;
+    // Headless tests and a headless CLI: layout ran (element data populated), renderer pruned (no GL context) — callback wiring stays testable.
+    if (builtin.is_test or options.no_present) return shape;
     if (!renderer_attempted.*) {
         renderer_attempted.* = true;
         renderer.* = render.Renderer.init(alloc) catch |err| blk: {

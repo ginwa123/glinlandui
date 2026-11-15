@@ -75,7 +75,10 @@ pub fn tree(props: TreeProps) void {
         },
         .background_color = if (props.bg) |b| b.toClay() else .{ 0, 0, 0, 0 },
     })({
+        // Rows belong to the tree view that declares them, which is what the devtool nests them under.
+        semantics.pushAncestor(props.id.clay(), false);
         for (props.rows, 0..) |row, i| rowUi(props, row, i);
+        semantics.popAncestor();
     });
 }
 

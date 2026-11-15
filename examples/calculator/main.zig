@@ -31,6 +31,8 @@ pub fn main() !void {
 
     var host = try glinlandui.host.Host.init(alloc, &app, App.content);
     defer host.deinit();
+    // The devtool: right-click anywhere for this app's component tree. One line, and the app itself is untouched.
+    _ = glinlandui.devtools.attach(alloc, &host);
 
     // Registered through `onHostReady` rather than inline, so the web entry point — which creates its own Host and has no `main` to run — wires the same KeyChain, which is what makes the numeric keypad work in a browser.
     App.onHostReady(&host, &app);

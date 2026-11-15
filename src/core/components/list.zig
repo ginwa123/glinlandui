@@ -112,9 +112,21 @@ pub fn list(
         .flags = .{ .enabled = !props.disabled },
     });
     switch (props.direction) {
-        .vertical => listVertical(props, items, item_ctx, renderItem),
-        .horizontal => listHorizontal(props, items, item_ctx, renderItem),
-        .grid => listGrid(props, items, item_ctx, renderItem),
+        .vertical => {
+            semantics.pushAncestor(props.id.clay(), false);
+            listVertical(props, items, item_ctx, renderItem);
+            semantics.popAncestor();
+        },
+        .horizontal => {
+            semantics.pushAncestor(props.id.clay(), false);
+            listHorizontal(props, items, item_ctx, renderItem);
+            semantics.popAncestor();
+        },
+        .grid => {
+            semantics.pushAncestor(props.id.clay(), false);
+            listGrid(props, items, item_ctx, renderItem);
+            semantics.popAncestor();
+        },
     }
 }
 

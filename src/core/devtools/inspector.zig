@@ -1,0 +1,577 @@
+// The in-app devtool: right-click summons a context menu, "Inspect element" opens a floating window onto the component tree.
+const std = @import("std");
+const cl = @import("zclay");
+const Color = @import("../color.zig").Color;
+const frame = @import("../frame.zig");
+const registry = @import("../components/click_registry.zig");
+const snapshot_mod = @import("snapshot.zig");
+
+const Snapshot = snapshot_mod.Snapshot;
+
+// Nodes the row list will flatten; the rest stay reachable by expanding a narrower branch.
+pub const max_rows: usize = 128;
+
+// One flattened, currently visible tree row.
+pub const Row = struct {
+    node: u16 = 0,
+    depth: u8 = 0,
+};
+
+// The devtool's whole state. An app owns one, hands `&inspector` to `Host.inspect`, and never touches it again.
+pub const Inspector = struct {
+    snapshot: Snapshot = .{},
+    // Where the right click landed, in window coordinates, while the context menu is up.
+    menu: ?cl.Vector2 = null,
+    // Whether the tree window is open.
+    open: bool = false,
+    // The node under the right click, as the frame it was resolved in saw it.
+    picked: ?usize = null,
+    // The node whose details the panel is showing.
+    selected: ?usize = null,
+    expanded: [snapshot_mod.max_nodes]bool = [_]bool{false} ** snapshot_mod.max_nodes,
+    rows: [max_rows]Row = [_]Row{.{}} ** max_rows,
+    row_count: usize = 0,
+    // The window the last declare ran against, so a pointer event between frames can clamp the menu into it.
+    width: u32 = 0,
+    height: u32 = 0,
+    // Whether the first declare after opening has already revealed the top of the tree.
+    seeded: bool = false,
+
+    // The width of the panel: a little over half a narrow window, and never so little that a row cannot show its role.
+    fn panelWidth(self: *const Inspector) f32 {
+        const w: f32 = @floatFromInt(@max(self.width, 1));
+        return @min(360, @max(220, w * 0.55));
+    }
+
+    // The height of the panel window.
+    fn panelHeight(self: *const Inspector) f32 {
+        const h: f32 = @floatFromInt(@max(self.height, 1));
+        return @max(160, h - 24);
+    }
+
+    // A commit to memory: nothing is open, so the overlay draws nothing at all.
+    pub fn isIdle(self: *const Inspector) bool {
+        return self.menu == null and !self.open;
+    }
+
+    // A right click: snapshot the frame that was resolved most recently, remember the node under the pointer, and summon the menu there.
+    pub fn onSecondaryClick(self: *Inspector, x: f32, y: f32) void {
+        self.snapshot = Snapshot.build(self.width, self.height);
+        self.picked = self.snapshot.pick(x, y);
+        self.menu = .{ .x = x, .y = y };
+    }
+
+    // Escape closes the menu first, then the window; true means the key was consumed.
+    pub fn onKey(self: *Inspector, keycode: u32) bool {
+        if (keycode != key_escape) return false;
+        if (self.menu != null) {
+            self.menu = null;
+            return true;
+        }
+        if (self.open) {
+            self.open = false;
+            return true;
+        }
+        return false;
+    }
+
+    // Open the tree window on the node the menu was summoned over.
+    pub fn openOnPicked(self: *Inspector) void {
+        self.open = true;
+        self.menu = null;
+        for (self.snapshot.roots[0..self.snapshot.root_count]) |root| {
+            self.expanded[@intCast(root)] = true;
+        }
+        if (self.picked) |i| self.selectNode(i);
+    }
+
+    // Open the window on the root of the tree, which is what a screenshot or a demo wants: the whole app, one level in.
+    pub fn openOnRoot(self: *Inspector) void {
+        self.snapshot = Snapshot.build(self.width, self.height);
+        self.open = true;
+        self.menu = null;
+        for (self.snapshot.roots[0..self.snapshot.root_count]) |root| {
+            self.expanded[@intCast(root)] = true;
+        }
+        if (self.snapshot.root_count > 0) self.selectNode(@intCast(self.snapshot.roots[0]));
+    }
+
+    // Select a node and make sure every ancestor is expanded, so the row is on screen.
+    pub fn selectNode(self: *Inspector, index: usize) void {
+        if (index >= self.snapshot.count) return;
+        self.selected = index;
+        var p = self.snapshot.items[index].parent;
+        while (p >= 0) : (p = self.snapshot.items[@intCast(p)].parent) {
+            self.expanded[@intCast(p)] = true;
+        }
+    }
+
+    // A row click: the first click selects, a second click on an expanded row folds it away.
+    pub fn clickRow(self: *Inspector, index: usize) void {
+        if (index >= self.snapshot.count) return;
+        if (self.selected != null and self.selected.? == index and self.snapshot.hasChildren(index)) {
+            self.expanded[index] = !self.expanded[index];
+            return;
+        }
+        self.selectNode(index);
+    }
+
+    // ---- drawing ----
+
+    // Declare the overlay. The Host calls this after the app's own root, so the panel paints over everything and the app stays unmodified.
+    pub fn declare(self: *Inspector, w: u32, h: u32) void {
+        self.width = w;
+        self.height = h;
+        if (self.isIdle()) return;
+        // The app declared its nodes a moment ago; their geometry is the last resolve, which is one frame old and exactly what an overlay can show.
+        self.snapshot.rebuildPreserving();
+        // A window opened without a picked node still shows the top of the tree, rather than one collapsed row.
+        if (!self.seeded) {
+            self.seeded = true;
+            for (self.snapshot.roots[0..self.snapshot.root_count]) |root| {
+                self.expanded[@intCast(root)] = true;
+            }
+        }
+        self.flatten();
+        if (self.menu) |m| self.declareMenu(m);
+        if (self.open) self.declarePanel();
+    }
+
+    // Flatten the open branches into the row list the window draws.
+    fn flatten(self: *Inspector) void {
+        self.row_count = 0;
+        for (self.snapshot.roots[0..self.snapshot.root_count]) |root| {
+            self.flattenNode(@intCast(root), 0);
+        }
+    }
+
+    fn flattenNode(self: *Inspector, index: usize, depth: u8) void {
+        if (self.row_count >= max_rows or depth > 15) return;
+        self.rows[self.row_count] = .{ .node = @intCast(index), .depth = depth };
+        self.row_count += 1;
+        if (!self.expanded[index]) return;
+        var c = self.snapshot.items[index].first_child;
+        while (c >= 0) : (c = self.snapshot.items[@intCast(c)].next_sibling) {
+            self.flattenNode(@intCast(c), depth + 1);
+        }
+    }
+
+    fn declareMenu(self: *Inspector, at: cl.Vector2) void {
+        const menu_w: f32 = 244;
+        const menu_h: f32 = 46;
+        const win_w: f32 = @floatFromInt(@max(self.width, 1));
+        const win_h: f32 = @floatFromInt(@max(self.height, 1));
+        const x = @min(@max(4, at.x), @max(4, win_w - menu_w - 4));
+        const y = @min(@max(4, at.y), @max(4, win_h - menu_h - 4));
+
+        // A transparent full-window catcher, so a click anywhere else dismisses the menu instead of reaching the app.
+        cl.UI()(.{
+            .id = backdropId(),
+            .floating = .{ .attach_to = .to_root, .offset = .{ .x = 0, .y = 0 }, .z_index = panel_z - 2 },
+            .layout = .{ .sizing = .{ .w = .fixed(win_w), .h = .fixed(win_h) } },
+            .background_color = Color.rgba(0, 0, 0, 0).toClay(),
+        })({});
+        registry.registerZCursor(backdropId(), onBackdrop, self, 0, hit_z - 1, .default);
+
+        cl.UI()(.{
+            .id = menuId(),
+            .floating = .{ .attach_to = .to_root, .offset = .{ .x = x, .y = y }, .z_index = panel_z - 1 },
+            .layout = .{
+                .direction = .top_to_bottom,
+                .sizing = .{ .w = .fixed(menu_w), .h = .fixed(menu_h) },
+                .padding = .{ .left = 10, .right = 10, .top = 7, .bottom = 7 },
+                .child_gap = 2,
+            },
+            .background_color = bg.toClay(),
+            .corner_radius = .all(8),
+            .border = .{ .color = divider.toClay(), .width = .outside(1) },
+        })({
+            cl.text("Inspect element", .{ .font_size = 13, .color = fg.toClay() });
+            cl.text(pickedLine(self), .{ .font_size = 11, .color = dim.toClay() });
+        });
+        registry.registerZCursor(menuId(), onMenuInspect, self, 0, hit_z, .pointer);
+    }
+
+    fn declarePanel(self: *Inspector) void {
+        const win_w: f32 = @floatFromInt(@max(self.width, 1));
+        const pw = self.panelWidth();
+        const ph = self.panelHeight();
+        const px = @max(12, win_w - pw - 12);
+        const py: f32 = 12;
+
+        cl.UI()(.{
+            .id = panelId(),
+            .floating = .{ .attach_to = .to_root, .offset = .{ .x = px, .y = py }, .z_index = panel_z },
+            .layout = .{
+                .direction = .top_to_bottom,
+                .sizing = .{ .w = .fixed(pw), .h = .fixed(ph) },
+                .child_gap = 0,
+            },
+            .background_color = bg.toClay(),
+            .corner_radius = .all(10),
+            .border = .{ .color = divider.toClay(), .width = .outside(1) },
+        })({
+            self.declareHeader();
+            self.declareBody(ph);
+            self.declareDetail();
+        });
+        // The panel swallows clicks on its own face, one step under the rows, so a control behind it never fires and the rows still answer.
+        registry.registerZCursor(panelId(), swallow, self, 0, hit_z - 1, .default);
+    }
+
+    fn declareHeader(self: *Inspector) void {
+        cl.UI()(.{
+            .id = headerId(),
+            .layout = .{
+                .direction = .left_to_right,
+                .sizing = .{ .w = .grow, .h = .fixed(30) },
+                .padding = .{ .left = 10, .right = 6 },
+                .child_alignment = .{ .x = .left, .y = .center },
+                .child_gap = 6,
+            },
+            .background_color = surface.toClay(),
+            .corner_radius = .{ .top_left = 10, .top_right = 10 },
+        })({
+            cl.text(frame.formatText("Inspector  {d} nodes", .{self.snapshot.count}), .{ .font_size = 13, .color = fg.toClay() });
+            cl.UI()(.{
+                .id = headerSpacerId(),
+                .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(1) } },
+            })({});
+            cl.UI()(.{
+                .id = closeId(),
+                .layout = .{
+                    .sizing = .{ .w = .fixed(22), .h = .fixed(20) },
+                    .child_alignment = .center,
+                },
+                .background_color = (if (cl.hovered()) hover.toClay() else surface.toClay()),
+                .corner_radius = .all(5),
+            })({
+                cl.text("x", .{ .font_size = 12, .color = fg.toClay() });
+            });
+        });
+        registry.registerZCursor(closeId(), onClose, self, 0, hit_z, .pointer);
+    }
+
+    // The scrolling tree. Only the rows inside the viewport are declared, and spacers keep the content as tall as the full list.
+    fn declareBody(self: *Inspector, panel_h: f32) void {
+        const body_h = panel_h - 30 - detail_h;
+        const offset = @max(0, -cl.getScrollOffsetById(bodyId()).y);
+        const shown: usize = @intFromFloat(@max(1, body_h / row_h));
+        const first = @min(self.row_count, @as(usize, @intFromFloat(@floor(offset / row_h))));
+        const last = @min(self.row_count, first + shown + 1);
+
+        cl.UI()(.{
+            .id = bodyId(),
+            .layout = .{
+                .direction = .top_to_bottom,
+                .sizing = .{ .w = .grow, .h = .fixed(@max(0, body_h)) },
+            },
+            .clip = .{ .vertical = true, .child_offset = cl.getScrollOffsetById(bodyId()) },
+        })({
+            if (first > 0) spacer(topSpacerId(), @as(f32, @floatFromInt(first)) * row_h);
+            for (self.rows[first..last], first..) |row, i| self.declareRow(row, i);
+            if (last < self.row_count) spacer(bottomSpacerId(), @as(f32, @floatFromInt(self.row_count - last)) * row_h);
+        });
+    }
+
+    fn declareRow(self: *Inspector, row: Row, index: usize) void {
+        const item = self.snapshot.items[row.node];
+        const is_selected = self.selected != null and self.selected.? == row.node;
+        const caret = if (!self.snapshot.hasChildren(row.node)) " " else if (self.expanded[row.node]) "-" else "+";
+        const tag = if (item.tag.len > 0) item.tag else "(unnamed)";
+        cl.UI()(.{
+            .id = rowId(row.node),
+            .layout = .{
+                .direction = .left_to_right,
+                .sizing = .{ .w = .grow, .h = .fixed(row_h) },
+                .padding = .{ .left = 6 + @as(u16, row.depth) * 11, .right = 6 },
+                .child_alignment = .{ .x = .left, .y = .center },
+                .child_gap = 5,
+            },
+            .background_color = (if (is_selected) sel_bg.toClay() else if (cl.hovered()) hover.toClay() else bg.toClay()),
+            .border = .{ .color = (if (is_selected) accent.toClay() else Color.rgba(0, 0, 0, 0).toClay()), .width = .{ .left = 2 } },
+        })({
+            cl.text(caret, .{ .font_size = 11, .color = dim.toClay() });
+            cl.text(tag, .{ .font_size = 12, .color = if (is_selected) fg.toClay() else text.toClay() });
+            cl.text(@tagName(item.role), .{ .font_size = 10, .color = dim.toClay() });
+        });
+        registry.registerZCursor(rowId(row.node), onRow, self, index, hit_z, .pointer);
+    }
+
+    fn declareDetail(self: *Inspector) void {
+        cl.UI()(.{
+            .id = detailId(),
+            .layout = .{
+                .direction = .top_to_bottom,
+                .sizing = .{ .w = .grow, .h = .fixed(detail_h) },
+                .padding = .{ .left = 10, .right = 10, .top = 6, .bottom = 6 },
+                .child_gap = 2,
+            },
+            .background_color = surface.toClay(),
+            .corner_radius = .{ .bottom_left = 10, .bottom_right = 10 },
+            .border = .{ .color = divider.toClay(), .width = .{ .top = 1 } },
+        })({
+            const item = if (self.selected) |i| self.snapshot.items[i] else null;
+            if (item) |it| {
+                cl.text(frame.formatText("{s}  ({s})", .{ if (it.tag.len > 0) it.tag else "(unnamed)", @tagName(it.role) }), .{ .font_size = 12, .color = fg.toClay() });
+                cl.text(frame.formatText("box {d:.0},{d:.0}  {d:.0}x{d:.0}   visible {d:.0}%", .{
+                    it.bounds.x, it.bounds.y, it.bounds.width, it.bounds.height, it.visible * 100,
+                }), .{ .font_size = 11, .color = text.toClay() });
+                cl.text(frame.formatText("clip {d:.0},{d:.0}  {d:.0}x{d:.0}   z {d}", .{
+                    it.clip.x, it.clip.y, it.clip.width, it.clip.height, it.z,
+                }), .{ .font_size = 11, .color = dim.toClay() });
+                var action_buf: [96]u8 = undefined;
+                var flag_buf: [96]u8 = undefined;
+                cl.text(frame.formatText("actions [{s}]  flags [{s}]", .{
+                    snapshot_mod.actionList(it.actions, &action_buf),
+                    snapshot_mod.flagList(it.flags, &flag_buf),
+                }), .{ .font_size = 11, .color = dim.toClay() });
+                if (it.label.len > 0) {
+                    cl.text(frame.formatText("\"{s}\"", .{it.label}), .{ .font_size = 11, .color = accent.toClay() });
+                }
+            } else {
+                cl.text("Right-click the app, then Inspect element.", .{ .font_size = 11, .color = dim.toClay() });
+            }
+        });
+    }
+
+    // ---- ids, colours, constants ----
+
+    const row_h: f32 = 21;
+    const detail_h: f32 = 92;
+    // Render z of the overlay: above any app float, which keeps the panel on top of popovers and dropdowns.
+    const panel_z: i16 = 4000;
+    // Click priority: above every app target (which register at z 0 or a small float z), so the panel answers first.
+    const hit_z: i16 = 1000;
+    const key_escape: u32 = 1;
+
+    const bg = Color.hexC("#1c1c22");
+    const surface = Color.hexC("#26262e");
+    const hover = Color.hexC("#2f2f39");
+    const divider = Color.hexC("#3a3a46");
+    const fg = Color.hexC("#e4e4ea");
+    const text = Color.hexC("#c8c8d0");
+    const dim = Color.hexC("#8a8a94");
+    const accent = Color.hexC("#7aa2c4");
+    const sel_bg = Color.hexC("#233043");
+};
+
+fn pickedLine(self: *const Inspector) []const u8 {
+    const i = self.picked orelse return "nothing under the pointer";
+    const item = self.snapshot.items[i];
+    const tag = if (item.tag.len > 0) item.tag else "(unnamed)";
+    return frame.formatText("{s}  {s}", .{ tag, @tagName(item.role) });
+}
+
+fn backdropId() cl.ElementId {
+    return .ID("glinlandui.inspector.backdrop");
+}
+
+fn menuId() cl.ElementId {
+    return .ID("glinlandui.inspector.menu");
+}
+
+fn panelId() cl.ElementId {
+    return .ID("glinlandui.inspector.panel");
+}
+
+fn headerId() cl.ElementId {
+    return .ID("glinlandui.inspector.header");
+}
+
+fn headerSpacerId() cl.ElementId {
+    return .ID("glinlandui.inspector.header.spacer");
+}
+
+fn closeId() cl.ElementId {
+    return .ID("glinlandui.inspector.close");
+}
+
+fn bodyId() cl.ElementId {
+    return .ID("glinlandui.inspector.body");
+}
+
+fn detailId() cl.ElementId {
+    return .ID("glinlandui.inspector.detail");
+}
+
+fn topSpacerId() cl.ElementId {
+    return .ID("glinlandui.inspector.rows.top");
+}
+
+fn bottomSpacerId() cl.ElementId {
+    return .ID("glinlandui.inspector.rows.bottom");
+}
+
+fn rowId(node: u16) cl.ElementId {
+    return .IDI("glinlandui.inspector.row", @as(u32, node) + 1);
+}
+
+fn spacer(id: cl.ElementId, h: f32) void {
+    cl.UI()(.{
+        .id = id,
+        .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(h) } },
+    })({});
+}
+
+fn onBackdrop(ctx: ?*anyopaque, _: usize) void {
+    const self: *Inspector = @ptrCast(@alignCast(ctx.?));
+    self.menu = null;
+}
+
+fn onMenuInspect(ctx: ?*anyopaque, _: usize) void {
+    const self: *Inspector = @ptrCast(@alignCast(ctx.?));
+    self.openOnPicked();
+}
+
+fn onClose(ctx: ?*anyopaque, _: usize) void {
+    const self: *Inspector = @ptrCast(@alignCast(ctx.?));
+    self.open = false;
+}
+
+fn onRow(ctx: ?*anyopaque, index: usize) void {
+    const self: *Inspector = @ptrCast(@alignCast(ctx.?));
+    const row = if (index < self.row_count) self.rows[index] else return;
+    self.clickRow(row.node);
+}
+
+fn swallow(_: ?*anyopaque, _: usize) void {}
+
+// ---- Tests: the whole flow, through a real Host frame ----
+
+const host_mod = @import("../host.zig");
+const button_mod = @import("../components/button.zig");
+const dispatch = @import("../components/dispatch.zig");
+
+const TestApp = struct {
+    clicks: u32 = 0,
+
+    fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
+        const self: *TestApp = @ptrCast(@alignCast(ctx.?));
+        button_mod.button(.{
+            .id = .{ .text = "dev.btn" },
+            .label = .{ .text = "OK" },
+            .w = .{ .fixed = 120 },
+            .h = .{ .fixed = 40 },
+            .pad = .{},
+            .on_click = .{ .f = onClick, .ctx = self },
+        });
+    }
+
+    fn onClick(ctx: ?*anyopaque) void {
+        const self: *TestApp = @ptrCast(@alignCast(ctx.?));
+        self.clicks += 1;
+    }
+};
+
+const Harness = struct {
+    app: TestApp = .{},
+    insp: Inspector = .{},
+    host: host_mod.Host = undefined,
+
+    fn init(self: *Harness) !void {
+        // page_allocator, matching every other Host test: the Clay arena is process-lifetime by design.
+        self.host = try host_mod.Host.init(std.heap.page_allocator, &self.app, TestApp.root);
+        self.host.inspect = &self.insp;
+    }
+
+    fn rightClick(self: *Harness, x: f32, y: f32) void {
+        self.host.onPointerEvent(x, y, true, dispatch.BTN_RIGHT);
+        self.host.onPointerEvent(x, y, false, dispatch.BTN_RIGHT);
+    }
+
+    fn click(self: *Harness, x: f32, y: f32) void {
+        self.host.onPointerEvent(x, y, true, dispatch.BTN_LEFT);
+        self.host.onPointerEvent(x, y, false, dispatch.BTN_LEFT);
+    }
+};
+
+// The centre of an element the last frame laid out, which is where a click has to land to hit it.
+fn centreOf(id: cl.ElementId) cl.Vector2 {
+    const bb = cl.getElementData(id).bounding_box;
+    return .{ .x = bb.x + bb.width * 0.5, .y = bb.y + bb.height * 0.5 };
+}
+
+test "a right click summons the menu and never reaches the app" {
+    var h = Harness{};
+    try h.init();
+    h.host.frame(480, 360);
+    // The point is over the app's own button.
+    h.rightClick(20, 20);
+    try std.testing.expectEqual(@as(u32, 0), h.app.clicks);
+    try std.testing.expect(h.insp.menu != null);
+    try std.testing.expect(!h.insp.isIdle());
+    h.host.frame(480, 360);
+    try std.testing.expect(cl.getElementData(menuId()).found);
+    // The node under the pointer was picked, so the menu can name it.
+    try std.testing.expect(h.insp.picked != null);
+    try std.testing.expectEqualStrings("dev.btn", h.insp.snapshot.items[h.insp.picked.?].tag);
+}
+
+test "clicking the menu opens the tree window, and the window draws its rows" {
+    var h = Harness{};
+    try h.init();
+    h.host.frame(480, 360);
+    h.rightClick(20, 20);
+    h.host.frame(480, 360);
+
+    const item = centreOf(menuId());
+    h.click(item.x, item.y);
+    try std.testing.expect(h.insp.open);
+    try std.testing.expect(h.insp.menu == null);
+
+    h.host.frame(480, 360);
+    try std.testing.expect(cl.getElementData(panelId()).found);
+    try std.testing.expect(cl.getElementData(bodyId()).found);
+    // The picked node's ancestors are expanded, so its row is on screen and clickable.
+    const row = h.insp.snapshot.find(cl.getElementId("dev.btn").id).?;
+    const index = for (h.insp.snapshot.items[0..h.insp.snapshot.count], 0..) |it, i| {
+        if (it.id == row.id) break i;
+    } else return error.TestUnexpectedResult;
+    try std.testing.expect(cl.getElementData(rowId(@intCast(index))).found);
+}
+
+test "escape closes the window and is not the app's close intent" {
+    var h = Harness{};
+    try h.init();
+    h.host.frame(480, 360);
+    h.rightClick(20, 20);
+    h.host.frame(480, 360);
+    const item = centreOf(menuId());
+    h.click(item.x, item.y);
+    h.host.frame(480, 360);
+    try std.testing.expect(h.insp.open);
+
+    try std.testing.expect(!h.host.onKeyEvent(1, true));
+    try std.testing.expect(!h.insp.open);
+    // With nothing of the devtool's open, and no app handler asking to close, a later key is still not a close intent.
+    try std.testing.expect(!h.host.onKeyEvent(1, true));
+}
+
+test "the app stays usable while the window is up: a click away from it reaches the button" {
+    var h = Harness{};
+    try h.init();
+    h.host.frame(480, 360);
+    h.rightClick(20, 20);
+    h.host.frame(480, 360);
+    const item = centreOf(menuId());
+    h.click(item.x, item.y);
+    h.host.frame(480, 360);
+
+    // The panel is docked to the right, so the button at 0..120 x 0..40 is clear of it.
+    const b = centreOf(cl.getElementId("dev.btn"));
+    h.click(b.x, b.y);
+    try std.testing.expectEqual(@as(u32, 1), h.app.clicks);
+}
+
+test "a right click on a menu that is already up just moves it" {
+    var h = Harness{};
+    try h.init();
+    h.host.frame(480, 360);
+    h.rightClick(20, 20);
+    h.host.frame(480, 360);
+    const first = h.insp.menu.?;
+    h.rightClick(120, 90);
+    try std.testing.expectApproxEqAbs(@as(f32, 120), h.insp.menu.?.x, 0.001);
+    try std.testing.expect(first.x != h.insp.menu.?.x);
+}

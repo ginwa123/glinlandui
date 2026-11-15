@@ -35,6 +35,7 @@ versa.
 - [Architecture](#architecture)
 - [Testing](#testing)
 - [End-to-end UI testing](#end-to-end-ui-testing)
+- [Devtool: inspect a running app](#devtool-inspect-a-running-app)
 - [Project layout](#project-layout)
 - [Further reading](#further-reading)
 
@@ -937,6 +938,68 @@ Whatever you register, **add a test for it**, and bump `tests.lock`.
 
 ---
 
+## Devtool: inspect a running app
+
+Every app in this repository ships the inspector, and any app can: it is one line after the `Host` exists.
+
+```zig
+var host = try glinlandui.host.Host.init(alloc, &app, App.content);
+defer host.deinit();
+_ = glinlandui.devtools.attach(alloc, &host);
+```
+
+Right-click anywhere in the window and a context menu names the node under the pointer. **Inspect element** opens a
+floating window with the component tree: id, role and label per row, expandable and scrollable, with the selected
+node's box, clip rectangle, z, actions and flags in the footer. `Escape` closes it, and the app underneath keeps
+running and staying clickable outside the window.
+
+The tree holds every widget that registers semantics (`button`, `input`, `list`, `tree`, `scroll`, …), every container
+declared with `box`, and the parent of each. Text runs are not nodes: a Clay text element has no id, so it has no box a
+devtool could point at.
+
+Nothing is added to the app's frame cost while the window is closed — the overlay declares nothing when idle — and an
+attached devtool turns on `resolve_semantics`, the same per-frame tree `testing.Driver` reads, so the nodes keep the
+geometry the window draws from.
+
+### The same tree, headless, for an agent
+
+`zig build inspect` runs an app with no window and prints the tree:
+
+```sh
+zig build inspect -- --app=todo                      # indented lines
+zig build inspect -- --app=calculator --json         # one JSON document
+zig build inspect -- --app=catalog --depth=2 --json  # stop at two levels
+zig build inspect -- --app=todo --pick=120,80        # the node under one point
+```
+
+`--app` is `demo`, `calculator`, `todo`, `catalog`, `file-dialog` or `lazy-scroll`. `--size=WxH` overrides the app's
+own window size and `--frames=N` how long to run before reading (default 3). The JSON is the shape a program wants:
+`{"frame":{"width":…,"height":…,"nodes":N},"roots":[{…,"children":[…]}]}`, each node carrying `tag`, `hash`, `role`,
+`label`, `bounds`, `visible`, `flags` and `actions`.
+
+`--shot=PATH.tga` writes the frame instead — the same tree, with the inspection window open — so a machine with no
+compositor can still see what it is describing:
+
+```sh
+zig build inspect -- --app=todo --shot=/tmp/todo.tga
+```
+
+### Reading the tree from your own code
+
+`glinlandui.devtools.snapshot.Snapshot.build(w, h)` returns the nodes of the last resolved frame as the same `Item`
+records the window draws, so a `--dump` mode in any app is a few lines:
+
+```zig
+var driver = try glinlandui.testing.Driver.initOwned(alloc, &app, App.content);
+driver.headless = true;                       // no GL, no window
+try driver.start(.{ .width = 720, .height = 480 });
+driver.frame();
+const snap = glinlandui.devtools.snapshot.Snapshot.build(720, 480);
+try snap.writeJson(&writer, .{});             // or snap.writeText(&writer, 16)
+```
+
+---
+
 ## Project layout
 
 ```
@@ -945,6 +1008,7 @@ src/
 ├── platform.zig      the ONLY file that branches on builtin.os.tag.
 ├── native_test.zig   test root for the Linux-only native backends.
 ├── main.zig          demo app (dogfoods the public surface).
+├── inspect_main.zig  ★ the devtool binary: any example app's tree, headless.
 │
 ├── core/             platform-agnostic. Compiles identically everywhere.
 │   ├── semantics.zig         ★ per-frame semantics model (E2E + future a11y)
@@ -964,6 +1028,7 @@ src/
 │   ├── text_backend.zig      text facade            (consumes select.zig)
 │   ├── text_portable.zig     deterministic text estimator
 │   ├── protocol_consts.zig   evdev codes + Wayland enum constants
+│   ├── devtools/             ★ the inspector: tree snapshot, overlay window, CLI
 │   ├── components/           15 widgets (box, button, input, scroll, …)
 │   ├── testing/              ★ the E2E test layer
 │   │   ├── root.zig              Driver + Interaction (onNode, performClick…)

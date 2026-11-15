@@ -24,6 +24,7 @@ zig build run              # the demo window
 zig build run-calculator   # the calculator example
 zig build run-todo         # the MVVM todo example (see examples/todo/README.md)
 zig build test-todo        # the todo example's own tests, headless
+zig build inspect -- --app=todo --json   # the devtool: any example's component tree, headless
 ```
 
 Plus the CI scripts, which are the real contract:
@@ -66,6 +67,7 @@ test runner, because the Zig runner relays any stderr byte from a passing test a
 src/root.zig        the public surface: Window, render, text, frame, host, components, file_dialog
 src/platform.zig    the ONLY file that branches on OS
 src/core/           platform-agnostic: Clay components, renderer, text, testing harness
+src/core/devtools/  the inspector: the tree snapshot, the in-app window, the CLI
 src/linux/          Wayland / EGL / GLES3 backend
 src/mac/            Cocoa backend, plus the Objective-C shim
 src/file_dialog.zig system file dialog: NSOpenPanel on macOS, a portable stub elsewhere

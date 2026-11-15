@@ -44,6 +44,8 @@ pub fn main() !void {
     var app = App{};
     var host = try glinlandui.host.Host.init(alloc, &app, App.root);
     defer host.deinit();
+    // The devtool: right-click anywhere for this app's component tree. One line, and the app itself is untouched.
+    _ = glinlandui.devtools.attach(alloc, &host);
 
     var window = glinlandui.Window.init(alloc, .{
         .app_id = "glinlandui",

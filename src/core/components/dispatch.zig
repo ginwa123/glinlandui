@@ -10,6 +10,9 @@ const frame_mod = @import("../frame.zig");
 /// Linux BTN_LEFT (0x110): the only button that dispatches clicks.
 pub const BTN_LEFT: u32 = 272;
 
+/// Linux BTN_RIGHT (0x111): forwarded untouched, so a devtool can claim it without the app ever seeing it.
+pub const BTN_RIGHT: u32 = 273;
+
 // ---- Views ----
 
 pub const view_cap: usize = 8;

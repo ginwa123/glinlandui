@@ -68,6 +68,8 @@ pub const Driver = struct {
     last_text_lens: [text_storage_cap]usize = undefined,
     last_text_count: usize = 0,
     options: frame_mod.FrameOptions = .{},
+    // Run frames without a renderer, which is what a shipping headless CLI needs (`is_test` only covers the test binaries).
+    headless: bool = false,
     /// Semantics fingerprint of the last frame, for the waitForIdle fixed point.
     last_semantics_hash: u64 = 0,
     initialized: bool = false,
@@ -129,6 +131,7 @@ pub const Driver = struct {
             .probe_user_data = @ptrCast(self),
             // Resolve the semantics tree so onNode()/waitForIdle() see the geometry THIS frame produced.
             .resolve_semantics = true,
+            .no_present = self.headless,
         };
         const shape = self.host.frameWithOptions(
             self.viewport.width,

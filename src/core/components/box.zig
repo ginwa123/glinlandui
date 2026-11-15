@@ -4,6 +4,7 @@ const cl = @import("zclay");
 const headless = @import("../testing/headless.zig");
 const Color = @import("../color.zig").Color;
 const prop = @import("../props.zig");
+const semantics = @import("../semantics.zig");
 
 /// The sizing type a container props uses. One definition, named where a box needs it.
 pub const Size = prop.Size;
@@ -50,7 +51,17 @@ pub fn box(p: BoxProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void)
         .corner_radius = p.radius.clay(),
         .border = p.border.clay(),
     })({
+        // A container is part of the component tree: the children it declares record it as their parent, which is what the devtool's tree shows.
+        semantics.pushAncestor(p.id.clay(), false);
         children(ctx);
+        semantics.popAncestor();
+    });
+    // Registered AFTER the pop, so a container is never its own ancestor.
+    semantics.register(.{
+        .id = p.id.clay(),
+        .tag = p.id.str(),
+        .role = .container,
+        .flags = .{ .enabled = true },
     });
 }
 

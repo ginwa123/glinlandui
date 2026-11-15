@@ -10,6 +10,7 @@ const cl = @import("zclay");
 const scroll_mod = @import("components/scroll.zig");
 const input_mod = @import("components/input.zig");
 const semantics = @import("semantics.zig");
+const inspector_mod = @import("devtools/inspector.zig");
 const glyphs = @import("glyphs.zig");
 const text_face = @import("text_face.zig");
 
@@ -41,6 +42,8 @@ pub const Host = struct {
     keys: dispatch.KeyChain = .{},
     root_ctx: ?*anyopaque = null,
     root_fn: RootFn,
+    /// The devtool. Non-null turns the app into one that answers a right click with its own component tree; the app's own code is untouched.
+    inspect: ?*inspector_mod.Inspector = null,
 
     pub fn init(alloc: std.mem.Allocator, ctx: ?*anyopaque, root_fn: RootFn) !Host {
         var self = Host{ .alloc = alloc, .root_ctx = ctx, .root_fn = root_fn };
@@ -72,6 +75,8 @@ pub const Host = struct {
         image_widgets.beginFrame();
         semantics.beginFrame();
         self.root_fn(self.root_ctx, w, h);
+        // The devtool declares last, so its overlay paints over the app; it registers no semantics node, so it never shows up in its own tree.
+        if (self.inspect) |dev| dev.declare(w, h);
     }
 
     fn declareThunk(ctx: *anyopaque, w: u32, h: u32) void {
@@ -107,24 +112,10 @@ pub const Host = struct {
         self.scroll_dx -= dx;
         self.scroll_dy -= dy;
         // clayFrame resolves the cursor shape AFTER endLayout into frame_mod.currentShape() (it also returns it; void here keeps Delegate.on_frame and all.
-        if (options) |opts| {
-            return frame_mod.clayFrameWithOptions(
-                self.alloc,
-                &self.renderer,
-                &self.renderer_attempted,
-                self.ptr.x,
-                self.ptr.y,
-                self.ptr.down,
-                dx,
-                dy,
-                w,
-                h,
-                declareThunk,
-                self,
-                opts,
-            );
-        }
-        return frame_mod.clayFrame(
+        var effective: frame_mod.FrameOptions = if (options) |opts| opts.* else .{};
+        // A devtool reads the resolved tree, so attaching one turns the resolve on: the app never has to know its frames are being watched.
+        if (self.inspect != null) effective.resolve_semantics = true;
+        return frame_mod.clayFrameWithOptions(
             self.alloc,
             &self.renderer,
             &self.renderer_attempted,
@@ -137,10 +128,16 @@ pub const Host = struct {
             h,
             declareThunk,
             self,
+            &effective,
         );
     }
 
     pub fn onPointerEvent(self: *Host, x: f32, y: f32, pressed: bool, button: u32) void {
+        // A right press belongs to the devtool alone: the app's pointer state, focus and click dispatch never see it.
+        if (button == dispatch.BTN_RIGHT) {
+            if (pressed) if (self.inspect) |dev| dev.onSecondaryClick(x, y);
+            return;
+        }
         const last_x = self.ptr.x;
         const last_y = self.ptr.y;
         // Keep the frame-visible pointer current, so a click handler dispatched below places the caret where the release happened.
@@ -163,6 +160,10 @@ pub const Host = struct {
 
     /// The return value is CLOSE INTENT, which the window acts on: a key the focused field typed is never one.
     pub fn onKeyEvent(self: *Host, keycode: u32, pressed: bool) bool {
+        // Escape closes the devtool while it is up, and is never read as the app's close intent.
+        if (self.inspect) |dev| {
+            if (dev.onKey(keycode)) return false;
+        }
         if (dispatch.handleKey(&self.keys, keycode, pressed)) return true;
         // No app handler asked to close: the focused field takes the key, so typing needs no routing code in the app.
         if (pressed) _ = input_mod.dispatchKey(self.keys.mods, keycode);
