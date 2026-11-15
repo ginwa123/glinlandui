@@ -21,6 +21,7 @@ typedef struct {
     int count;      /* vertex count */
     int has_scissor;/* 0 = no clip */
     int sx, sy, sw, sh; /* scissor in device pixels, top-left origin */
+    unsigned int texture_id; /* 0 = glyph atlas, otherwise an image from glin_metal_set_image */
 } GlinSegment;
 
 /* Attach a CAMetalLayer to `nsview` and build the pipeline. NULL when the
@@ -34,6 +35,10 @@ int glin_metal_resize(GlinMetal *m, int w, int h);
 
 /* Replace the R8 glyph atlas. Called only when the atlas changed. */
 void glin_metal_set_atlas(GlinMetal *m, const unsigned char *bytes, int w, int h);
+
+/* Upload an RGBA8 image under `id` (1..GLIN_METAL_MAX_IMAGES). Replaces any texture already stored there. */
+#define GLIN_METAL_MAX_IMAGES 32
+void glin_metal_set_image(GlinMetal *m, unsigned int image_id, const unsigned char *rgba, int w, int h);
 
 /* Clear to the given colour, draw every segment, present. 0 when there is no
  * drawable this frame (the window is off-screen or minimised). */

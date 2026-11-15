@@ -31,6 +31,7 @@ struct GlinMetal {
     id<MTLCommandQueue> queue;
     id<MTLRenderPipelineState> pipeline;
     id<MTLTexture> atlas;
+    id<MTLTexture> images[GLIN_METAL_MAX_IMAGES];
     /* A real buffer, grown on demand. setVertexBytes is capped at 4 KB by Metal
      * and aborts above it, which a real screen passes easily. */
     id<MTLBuffer> vbuf;
@@ -90,6 +91,13 @@ static const char *fragment_src =
     "static float cov(float d) { return clamp(0.5 - d, 0.0, 1.0); }\n"
     "fragment float4 fs_main(VOut in [[stage_in]],\n"
     "                        texture2d<float> atlas [[texture(0)]]) {\n"
+    "  if (in.kind > 1.5) {\n"
+    "    /* Image: the bound texture is RGBA8, so use it as-is; the blend func applies its alpha. */\n"
+    "    constexpr sampler si(coord::normalized, filter::linear, address::clamp_to_edge);\n"
+    "    float4 c = atlas.sample(si, in.local);\n"
+    "    if (c.a <= 0.0) discard_fragment();\n"
+    "    return c;\n"
+    "  }\n"
     "  if (in.kind > 0.5) {\n"
     "    /* nearest: the CPU path blits one mask texel to one pixel, so any filtering would blur a difference in. */\n"
     "    constexpr sampler s(coord::normalized, filter::nearest, address::clamp_to_edge);\n"
@@ -201,6 +209,9 @@ void glin_metal_destroy(GlinMetal *m) {
     m->pipeline = nil;
     m->atlas = nil;
     m->vbuf = nil;
+    for (int i = 0; i < GLIN_METAL_MAX_IMAGES; i++) {
+        m->images[i] = nil;
+    }
     [m->layer removeFromSuperlayer];
     m->layer = nil;
     m->view = nil;
@@ -221,6 +232,26 @@ int glin_metal_resize(GlinMetal *m, int w, int h) {
     }
     m->layer.drawableSize = CGSizeMake((CGFloat)w, (CGFloat)h);
     return 1;
+}
+
+void glin_metal_set_image(GlinMetal *m, unsigned int image_id, const unsigned char *rgba, int w, int h) {
+    if (m == NULL || rgba == NULL || image_id == 0 || image_id >= GLIN_METAL_MAX_IMAGES || w <= 0 || h <= 0) {
+        return;
+    }
+    MTLTextureDescriptor *desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                    width:(NSUInteger)w
+                                                                                   height:(NSUInteger)h
+                                                                                mipmapped:NO];
+    desc.usage = MTLTextureUsageShaderRead;
+    id<MTLTexture> imgtex = [m->device newTextureWithDescriptor:desc];
+    if (imgtex == nil) {
+        return;
+    }
+    [imgtex replaceRegion:MTLRegionMake2D(0, 0, (NSUInteger)w, (NSUInteger)h)
+              mipmapLevel:0
+                withBytes:rgba
+              bytesPerRow:(NSUInteger)w * 4];
+    m->images[image_id] = imgtex;
 }
 
 void glin_metal_set_atlas(GlinMetal *m, const unsigned char *bytes, int w, int h) {
@@ -258,9 +289,6 @@ static id<MTLBuffer> ensure_vbuf(GlinMetal *m, NSUInteger bytes) {
 
 static void encode_segments(GlinMetal *m, id<MTLRenderCommandEncoder> enc, const void *verts,
                             int total_verts, const GlinSegment *segs, int seg_count) {
-    if (m->atlas != nil) {
-        [enc setFragmentTexture:m->atlas atIndex:0];
-    }
     if (verts == NULL || segs == NULL || seg_count <= 0) {
         return;
     }
@@ -290,6 +318,11 @@ static void encode_segments(GlinMetal *m, id<MTLRenderCommandEncoder> enc, const
             rect = (MTLScissorRect){ 0, 0, (NSUInteger)m->width, (NSUInteger)m->height };
         }
         [enc setScissorRect:rect];
+        // Each segment names its texture: 0 is the glyph atlas, anything else an uploaded image.
+        id<MTLTexture> tex = (s->texture_id == 0 || s->texture_id >= GLIN_METAL_MAX_IMAGES) ? m->atlas : m->images[s->texture_id];
+        if (tex != nil) {
+            [enc setFragmentTexture:tex atIndex:0];
+        }
         [enc drawPrimitives:MTLPrimitiveTypeTriangle
                 vertexStart:(NSUInteger)s->start
                 vertexCount:(NSUInteger)s->count];

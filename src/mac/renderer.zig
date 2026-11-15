@@ -6,6 +6,11 @@ const soft = @import("../core/render_software.zig");
 const glyphs = @import("../core/glyphs.zig");
 const text_face = @import("../core/text_face.zig");
 const scale_mod = @import("../core/scale.zig");
+const common = @import("../core/render_common.zig");
+const stbi = @cImport({
+    @cInclude("stb/stb_image.h");
+    @cInclude("stb/stb_image_resize2.h");
+});
 
 /// The CPU surface type the software renderer draws into; still the reference the golden gate compares against.
 pub const Surface = soft.Surface;
@@ -60,10 +65,14 @@ pub const Renderer = struct {
     seg_start: usize = 0,
     seg_scissor: ?[4]i32 = null,
     seg_open_scissor: ?[4]i32 = null,
+    seg_texture: u32 = 0,
 
     atlas: []u8 = &.{},
     atlas_dirty: bool = true,
     glyphs_map: std.AutoHashMapUnmanaged(GlyphKey, GlyphSlot) = .empty,
+    // Decoded images, keyed exactly as the CPU surface keys its cache.
+    images: std.AutoHashMapUnmanaged(u64, ImageTex) = .empty,
+    next_image_id: u32 = 1,
     shelf_x: u32 = 0,
     shelf_y: u32 = 0,
     shelf_h: u32 = 0,
@@ -84,6 +93,7 @@ pub const Renderer = struct {
         self.verts.deinit(self.alloc);
         self.segs.deinit(self.alloc);
         self.glyphs_map.deinit(self.alloc);
+        self.images.deinit(self.alloc);
         if (self.atlas.len > 0) self.alloc.free(self.atlas);
         self.atlas = &.{};
     }
@@ -153,7 +163,13 @@ pub const Renderer = struct {
                 },
                 .scissor_start => self.setScissor(bb.x * k, bb.y * k, bb.width * k, bb.height * k),
                 .scissor_end => self.setScissor(0, 0, 0, 0),
-                // Images are not drawn by the Metal path yet; the placeholder rect keeps the layout honest rather than leaving a hole.
+                .image => {
+                    const im = cmd.render_data.image;
+                    if (im.image_data) |ptr| {
+                        const ref: *const common.ImageRef = @ptrCast(@alignCast(ptr));
+                        self.pushImage(bb.x * k, bb.y * k, bb.width * k, bb.height * k, ref);
+                    }
+                },
                 else => {},
             }
         }
@@ -207,6 +223,13 @@ pub const Renderer = struct {
                 },
                 .scissor_start => self.setScissor(bb.x * k, bb.y * k, bb.width * k, bb.height * k),
                 .scissor_end => self.setScissor(0, 0, 0, 0),
+                .image => {
+                    const im = cmd.render_data.image;
+                    if (im.image_data) |ptr| {
+                        const ref: *const common.ImageRef = @ptrCast(@alignCast(ptr));
+                        self.pushImage(bb.x * k, bb.y * k, bb.width * k, bb.height * k, ref);
+                    }
+                },
                 else => {},
             }
         }
@@ -256,6 +279,7 @@ pub const Renderer = struct {
                 .sy = if (sc) |v| v[1] else 0,
                 .sw = if (sc) |v| v[2] else 0,
                 .sh = if (sc) |v| v[3] else 0,
+                .texture_id = self.seg_texture,
             }) catch {};
         }
         self.seg_start = end;
@@ -352,6 +376,95 @@ pub const Renderer = struct {
         }
     }
 
+    // Decode once per (path, max_dim) and keep the texture; the CPU surface keys its cache the same way.
+    fn imageTex(self: *Renderer, path: []const u8, max_dim: u16) ?ImageTex {
+        if (path.len == 0) return null;
+        const key = common.hashImageKey(path, max_dim);
+        if (self.images.get(key)) |t| return t;
+
+        var cbuf: [std.fs.max_path_bytes]u8 = undefined;
+        if (path.len + 1 > cbuf.len) return null;
+        @memcpy(cbuf[0..path.len], path);
+        cbuf[path.len] = 0;
+
+        var iw: c_int = 0;
+        var ih: c_int = 0;
+        var nch: c_int = 0;
+        const px = stbi.stbi_load(@ptrCast(&cbuf), &iw, &ih, &nch, 4) orelse return null;
+        defer stbi.stbi_image_free(px);
+        if (iw <= 0 or ih <= 0) return null;
+
+        const dims = common.scaledDims(@intCast(iw), @intCast(ih), max_dim);
+        var src: [*]const u8 = px;
+        var owned: []u8 = &.{};
+        defer if (owned.len > 0) self.alloc.free(owned);
+        if (dims[0] != @as(u32, @intCast(iw)) or dims[1] != @as(u32, @intCast(ih))) {
+            owned = self.alloc.alloc(u8, dims[0] * dims[1] * 4) catch return null;
+            if (stbi.stbir_resize_uint8_linear(px, iw, ih, 0, owned.ptr, @intCast(dims[0]), @intCast(dims[1]), 0, stbi.STBIR_RGBA) == null) return null;
+            src = owned.ptr;
+        }
+
+        const id = self.next_image_id;
+        self.next_image_id += 1;
+        // Metal keeps a fixed table; wrap rather than grow, so a long-lived app cannot exhaust it silently.
+        if (self.next_image_id >= max_images) self.next_image_id = 1;
+
+        const h = self.handle orelse return null;
+        c.glin_metal_set_image(h, id, src, @intCast(dims[0]), @intCast(dims[1]));
+        const tex = ImageTex{ .id = id, .w = dims[0], .h = dims[1] };
+        self.images.put(self.alloc, key, tex) catch {};
+        return tex;
+    }
+
+    fn pushImage(self: *Renderer, x: f32, y: f32, w: f32, h: f32, ref: *const common.ImageRef) void {
+        if (w <= 0 or h <= 0) return;
+        const path = ref.path_ptr[0..ref.path_len];
+        const max_dim: u16 = if (ref.max_dim == 0) 256 else ref.max_dim;
+        const placeholder = soft.img_placeholder.toClay();
+        const tex = self.imageTex(path, max_dim) orelse {
+            self.pushRect(x, y, w, h, .{ 0, 0, 0, 0 }, 0, 0, placeholder);
+            return;
+        };
+        const iw: f32 = @floatFromInt(tex.w);
+        const ih: f32 = @floatFromInt(tex.h);
+        var qx = x;
+        var qy = y;
+        var qw = w;
+        var qh = h;
+        var uv = [4]f32{ 0, 0, 1, 1 };
+        switch (ref.fit) {
+            .cover => uv = common.coverUv(iw, ih, w, h),
+            .contain => {
+                self.pushRect(x, y, w, h, .{ 0, 0, 0, 0 }, 0, 0, placeholder);
+                const b = common.containBox(iw, ih, w, h);
+                qx = x + b[0];
+                qy = y + b[1];
+                qw = b[2];
+                qh = b[3];
+            },
+            .stretch => {},
+        }
+        if (qw <= 0 or qh <= 0) return;
+
+        // Its own segment, because the texture changes: the encoder binds one texture per segment.
+        self.closeSegment();
+        self.seg_texture = tex.id;
+        const white = [4]f32{ 1, 1, 1, 1 };
+        const a = Vertex{ .pos = .{ qx, qy }, .local = .{ uv[0], uv[1] }, .size = .{ 0, 0 }, .radius = .{ 0, 0, 0, 0 }, .color = white, .mode = 0, .border = 0, .kind = 2 };
+        var b2 = a;
+        var c2 = a;
+        var d2 = a;
+        b2.pos = .{ qx + qw, qy };
+        b2.local = .{ uv[2], uv[1] };
+        c2.pos = .{ qx + qw, qy + qh };
+        c2.local = .{ uv[2], uv[3] };
+        d2.pos = .{ qx, qy + qh };
+        d2.local = .{ uv[0], uv[3] };
+        self.verts.appendSlice(self.alloc, &.{ a, b2, c2, a, c2, d2 }) catch {};
+        self.closeSegment();
+        self.seg_texture = 0;
+    }
+
     const Slot = struct { x: u32, y: u32, w: u32, h: u32, xoff: f32, yoff: f32 };
 
     fn glyphSlot(self: *Renderer, face: *const glyphs.Font, cp: u21, fs: u16) ?Slot {
@@ -389,6 +502,11 @@ pub const Renderer = struct {
         return .{ .x = slot.x, .y = slot.y, .w = slot.w, .h = slot.h, .xoff = mask.xoff, .yoff = mask.yoff };
     }
 };
+
+const ImageTex = struct { id: u32, w: u32, h: u32 };
+
+// Must match GLIN_METAL_MAX_IMAGES in metal.h.
+const max_images: u32 = 32;
 
 fn fpsNowNs() i96 {
     return std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io()).nanoseconds;
