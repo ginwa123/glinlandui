@@ -47,6 +47,16 @@ pub const TreeProps = struct {
     radius: prop.Len = .{ .px = 4 },
     /// The selected row's 2px left bar, so selection is a fill AND a mark. Null draws no bar at all.
     selected_bar: ?Color = null,
+    // The three caret glyphs: an open node, the closed one, and the blank a leaf keeps its label aligned with.
+    caret_open: []const u8 = "-",
+    caret_closed: []const u8 = "+",
+    caret_leaf: []const u8 = " ",
+    label_size: prop.Len = .{ .px = 13 },
+    caret_size: prop.Len = .{ .px = 12 },
+    // The space between two rows: 0 stacks them into a block, a point or two lets the bands read apart.
+    row_gap: prop.Len = .{},
+    // A group's label is drawn one point larger: this font has a single weight, so size is the lever.
+    group_bold: bool = false,
     on_select: prop.Select = .{},
     click_z: i16 = 0,
     // A right-click menu per row; a shorter slice (or null) leaves the remaining rows without one.
@@ -67,6 +77,12 @@ fn innerId(base: []const u8, i: usize, slot: u32) cl.ElementId {
     return cl.ElementId.IDI(base, @as(u32, @intCast(i + 1)) + slot * 0x10000);
 }
 
+/// The glyph a row's caret shows: the app's open mark, its closed mark, or the blank a leaf keeps.
+pub fn caretOf(props: TreeProps, row: Row) []const u8 {
+    if (!row.has_children) return props.caret_leaf;
+    return if (row.expanded) props.caret_open else props.caret_closed;
+}
+
 /// Declare a tree: one clickable row per entry, indented by `depth`.
 pub fn tree(props: TreeProps) void {
     semantics.registerAt(@src(), .{
@@ -82,7 +98,7 @@ pub fn tree(props: TreeProps) void {
         .layout = .{
             .direction = .top_to_bottom,
             .sizing = .{ .w = .grow, .h = .fit },
-            .child_gap = 0,
+            .child_gap = props.row_gap.whole(),
         },
         .background_color = if (props.bg) |b| b.toClay() else .{ 0, 0, 0, 0 },
     })({
@@ -90,9 +106,38 @@ pub fn tree(props: TreeProps) void {
         semantics.pushAncestor(props.id.clay(), false);
         for (props.rows, 0..) |row, i| rowUi(props, row, i);
         semantics.popAncestor();
-        // Last, so the line paints over the rows it separates.
-        reorder_mod.declareLine(props.id.str());
+        // Last, so the indicator paints over the rows it separates.
+        declareDrop(props);
     });
+}
+
+// The drop indicator: a 2 pt line between two rows, or a ring around the container the drop would fill.
+fn declareDrop(props: TreeProps) void {
+    const spec = props.reorder orelse return;
+    const list = props.id.str();
+    const owner = reorder_mod.draggingList() orelse return;
+    if (!std.mem.eql(u8, owner, list)) return;
+    const zone = reorder_mod.dropZone() orelse return;
+    if (zone.isReorder()) return reorder_mod.declareLine(list);
+    const target = reorder_mod.dropTarget() orelse return;
+    const data = cl.getElementData(rowId(list, target));
+    if (!data.found) return;
+    const bb = data.bounding_box;
+    if (bb.width <= 4 or bb.height <= 4) return;
+    // A ring two points inside the row's own box, so it reads as a container about to be filled.
+    cl.UI()(.{
+        .id = .ID("glin.tree.into"),
+        .layout = .{ .sizing = .{ .w = .fixed(bb.width - 4), .h = .fixed(bb.height - 4) } },
+        .floating = .{
+            .attach_to = .to_root,
+            .offset = .{ .x = bb.x + 2, .y = bb.y + 2 },
+            .z_index = reorder_mod.z_index,
+            .pointer_capture_mode = .passthrough,
+        },
+        .background_color = Color.withAlpha(spec.line, 34).toClay(),
+        .border = .{ .color = spec.line.toClay(), .width = .outside(2) },
+        .corner_radius = .all(props.radius.pts()),
+    })({});
 }
 
 fn rowUi(props: TreeProps, row: Row, i: usize) void {
@@ -104,6 +149,8 @@ fn rowUi(props: TreeProps, row: Row, i: usize) void {
         props.fg;
     const base_bg = if (row.selected) props.selected_bg else props.row_bg;
     const left = props.pad_lr.add(props.indent.scaled(@floatFromInt(row.depth)));
+    // A group's label outweighs its items by a point: the font has one weight, so size is the lever.
+    const label_size = if (props.group_bold and row.kind == .group) props.label_size.add(.{ .px = 1 }) else props.label_size;
 
     cl.UI()(.{
         .id = .IDI(props.id.str(), @as(u32, @intCast(i + 1))),
@@ -126,8 +173,8 @@ fn rowUi(props: TreeProps, row: Row, i: usize) void {
         } else .{},
     })({
         // A fixed-width caret so labels line up whether or not a row expands.
-        cl.text(if (!row.has_children) " " else if (row.expanded) "-" else "+", .{
-            .font_size = 12,
+        cl.text(caretOf(props, row), .{
+            .font_size = props.caret_size.whole(),
             .color = props.caret_fg.toClay(),
         });
         // The app's own decor comes between the caret and the label, so a chip keeps the label's alignment.
@@ -141,7 +188,7 @@ fn rowUi(props: TreeProps, row: Row, i: usize) void {
                 .child_alignment = .{ .x = .left, .y = .center },
             },
         })({
-            cl.text(row.label, .{ .font_size = 13, .color = fg.toClay() });
+            cl.text(row.label, .{ .font_size = label_size.whole(), .color = fg.toClay() });
         });
         if (row.meta.len > 0) {
             cl.text(row.meta, .{ .font_size = 11, .color = props.meta_fg.toClay() });
@@ -157,7 +204,15 @@ fn rowUi(props: TreeProps, row: Row, i: usize) void {
     if (props.on_select.f) |cb| {
         registry.registerZCursor(rowId(props.id.str(), i), cb, props.on_select.ctx, i, props.click_z, .pointer);
     }
-    if (props.reorder) |spec| reorder_mod.register(props.id.str(), rowId(props.id.str(), i), i, spec);
+    // A row that holds children accepts a drop INTO it; anything else only accepts a boundary.
+    if (props.reorder) |spec| {
+        const id = rowId(props.id.str(), i);
+        if (row.has_children or row.kind == .group) {
+            reorder_mod.registerContainer(props.id.str(), id, i, spec);
+        } else {
+            reorder_mod.register(props.id.str(), id, i, spec);
+        }
+    }
     if (props.context_menus) |menus| {
         if (i < menus.len and !menus[i].isNone()) context_menu.register(rowId(props.id.str(), i), menus[i], props.click_z);
     }
@@ -277,4 +332,58 @@ test "row_extra runs once per row, and only the rows with a menu answer a right 
     try std.testing.expect(context_menu.secondaryClick(with_menu.x + 4, with_menu.y + 4, 320, 240));
     try std.testing.expect(context_menu.isOpen());
     context_menu.close();
+}
+
+test "the three caret props say what a font without those glyphs should draw" {
+    const plain = TreeProps{ .id = .{ .text = "d" } };
+    try std.testing.expectEqualStrings("-", caretOf(plain, .{ .label = "a", .has_children = true, .expanded = true }));
+    try std.testing.expectEqualStrings("+", caretOf(plain, .{ .label = "a", .has_children = true }));
+    try std.testing.expectEqualStrings(" ", caretOf(plain, .{ .label = "a" }));
+
+    const carved = TreeProps{ .id = .{ .text = "d" }, .caret_open = "v", .caret_closed = ">", .caret_leaf = " " };
+    try std.testing.expectEqualStrings("v", caretOf(carved, .{ .label = "a", .has_children = true, .expanded = true }));
+    try std.testing.expectEqualStrings(">", caretOf(carved, .{ .label = "a", .has_children = true }));
+    try std.testing.expectEqualStrings(" ", caretOf(carved, .{ .label = "a" }));
+}
+
+const tuned_rows = [_]Row{
+    .{ .label = "Group", .depth = 0, .has_children = true, .expanded = true, .kind = .group },
+    .{ .label = "Item", .depth = 1 },
+};
+
+fn declareTuned() void {
+    tree(.{
+        .id = .{ .text = "t-tuned" },
+        .rows = &tuned_rows,
+        .row_h = .{ .px = 26 },
+        .label_size = .{ .px = 13 },
+        .caret_size = .{ .px = 10 },
+        .row_gap = .{ .px = 2 },
+        .group_bold = true,
+    });
+}
+
+test "row_gap separates the bands, and group_bold outweighs a group's label by a point" {
+    const cmds = try headless.frameCommands(declareTuned);
+    const first = cl.getElementData(rowId("t-tuned", 0)).bounding_box;
+    const second = cl.getElementData(rowId("t-tuned", 1)).bounding_box;
+    // One band is row_h, and the gap is the empty line between two of them.
+    try std.testing.expectEqual(@as(f32, 26), first.height);
+    try std.testing.expectEqual(@as(f32, 2), second.y - (first.y + first.height));
+
+    var group_size: u16 = 0;
+    var item_size: u16 = 0;
+    var caret_size: u16 = 0;
+    for (cmds) |c| {
+        if (c.command_type != .text) continue;
+        const slice = c.render_data.text.string_contents;
+        const bytes = slice.chars[0..@intCast(slice.length)];
+        if (std.mem.eql(u8, bytes, "Group")) group_size = c.render_data.text.font_size;
+        if (std.mem.eql(u8, bytes, "Item")) item_size = c.render_data.text.font_size;
+        if (std.mem.eql(u8, bytes, "-")) caret_size = c.render_data.text.font_size;
+    }
+    // The font has one weight, so a bolder group is a point larger, and an item keeps label_size.
+    try std.testing.expectEqual(@as(u16, 14), group_size);
+    try std.testing.expectEqual(@as(u16, 13), item_size);
+    try std.testing.expectEqual(@as(u16, 10), caret_size);
 }
