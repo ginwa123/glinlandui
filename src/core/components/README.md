@@ -66,6 +66,8 @@ has to compute with the number and a growing axis gives it none.
 | `dropdown.zig` | an overlay menu that floats above in-flow content |
 | `checkbox.zig`, `radio.zig`, `toggle.zig`, `slider.zig` | the form controls |
 | `icon.zig`, `image.zig` | a glyph and a bitmap |
+| `context_menu.zig` | the one right-click card: a component hands in `props.ContextMenu` and the engine opens, dismisses and draws it (not visual itself) |
+| `reorder.zig` | drag a list's row to another index: `list(.{ .reorder = … })`, a 2 pt drop line, `on_move(from, to)` on release (not visual itself) |
 | `click_registry.zig` | the per-frame hit-target table (not visual) |
 | `dispatch.zig` | routes a pointer event to the registered target (not visual) |
 
