@@ -203,7 +203,8 @@ fn onlyDevice() ?[]const u8 {
 
 // Where an app puts its socket: the runtime dir when there is one, so it is per-user and the session cleans it up.
 fn socketPath(name: []const u8, buf: []u8) ?[]const u8 {
-    const dir = if (std.c.getenv("XDG_RUNTIME_DIR")) |d| std.mem.span(d) else "/tmp";
+    // The runtime dir when there is one, then the per-user temp dir, then /tmp: both sides of the socket must agree on this rule.
+    const dir = if (std.c.getenv("XDG_RUNTIME_DIR")) |d| std.mem.span(d) else if (std.c.getenv("TMPDIR")) |d| std.mem.span(d) else "/tmp";
     return std.fmt.bufPrint(buf, "{s}/glinlandui-{s}.sock", .{ dir, name }) catch null;
 }
 
