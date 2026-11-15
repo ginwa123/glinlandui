@@ -4,8 +4,9 @@ const builtin = @import("builtin");
 const cl = @import("zclay");
 const soft = @import("../core/render_software.zig");
 const scenes = @import("../core/golden_scenes.zig");
-const renderer = @import("renderer.zig");
+const glyphs = @import("../core/glyphs.zig");
 const text_face = @import("../core/text_face.zig");
+const renderer = @import("renderer.zig");
 
 const w: u32 = 200;
 const h: u32 = 120;
@@ -28,7 +29,10 @@ fn cpuPixels(commands: []const cl.RenderCommand, alloc: std.mem.Allocator) ![]u8
 
 test "Metal matches the CPU reference on every golden scene" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
+    // In the app `Host.init` installs the face; a standalone test root has no Host, and without it the CPU draws glyphs the atlas never packed.
     text_face.setAllocator(std.heap.page_allocator);
+    glyphs.initCache(std.heap.page_allocator);
+    if (text_face.font() == null) return error.NoFontFace;
     var r = try renderer.Renderer.init(std.testing.allocator);
     defer r.deinit();
     // A CI runner with no Metal device is not a failure; the gate is meaningless there.
