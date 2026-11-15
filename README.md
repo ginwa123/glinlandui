@@ -247,6 +247,9 @@ owns the clipboard: Ctrl/Cmd+C, +X and +V copy, cut and paste its selection thro
 (`Field.clipboard` is the seam a test replaces, so a headless suite needs no pasteboard).
 `components.box` takes `on_click` for the same reason: a clickable container registers its own hit target and
 cursor, and a clickable child still wins a click over the box that contains it.
+`components.sidebar` is the third: a resizable, collapsible panel that owns its width and its grab line, so an
+app hands it children and reads `state.width` next frame instead of tracking a drag itself — dragging the line
+past `collapse_below` snaps the panel shut, and clicking the line brings it back.
 
 An app draws with components, never with Clay: `glinlandui` does not re-export the bindings, so a view that
 wants a box, a label or a field uses `components.*`. What an app may need from the engine is on `frame`

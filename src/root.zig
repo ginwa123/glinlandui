@@ -115,6 +115,8 @@ pub const components = struct {
     pub const list = @import("core/components/list.zig");
     pub const radio = @import("core/components/radio.zig");
     pub const scroll = @import("core/components/scroll.zig");
+    // A resizable, collapsible panel: the app hands it children, it owns the width and the grab line.
+    pub const sidebar = @import("core/components/sidebar.zig");
     pub const slider = @import("core/components/slider.zig");
     pub const text = @import("core/components/text.zig");
     pub const toggle = @import("core/components/toggle.zig");
@@ -140,6 +142,8 @@ test {
     _ = @import("core/audit_cases.zig");
     _ = @import("core/font_io.zig");
     _ = @import("core/table.zig");
+    // The reusable sidebar: a panel whose width the pointer owns.
+    _ = @import("core/components/sidebar.zig");
     // The MVVM runtime: the ViewModel store and the theme value.
     _ = @import("core/view_model.zig");
     _ = @import("core/theme.zig");
