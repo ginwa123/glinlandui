@@ -6,6 +6,7 @@
 
 // colour (a bar across a digit read as a malformed character).
 const cl = @import("zclay");
+const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const frame_mod = @import("../frame.zig");
 
@@ -20,14 +21,14 @@ pub const Align = enum {
 pub const Props = struct {
     // A unique id per caret, e.g. `IDI(field_id, 2)` or `editor.caret.N`.
     id: cl.ElementId,
-    // Distance from the parent's left edge to the bar, in points. Snapped to the device grid for you.
-    x: f32,
-    // Bar height in points; a caret is usually a little taller than the font.
-    height: f32,
+    // Distance from the parent's left edge to the bar. Snapped to the device grid for you.
+    x: prop.Len,
+    // Bar height; a caret is usually a little taller than the font.
+    height: prop.Len,
     color: Color = Color.rgb(0xd8, 0xd8, 0xdc),
     anchor: Align = .center,
-    // Extra offset from the attach point, in points.
-    y: f32 = 0,
+    // Extra offset from the attach point.
+    y: prop.Len = .{},
 };
 
 // Declare the bar. It floats, so it takes no space in the line and cannot reflow the text.
@@ -38,11 +39,11 @@ pub fn declare(props: Props) void {
     };
     cl.UI()(.{
         .id = props.id,
-        .layout = .{ .sizing = .{ .w = .fixed(frame_mod.hairline()), .h = .fixed(props.height) } },
+        .layout = .{ .sizing = .{ .w = .fixed(frame_mod.hairline()), .h = .fixed(props.height.pts()) } },
         .floating = .{
             // A decoration must not be hit-testable: capturing the pointer would change the pointer-over set on every blink.
             .pointer_capture_mode = .passthrough,
-            .offset = .{ .x = frame_mod.snapX(props.x), .y = props.y },
+            .offset = .{ .x = frame_mod.snapX(props.x.pts()), .y = props.y.pts() },
             .attach_to = .to_parent,
             .attach_points = .{ .element = attach, .parent = attach },
             .z_index = 2,
@@ -52,6 +53,6 @@ pub fn declare(props: Props) void {
 }
 
 test "Props has a default colour, so a caret needs only where it goes" {
-    const p = Props{ .id = .ID("test-caret"), .x = 0, .height = 16 };
+    const p = Props{ .id = .ID("test-caret"), .x = .{}, .height = .{ .px = 16 } };
     try @import("std").testing.expectEqual(Color.rgb(0xd8, 0xd8, 0xdc), p.color);
 }

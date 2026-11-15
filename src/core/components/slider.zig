@@ -23,13 +23,13 @@ pub const SliderProps = struct {
     value: f32 = 0.5,
     min: f32 = 0,
     max: f32 = 1,
-    w: u32 = 160,
-    h: u32 = 18,
-    track_h: u32 = 3,
-    radius: u32 = 2,
+    w: prop.Size = .{ .fixed = 160 },
+    h: prop.Size = .{ .fixed = 18 },
+    track_h: prop.Len = .{ .px = 3 },
+    radius: prop.Len = .{ .px = 2 },
     track_bg: Color = Color.rgb(0x3a, 0x3a, 0x3a),
     fill_bg: Color = Color.rgb(0x4c, 0xaf, 0x50),
-    thumb_size: u32 = 12,
+    thumb_size: prop.Len = .{ .px = 12 },
     thumb_color: Color = Color.rgb(0xff, 0xff, 0xff),
     hover_fill: ?Color = null,
     disabled: bool = false,
@@ -49,23 +49,17 @@ pub fn fracOf(value: f32, min: f32, max: f32) f32 {
     return @min(1, @max(0, frac));
 }
 
-/// Declare a slider: outer hit area (fixed w/h, transparent) + track bar (fixed w x track_h) + fill bar (w*frac x track_h, left-aligned) + thumb circle.
+/// Declare a slider: outer hit area (w/h, transparent) + track bar (w x track_h) + fill bar (frac of the track, left-aligned) + thumb circle.
 pub fn slider(props: SliderProps) void {
     // NOTE: cl.hovered() must be evaluated INSIDE the UI() config literal (after Clay__OpenElement runs, while this element is open) so it queries this.
     const frac = fracOf(props.value, props.min, props.max);
-    const w_f: f32 = @floatFromInt(props.w);
-    const h_f: f32 = @floatFromInt(props.h);
-    const track_h_f: f32 = @floatFromInt(props.track_h);
-    const fill_w: f32 = w_f * frac;
-    const thumb_f: f32 = @floatFromInt(props.thumb_size);
+    const track_h_f: f32 = props.track_h.pts();
+    const thumb_f: f32 = props.thumb_size.pts();
     cl.UI()(.{
         .id = props.id.clay(),
         .layout = .{
             .direction = .left_to_right,
-            .sizing = .{
-                .w = .fixed(w_f),
-                .h = .fixed(h_f),
-            },
+            .sizing = .{ .w = props.w.clay(), .h = props.h.clay() },
             .child_alignment = .center,
         },
         .background_color = .{ 0, 0, 0, 0 },
@@ -75,27 +69,27 @@ pub fn slider(props: SliderProps) void {
             .layout = .{
                 .direction = .left_to_right,
                 .sizing = .{
-                    .w = .fixed(w_f),
+                    .w = .grow,
                     .h = .fixed(track_h_f),
                 },
                 .child_alignment = .{ .x = .left, .y = .center },
             },
             .background_color = (if (props.disabled) props.disabled_bg else props.track_bg).toClay(),
-            .corner_radius = .all(@floatFromInt(props.radius)),
+            .corner_radius = .all(props.radius.pts()),
         })({
             cl.UI()(.{
                 .id = .IDI(props.id.str(), fill_index),
                 .layout = .{
                     .direction = .left_to_right,
                     .sizing = .{
-                        .w = .fixed(fill_w),
+                        .w = .percent(frac),
                         .h = .fixed(track_h_f),
                     },
                     .child_alignment = .{ .x = .right, .y = .center },
                 },
                 // NOTE: cl.hovered() stays INSIDE this UI() literal (while the fill is open) — hoisting it above would query the track/outer instead.
                 .background_color = (if (props.disabled) props.disabled_bg else if (cl.hovered()) (props.hover_fill orelse props.fill_bg) else props.fill_bg).toClay(),
-                .corner_radius = .all(@floatFromInt(props.radius)),
+                .corner_radius = .all(props.radius.pts()),
             })({
                 cl.UI()(.{
                     .id = .IDI(props.id.str(), thumb_index),
@@ -146,13 +140,13 @@ test "SliderProps carries neutral defaults" {
     try std.testing.expectEqual(@as(f32, 0.5), p.value);
     try std.testing.expectEqual(@as(f32, 0), p.min);
     try std.testing.expectEqual(@as(f32, 1), p.max);
-    try std.testing.expectEqual(@as(u32, 160), p.w);
-    try std.testing.expectEqual(@as(u32, 18), p.h);
-    try std.testing.expectEqual(@as(u32, 3), p.track_h);
-    try std.testing.expectEqual(@as(u32, 2), p.radius);
+    try std.testing.expectEqual(@as(f32, 160), p.w.clay().size.minmax.min);
+    try std.testing.expectEqual(@as(f32, 18), p.h.clay().size.minmax.min);
+    try std.testing.expectEqual(@as(f32, 3), p.track_h.pts());
+    try std.testing.expectEqual(@as(f32, 2), p.radius.pts());
     try std.testing.expectEqual(Color.rgb(0x3a, 0x3a, 0x3a), p.track_bg);
     try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50), p.fill_bg);
-    try std.testing.expectEqual(@as(u32, 12), p.thumb_size);
+    try std.testing.expectEqual(@as(f32, 12), p.thumb_size.pts());
     try std.testing.expectEqual(Color.rgb(0xff, 0xff, 0xff), p.thumb_color);
     try std.testing.expect(p.hover_fill == null);
     try std.testing.expect(!p.disabled);

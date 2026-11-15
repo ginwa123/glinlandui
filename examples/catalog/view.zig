@@ -68,7 +68,7 @@ fn page(scope: *Scope) void {
         .w = .grow,
         .direction = .column,
         .pad = props.Pad.all(24),
-        .gap = 16,
+        .gap = .{ .px = 16 },
     }, scope, pageChildren);
 }
 
@@ -82,7 +82,7 @@ fn header(scope: *Scope) void {
         .id = .{ .text = "catalog.header" },
         .w = .grow,
         .direction = .column,
-        .gap = 6,
+        .gap = .{ .px = 6 },
     }, scope, headerChildren);
 }
 
@@ -114,9 +114,9 @@ fn section(scope: *Scope, s: *const state_mod.Section) void {
         .direction = .column,
         .bg = c.surface,
         .pad = props.Pad.all(16),
-        .gap = 12,
+        .gap = .{ .px = 12 },
         .radius = props.Radius.all(r_card),
-        .border = .{ .width = 1, .color = c.divider },
+        .border = .{ .width = .{ .px = 1 }, .color = c.divider },
     }, SectionCtx{ .scope = scope, .section = s }, sectionChildren);
 }
 
@@ -126,7 +126,7 @@ fn sectionChildren(ctx: SectionCtx) void {
         .src = @src(),
         .w = .grow,
         .direction = .column,
-        .gap = 2,
+        .gap = .{ .px = 2 },
     }, ctx, sectionHeadChildren);
     sectionBody(ctx);
 }
@@ -181,7 +181,7 @@ fn imageCard(scope: *Scope, card: ImageCardCtx) void {
     box_mod.box(.{
         .id = .{ .text = ctx.id },
         .direction = .column,
-        .gap = 6,
+        .gap = .{ .px = 6 },
         .pad = props.Pad.all(8),
         .bg = scope.theme.colors.surface_variant,
         .radius = props.Radius.all(r_card),
@@ -192,10 +192,10 @@ fn imageCardChildren(ctx: ImageCardCtx) void {
     image_mod.image(.{
         .id = .{ .text = frame.formatText("{s}.img", .{ctx.id}) },
         .path = ctx.path,
-        .w = 220,
-        .h = 130,
+        .w = props.Size.px(220),
+        .h = props.Size.px(130),
         .fit = ctx.fit,
-        .radius = 6,
+        .radius = .{ .px = 6 },
     });
     text_mod.label(.{ .label = .{
         .text = ctx.caption,
@@ -219,7 +219,7 @@ fn row(scope: *Scope, id: []const u8, body: *const fn (*Scope) void) void {
         .id = .{ .text = id },
         .w = .grow,
         .direction = .row,
-        .gap = 8,
+        .gap = .{ .px = 8 },
         .child_align = .{ .y = .center },
     }, RowCtx{ .scope = scope, .body = body }, rowChildren);
 }
@@ -244,7 +244,7 @@ fn emphasisButtons(scope: *Scope) void {
         .bg = c.surface_variant,
         .fg = c.text,
         .hover_bg = c.hover,
-        .border = .{ .width = 1, .color = c.divider },
+        .border = .{ .width = .{ .px = 1 }, .color = c.divider },
         .on_click = .{ .f = onSecondary, .ctx = scope.vm },
     });
     button.button(.{
@@ -261,7 +261,7 @@ fn emphasisButtons(scope: *Scope) void {
         .bg = c.surface,
         .fg = state_mod.danger,
         .hover_bg = c.hover,
-        .border = .{ .width = 1, .color = state_mod.danger_edge },
+        .border = .{ .width = .{ .px = 1 }, .color = state_mod.danger_edge },
         .on_click = .{ .f = onDanger, .ctx = scope.vm },
     });
     button.button(.{
@@ -324,7 +324,7 @@ fn fieldBody(scope: *Scope) void {
         .id = .{ .text = "catalog.field.row" },
         .w = .grow,
         .direction = .row,
-        .gap = 8,
+        .gap = .{ .px = 8 },
         .child_align = .{ .y = .center },
     }, scope, fieldRowChildren);
 }
@@ -414,7 +414,7 @@ fn rolesBody(scope: *Scope) void {
         .id = .{ .text = "catalog.roles.row" },
         .w = .grow,
         .direction = .row,
-        .gap = 8,
+        .gap = .{ .px = 8 },
     }, scope.theme, rolesRowChildren);
 }
 
@@ -424,7 +424,7 @@ fn rolesRowChildren(t: Theme) void {
             .id = .{ .text = s.name },
             .w = .{ .fixed = 68 },
             .direction = .column,
-            .gap = 4,
+            .gap = .{ .px = 4 },
         }, SwatchCtx{ .swatch = s, .theme = t }, swatchChildren);
     }
 }
@@ -438,7 +438,7 @@ fn swatchChildren(ctx: SwatchCtx) void {
         .h = .{ .fixed = 40 },
         .direction = .row,
         .bg = ctx.swatch.color,
-        .border = .{ .width = 1, .color = ctx.theme.colors.divider },
+        .border = .{ .width = .{ .px = 1 }, .color = ctx.theme.colors.divider },
     }, {}, noChildren);
     text_mod.label(.{ .label = .{ .text = ctx.swatch.name, .size = ctx.theme.type_scale.caption, .color = ctx.theme.colors.text_dim } });
 }
@@ -452,7 +452,7 @@ fn typeBody(scope: *Scope) void {
         .id = .{ .text = "catalog.type.col" },
         .w = .grow,
         .direction = .column,
-        .gap = 8,
+        .gap = .{ .px = 8 },
     }, scope.theme, typeColumnChildren);
 }
 
@@ -514,7 +514,7 @@ fn listBody(scope: *Scope) void {
         .row_fg = c.text,
         .selected_fg = c.text,
         .hover_bg = c.hover,
-        .border_width = 1,
+        .border_width = .{ .px = 1 },
         .border_color = c.divider,
         .selected = scope.state.row,
         .on_select = .{ .f = onRow, .ctx = scope.vm },
@@ -602,7 +602,7 @@ fn dropdownWrapChildren(scope: *Scope) void {
         .row_fg = c.text,
         .hover_bg = c.hover,
         .field_bg = c.background,
-        .border_width = 1,
+        .border_width = .{ .px = 1 },
         .border_color = c.divider,
         .on_select = .{ .f = onOption, .ctx = scope.vm },
     }, shown[0..n], scope, optionRow);

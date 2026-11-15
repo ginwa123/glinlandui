@@ -30,9 +30,9 @@ pub const TreeProps = struct {
     // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
     src: ?std.builtin.SourceLocation = null,
     rows: []const Row = &.{},
-    row_h: u32 = 26,
-    indent: u16 = 17,
-    pad_lr: u16 = 8,
+    row_h: prop.Len = .{ .px = 26 },
+    indent: prop.Len = .{ .px = 17 },
+    pad_lr: prop.Len = .{ .px = 8 },
     bg: ?Color = null,
     row_bg: Color = Color.rgb(0x1a, 0x1a, 0x1d),
     selected_bg: Color = Color.rgb(0x2d, 0x3a, 0x52),
@@ -42,7 +42,7 @@ pub const TreeProps = struct {
     group_fg: Color = Color.rgb(0xf0, 0xf0, 0xf4),
     meta_fg: Color = Color.rgb(0x5a, 0x5a, 0x64),
     caret_fg: Color = Color.rgb(0x5a, 0x5a, 0x64),
-    radius: u32 = 4,
+    radius: prop.Len = .{ .px = 4 },
     /// The selected row's 2px left bar, so selection is a fill AND a mark. Null draws no bar at all.
     selected_bar: ?Color = null,
     on_select: prop.Select = .{},
@@ -93,21 +93,22 @@ fn rowUi(props: TreeProps, row: Row, i: usize) void {
     else
         props.fg;
     const base_bg = if (row.selected) props.selected_bg else props.row_bg;
+    const left = props.pad_lr.add(props.indent.scaled(@floatFromInt(row.depth)));
 
     cl.UI()(.{
         .id = .IDI(props.id.str(), @as(u32, @intCast(i + 1))),
         .layout = .{
             .direction = .left_to_right,
-            .sizing = .{ .w = .grow, .h = .fixed(@floatFromInt(props.row_h)) },
+            .sizing = .{ .w = .grow, .h = .fixed(props.row_h.pts()) },
             .padding = .{
-                .left = props.pad_lr + row.depth * props.indent,
-                .right = props.pad_lr,
+                .left = left.whole(),
+                .right = props.pad_lr.whole(),
             },
             .child_alignment = .{ .x = .left, .y = .center },
             .child_gap = 6,
         },
         .background_color = (if (!row.selected and cl.hovered()) props.hover_bg else base_bg).toClay(),
-        .corner_radius = .all(@floatFromInt(props.radius)),
+        .corner_radius = .all(props.radius.pts()),
         // Always 2px wide, transparent when the row is not selected, so selecting a row moves nothing.
         .border = if (props.selected_bar) |bar| .{
             .color = (if (row.selected) bar else Color.rgb(0x00, 0x00, 0x00)).toClay(),

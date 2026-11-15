@@ -16,9 +16,9 @@ pub const ToggleProps = struct {
     // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
     src: ?std.builtin.SourceLocation = null,
     on: bool = false,
-    w: u32 = 32,
-    h: u32 = 18,
-    radius: u32 = 9,
+    w: prop.Len = .{ .px = 32 },
+    h: prop.Len = .{ .px = 18 },
+    radius: prop.Len = .{ .px = 9 },
     on_bg: Color = Color.rgb(0x4c, 0xaf, 0x50),
     off_bg: Color = Color.rgb(0x3a, 0x3a, 0x3a),
     knob_color: Color = Color.rgb(0xff, 0xff, 0xff),
@@ -31,30 +31,30 @@ pub const ToggleProps = struct {
 /// Declare a toggle switch: outer pill (fixed w/h, on/off bg) + inner knob circle parked left (off) or right (on).
 pub fn toggle(props: ToggleProps) void {
     // NOTE: cl.hovered() must be evaluated INSIDE the UI() config literal (after Clay__OpenElement runs, while this element is open) so it queries this.
-    const knob_d: u32 = props.h -| 4;
+    const knob: f32 = @max(props.h.pts() - 4, 0);
     cl.UI()(.{
         .id = props.id.clay(),
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{
-                .w = .fixed(@floatFromInt(props.w)),
-                .h = .fixed(@floatFromInt(props.h)),
+                .w = .fixed(props.w.pts()),
+                .h = .fixed(props.h.pts()),
             },
             .padding = .all(2),
             .child_alignment = .{ .x = if (props.on) .right else .left, .y = .center },
         },
         .background_color = (if (props.disabled) props.disabled_bg else if (cl.hovered()) (props.hover_bg orelse (if (props.on) props.on_bg else props.off_bg)) else (if (props.on) props.on_bg else props.off_bg)).toClay(),
-        .corner_radius = .all(@floatFromInt(props.radius)),
+        .corner_radius = .all(props.radius.pts()),
     })({
         cl.UI()(.{
             .layout = .{
                 .sizing = .{
-                    .w = .fixed(@floatFromInt(knob_d)),
-                    .h = .fixed(@floatFromInt(knob_d)),
+                    .w = .fixed(knob),
+                    .h = .fixed(knob),
                 },
             },
             .background_color = props.knob_color.toClay(),
-            .corner_radius = .all(@floatFromInt(knob_d / 2)),
+            .corner_radius = .all(knob / 2),
         })({});
     });
     // Semantics: `.on` is the toggle's checked state.
@@ -88,9 +88,9 @@ test "toggle emits pill + knob rectangles and no text" {
 test "ToggleProps carries neutral defaults" {
     const p = ToggleProps{ .id = .{ .text = "x" } };
     try std.testing.expect(!p.on);
-    try std.testing.expectEqual(@as(u32, 32), p.w);
-    try std.testing.expectEqual(@as(u32, 18), p.h);
-    try std.testing.expectEqual(@as(u32, 9), p.radius);
+    try std.testing.expectEqual(@as(f32, 32), p.w.pts());
+    try std.testing.expectEqual(@as(f32, 18), p.h.pts());
+    try std.testing.expectEqual(@as(f32, 9), p.radius.pts());
     try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50), p.on_bg);
     try std.testing.expectEqual(Color.rgb(0x3a, 0x3a, 0x3a), p.off_bg);
     try std.testing.expectEqual(Color.rgb(0xff, 0xff, 0xff), p.knob_color);

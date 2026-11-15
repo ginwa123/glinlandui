@@ -46,7 +46,7 @@ pub fn button(p: ButtonProps) void {
         .border = p.border.clay(),
     })({
         cl.text(p.label.text, .{
-            .font_size = p.label.size,
+            .font_size = p.label.size.whole(),
             .color = fg.toClay(),
         });
     });
@@ -104,7 +104,7 @@ fn declareDisabledButton() void {
 fn declareFixedButton() void {
     button(.{
         .id = .{ .text = "test-fixed-button" },
-        .label = .{ .text = "X", .size = 12 },
+        .label = .{ .text = "X", .size = .{ .px = 12 } },
         .w = .{ .fixed = 16 },
         .h = .{ .fixed = 16 },
         .pad = .{},
@@ -143,19 +143,19 @@ test "button emits rectangle + text render commands" {
 
 test "ButtonProps carries neutral dark defaults, and needs only an id" {
     const p = ButtonProps{ .id = .{ .text = "x" } };
-    try std.testing.expectEqual(@as(u16, 14), p.label.size);
+    try std.testing.expectEqual(@as(f32, 14), p.label.size.pts());
     try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.bg);
     try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.fg);
     try std.testing.expectEqual(Color.rgb(0x2d, 0x2d, 0x2d), p.hover_bg);
-    try std.testing.expectEqual(@as(u16, 6), p.radius.top_left);
+    try std.testing.expectEqual(@as(f32, 6), p.radius.top_left.pts());
     try std.testing.expect(std.meta.activeTag(p.w) == .fit);
     try std.testing.expect(std.meta.activeTag(p.h) == .fit);
-    try std.testing.expectEqual(@as(u16, 0), p.border.width);
+    try std.testing.expectEqual(@as(f32, 0), p.border.width.pts());
     try std.testing.expect(!p.disabled);
     try std.testing.expectEqual(Color.rgb(0x1a, 0x1a, 0x1a), p.disabled_bg);
     try std.testing.expectEqual(Color.rgb(0x77, 0x77, 0x77), p.disabled_fg);
-    try std.testing.expectEqual(@as(u16, 6), p.pad.top);
-    try std.testing.expectEqual(@as(u16, 12), p.pad.left);
+    try std.testing.expectEqual(@as(f32, 6), p.pad.top.pts());
+    try std.testing.expectEqual(@as(f32, 12), p.pad.left.pts());
     try std.testing.expect(p.on_click.f == null);
     try std.testing.expect(p.on_click.ctx == null);
 }

@@ -16,12 +16,12 @@ pub const CheckboxProps = struct {
     // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
     src: ?std.builtin.SourceLocation = null,
     checked: bool = false,
-    size: u32 = 16,
-    radius: u32 = 4,
+    size: prop.Len = .{ .px = 16 },
+    radius: prop.Len = .{ .px = 4 },
     box_bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
     checked_bg: Color = Color.rgb(0x4c, 0xaf, 0x50),
     check_color: Color = Color.rgb(0xff, 0xff, 0xff),
-    border_width: u16 = 1,
+    border_width: prop.Len = .{ .px = 1 },
     border_color: Color = Color.rgb(0x55, 0x55, 0x55),
     hover_bg: ?Color = null,
     disabled: bool = false,
@@ -32,8 +32,8 @@ pub const CheckboxProps = struct {
 /// Declare a checkbox: outer fixed square (unchecked/checked bg) + inner check box (60% size, `check_color`) when `checked`.
 pub fn checkbox(props: CheckboxProps) void {
     // NOTE: cl.hovered() must be evaluated INSIDE the UI() config literal (after Clay__OpenElement runs, while this element is open) so it queries this.
-    const box_f: f32 = @floatFromInt(props.size);
-    const inner_f: f32 = box_f * 0.6;
+    const box_f: f32 = props.size.pts();
+    const inner_f: f32 = props.size.scaled(0.6).pts();
     cl.UI()(.{
         .id = props.id.clay(),
         .layout = .{
@@ -44,10 +44,10 @@ pub fn checkbox(props: CheckboxProps) void {
             .child_alignment = .center,
         },
         .background_color = (if (props.disabled) props.disabled_bg else if (cl.hovered()) (props.hover_bg orelse (if (props.checked) props.checked_bg else props.box_bg)) else (if (props.checked) props.checked_bg else props.box_bg)).toClay(),
-        .corner_radius = .all(@floatFromInt(props.radius)),
-        .border = if (props.border_width > 0) .{
+        .corner_radius = .all(props.radius.pts()),
+        .border = if (!props.border_width.isNone()) .{
             .color = props.border_color.toClay(),
-            .width = .outside(props.border_width),
+            .width = .outside(props.border_width.whole()),
         } else .{},
     })({
         if (props.checked) {
@@ -101,12 +101,12 @@ test "checkbox emits box rectangle and no text; checked adds inner check" {
 test "CheckboxProps carries neutral defaults" {
     const p = CheckboxProps{ .id = .{ .text = "x" } };
     try std.testing.expect(!p.checked);
-    try std.testing.expectEqual(@as(u32, 16), p.size);
-    try std.testing.expectEqual(@as(u32, 4), p.radius);
+    try std.testing.expectEqual(@as(f32, 16), p.size.pts());
+    try std.testing.expectEqual(@as(f32, 4), p.radius.pts());
     try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.box_bg);
     try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50), p.checked_bg);
     try std.testing.expectEqual(Color.rgb(0xff, 0xff, 0xff), p.check_color);
-    try std.testing.expectEqual(@as(u16, 1), p.border_width);
+    try std.testing.expectEqual(@as(u16, 1), p.border_width.whole());
     try std.testing.expectEqual(Color.rgb(0x55, 0x55, 0x55), p.border_color);
     try std.testing.expect(p.hover_bg == null);
     try std.testing.expect(!p.disabled);

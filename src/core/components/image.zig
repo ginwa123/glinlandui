@@ -19,11 +19,12 @@ pub const ImageProps = struct {
     // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
     src: ?std.builtin.SourceLocation = null,
     path: []const u8 = "",
-    w: u32 = 0,
-    h: u32 = 0,
+    // The bitmap has no intrinsic size in Clay, so an app states one: `.fit` (the default) collapses to nothing.
+    w: prop.Size = .fit,
+    h: prop.Size = .fit,
     fit: Fit = .cover,
-    max_dim: u16 = 256,
-    radius: u32 = 0,
+    max_dim: prop.Len = .{ .px = 256 },
+    radius: prop.Len = .{},
     on_click: prop.Click = .{},
 };
 
@@ -49,17 +50,14 @@ pub fn image(props: ImageProps) void {
         .path_ptr = if (props.path.len > 0) props.path.ptr else &empty_path,
         .path_len = props.path.len,
         .fit = props.fit,
-        .max_dim = props.max_dim,
+        .max_dim = props.max_dim.whole(),
     };
     cl.UI()(.{
         .id = props.id.clay(),
         .layout = .{
-            .sizing = .{
-                .w = .fixed(@floatFromInt(props.w)),
-                .h = .fixed(@floatFromInt(props.h)),
-            },
+            .sizing = .{ .w = props.w.clay(), .h = props.h.clay() },
         },
-        .corner_radius = .all(@floatFromInt(props.radius)),
+        .corner_radius = .all(props.radius.pts()),
         .image = .{ .image_data = slot },
     })({});
     // Semantics: an image is a leaf with no state and no text.
@@ -77,7 +75,7 @@ pub fn image(props: ImageProps) void {
 
 fn declareImage() void {
     beginFrame();
-    image(.{ .id = .{ .text = "test-image" }, .path = "/p/a.jpg", .w = 150, .h = 84 });
+    image(.{ .id = .{ .text = "test-image" }, .path = "/p/a.jpg", .w = prop.Size.px(150), .h = prop.Size.px(84) });
 }
 
 fn countImageCommands(declare_fn: *const fn () void, images: *usize, rects: *usize) !void {
@@ -105,10 +103,10 @@ test "image emits exactly one image command, no rectangles" {
 }
 
 test "ImageProps carries neutral defaults" {
-    const p = ImageProps{ .id = .{ .text = "x" }, .path = "/p/a.jpg", .w = 150, .h = 84 };
+    const p = ImageProps{ .id = .{ .text = "x" }, .path = "/p/a.jpg", .w = prop.Size.px(150), .h = prop.Size.px(84) };
     try std.testing.expectEqual(render.ImageFit.cover, p.fit);
-    try std.testing.expectEqual(@as(u16, 256), p.max_dim);
-    try std.testing.expectEqual(@as(u32, 0), p.radius);
+    try std.testing.expectEqual(@as(f32, 256), p.max_dim.pts());
+    try std.testing.expectEqual(@as(f32, 0), p.radius.pts());
     try std.testing.expect(p.on_click.f == null);
     try std.testing.expect(p.on_click.ctx == null);
 }
@@ -117,7 +115,7 @@ test "image_data round-trips path, fit, and max_dim" {
     headless.begin(.{ .x = 99999, .y = 99999 }, false);
     beginFrame();
     cl.beginLayout();
-    image(.{ .id = .{ .text = "test-image-ref" }, .path = "/p/b.png", .w = 150, .h = 84, .fit = .contain, .max_dim = 512 });
+    image(.{ .id = .{ .text = "test-image-ref" }, .path = "/p/b.png", .w = prop.Size.px(150), .h = prop.Size.px(84), .fit = .contain, .max_dim = .{ .px = 512 } });
     const cmds = cl.endLayout();
     var found = false;
     for (cmds) |c| {
@@ -136,7 +134,7 @@ test "image honors fixed w/h geometry" {
     headless.begin(.{ .x = 99999, .y = 99999 }, false);
     beginFrame();
     cl.beginLayout();
-    image(.{ .id = .{ .text = "test-image-geo" }, .path = "/p/a.jpg", .w = 150, .h = 84 });
+    image(.{ .id = .{ .text = "test-image-geo" }, .path = "/p/a.jpg", .w = prop.Size.px(150), .h = prop.Size.px(84) });
     _ = cl.endLayout();
     const bb = cl.getElementData(cl.getElementId("test-image-geo")).bounding_box;
     try std.testing.expectEqual(@as(f32, 150), bb.width);
@@ -156,12 +154,12 @@ var click_rec = ClickCtx{};
 
 fn declareClickImage() void {
     beginFrame();
-    image(.{ .id = .{ .text = "test-click-image" }, .path = "/p/a.jpg", .w = 150, .h = 84, .on_click = .{ .f = testOnClick, .ctx = &click_rec } });
+    image(.{ .id = .{ .text = "test-click-image" }, .path = "/p/a.jpg", .w = prop.Size.px(150), .h = prop.Size.px(84), .on_click = .{ .f = testOnClick, .ctx = &click_rec } });
 }
 
 fn declareNoClickImage() void {
     beginFrame();
-    image(.{ .id = .{ .text = "test-noclick-image" }, .path = "/p/a.jpg", .w = 150, .h = 84 });
+    image(.{ .id = .{ .text = "test-noclick-image" }, .path = "/p/a.jpg", .w = prop.Size.px(150), .h = prop.Size.px(84) });
 }
 
 test "image self-registers on_click; dispatchClick at center fires once" {
@@ -200,6 +198,6 @@ test "image without on_click registers nothing; dispatchClick returns false" {
 
 test "ImageProps needs only an id" {
     const p = ImageProps{ .id = .{ .text = "x" } };
-    try std.testing.expectEqual(@as(u32, 0), p.w);
+    try std.testing.expect(std.meta.activeTag(p.w) == .fit);
     try std.testing.expectEqual(@as(usize, 0), p.path.len);
 }

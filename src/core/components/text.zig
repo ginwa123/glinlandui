@@ -16,7 +16,7 @@ pub const TextProps = struct {
 /// Declare a single text element.
 pub fn label(p: TextProps) void {
     cl.text(p.label.text, .{
-        .font_size = p.label.size,
+        .font_size = p.label.size.whole(),
         .color = (if (p.disabled) p.disabled_color else p.label.color).toClay(),
         .wrap_mode = if (p.wrap) .words else .none,
     });
@@ -41,7 +41,7 @@ test "label emits exactly one text command, no rectangles" {
 
 test "TextProps carries neutral defaults" {
     const p = TextProps{ .label = .{ .text = "x" } };
-    try std.testing.expectEqual(@as(u16, 14), p.label.size);
+    try std.testing.expectEqual(@as(f32, 14), p.label.size.pts());
     try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.label.color);
     try std.testing.expect(!p.wrap);
     try std.testing.expect(!p.disabled);
@@ -51,5 +51,5 @@ test "TextProps carries neutral defaults" {
 test "TextProps needs nothing: a label is optional, so `.{}` is a valid text run" {
     const p = TextProps{};
     try std.testing.expectEqual(@as(usize, 0), p.label.text.len);
-    try std.testing.expectEqual(@as(u16, 14), p.label.size);
+    try std.testing.expectEqual(@as(f32, 14), p.label.size.pts());
 }

@@ -51,36 +51,36 @@ pub const DropdownProps = struct {
     src: ?std.builtin.SourceLocation = null,
     /// The search field, when there is one: the app owns it, and the dropdown only paints it. Null draws no field.
     field: ?*input.Field = null,
-    font_size: u16 = 14,
-    row_h: u32 = 40,
+    font_size: prop.Len = .{ .px = 14 },
+    row_h: prop.Len = .{ .px = 40 },
     row_bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
     selected_bg: Color = Color.rgb(0x3a, 0x3a, 0x3a),
     row_fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
     hover_bg: Color = Color.rgb(0x2d, 0x2d, 0x2d),
     field_bg: Color = Color.rgb(0x26, 0x26, 0x26),
-    radius: u32 = 4,
-    gap: u16 = 8,
+    radius: prop.Len = .{ .px = 4 },
+    gap: prop.Len = .{ .px = 8 },
     /// Uniform border for the search field + rows (0 = none) + color.
-    border_width: u16 = 0,
+    border_width: prop.Len = .{},
     border_color: Color = Color.rgb(0x00, 0x00, 0x00),
     /// Disabled dropdown: field dims + list takes no hover/clicks.
     disabled: bool = false,
     disabled_bg: Color = Color.rgb(0x1a, 0x1a, 0x1a),
     disabled_fg: Color = Color.rgb(0x77, 0x77, 0x77),
     /// Field sizing: fixed overrides (null = grow/fit) + min/max clamps.
-    field_w: ?f32 = null,
-    field_h: ?f32 = null,
-    field_min_w: f32 = 0,
-    field_max_w: f32 = 0,
-    field_min_h: f32 = 0,
-    field_max_h: f32 = 0,
+    field_w: ?prop.Len = null,
+    field_h: ?prop.Len = null,
+    field_min_w: prop.Len = .{},
+    field_max_w: prop.Len = .{},
+    field_min_h: prop.Len = .{},
+    field_max_h: prop.Len = .{},
     /// List sizing clamps (grow container width; row height clamp).
-    list_min_w: f32 = 0,
-    list_max_w: f32 = 0,
-    row_min_h: f32 = 0,
-    row_max_h: f32 = 0,
+    list_min_w: prop.Len = .{},
+    list_max_w: prop.Len = .{},
+    row_min_h: prop.Len = .{},
+    row_max_h: prop.Len = .{},
     /// Overlay card border (defaults to border_* when 0-width + default color).
-    overlay_border_width: u16 = 0,
+    overlay_border_width: prop.Len = .{},
     overlay_border_color: Color = Color.rgb(0x00, 0x00, 0x00),
     on_select: prop.Select = .{},
     /// Per-row clicks passthrough (Stage B): forwarded verbatim to the inner list.
@@ -97,17 +97,17 @@ pub const DropdownProps = struct {
     overlay_id: []const u8 = "dropdown-float",
     /// Opaque bg for the floating card so rows underneath don't show through the gaps.
     overlay_bg: Color = Color.rgb(0x22, 0x22, 0x22),
-    overlay_pad: u16 = 8,
-    overlay_radius: u32 = 4,
+    overlay_pad: prop.Len = .{ .px = 8 },
+    overlay_radius: prop.Len = .{ .px = 4 },
     z_index: i16 = 10,
     /// Optional footer hint rendered inside the dropdown (inside the float when overlay, inline otherwise) so it never takes layout room alone.
     footer: ?[]const u8 = null,
 };
 
 /// Declare a dropdown: search field (unless show_search is false) + one row per item under the list id namespace (IDI(list_id, index + 1), same +1.
-fn fieldSize(fixed: ?f32, min: f32, max: f32, grow: bool) prop.Size {
-    if (fixed) |v| return .{ .fixed = v };
-    if (min > 0 or max > 0) return .{ .clamp = .{ .min = min, .max = max, .grow = grow } };
+fn fieldSize(fixed: ?prop.Len, min: prop.Len, max: prop.Len, grow: bool) prop.Size {
+    if (fixed) |v| return .{ .fixed = v.pts() };
+    if (!min.isNone() or !max.isNone()) return .{ .clamp = .{ .min = min.pts(), .max = max.pts(), .grow = grow } };
     return if (grow) .grow else .fit;
 }
 
@@ -140,17 +140,17 @@ pub fn dropdown(
             .layout = .{
                 .direction = .top_to_bottom,
                 .sizing = .{ .w = .grow, .h = .fit },
-                .padding = .all(props.overlay_pad),
-                .child_gap = props.gap,
+                .padding = .all(props.overlay_pad.whole()),
+                .child_gap = props.gap.whole(),
             },
             .background_color = props.overlay_bg.toClay(),
-            .corner_radius = .all(@floatFromInt(props.overlay_radius)),
-            .border = if (props.overlay_border_width > 0) .{
+            .corner_radius = .all(props.overlay_radius.pts()),
+            .border = if (!props.overlay_border_width.isNone()) .{
                 .color = props.overlay_border_color.toClay(),
-                .width = .outside(props.overlay_border_width),
-            } else if (props.border_width > 0) .{
+                .width = .outside(props.overlay_border_width.whole()),
+            } else if (!props.border_width.isNone()) .{
                 .color = props.border_color.toClay(),
-                .width = .outside(props.border_width),
+                .width = .outside(props.border_width.whole()),
             } else .{},
         })({
             dropdownInner(props, rows, item_ctx, renderItem);
@@ -171,10 +171,10 @@ fn dropdownInner(
         field.font_size = props.font_size;
         field.fg = props.row_fg;
         field.bg = props.field_bg;
-        field.radius = prop.Radius.all(@intCast(props.radius));
+        field.radius = prop.Radius.all(props.radius.pts());
         field.w = fieldSize(props.field_w, props.field_min_w, props.field_max_w, true);
         // A field with no stated height is a control, not a line of text: the kit's 28, never `.fit`.
-        field.h = fieldSize(props.field_h orelse 28, props.field_min_h, props.field_max_h, false);
+        field.h = fieldSize(props.field_h orelse .{ .px = 28 }, props.field_min_h, props.field_max_h, false);
         field.border = .{ .width = props.border_width, .color = props.border_color };
         field.disabled = props.disabled;
         field.disabled_bg = props.disabled_bg;
@@ -205,7 +205,7 @@ fn dropdownInner(
     }, rows, item_ctx, renderItem);
     if (props.footer) |f| {
         cl.text(f, .{
-            .font_size = props.font_size,
+            .font_size = props.font_size.whole(),
             .color = props.row_fg.toClay(),
         });
     }
@@ -243,8 +243,8 @@ test "filter returns original indices of matches" {
 test "DropdownProps carries neutral dark defaults + null callbacks" {
     const p = DropdownProps{ .field_id = "f", .list_id = "l" };
     try std.testing.expect(p.field == null);
-    try std.testing.expectEqual(@as(u16, 14), p.font_size);
-    try std.testing.expectEqual(@as(u32, 40), p.row_h);
+    try std.testing.expectEqual(@as(f32, 14), p.font_size.pts());
+    try std.testing.expectEqual(@as(f32, 40), p.row_h.pts());
     try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.row_bg);
     try std.testing.expectEqual(Color.rgb(0x26, 0x26, 0x26), p.field_bg);
     try std.testing.expect(p.on_select.f == null);

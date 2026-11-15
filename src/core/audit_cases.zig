@@ -151,11 +151,11 @@ test "audit case: a target that loses its own centre to a sibling is reported" {
 test "audit case: a clean frame reports nothing" {
     const root = struct {
         fn declare(_: ?*anyopaque, _: u32, _: u32) void {
-            box_mod.box(.{ .id = .{ .text = "card" }, .w = .grow, .h = .grow, .direction = .column, .gap = 8, .pad = props.Pad.all(8) }, NoCtx{}, children);
+            box_mod.box(.{ .id = .{ .text = "card" }, .w = .grow, .h = .grow, .direction = .column, .gap = .{ .px = 8 }, .pad = props.Pad.all(8) }, NoCtx{}, children);
         }
         fn children(_: NoCtx) void {
             button.button(.{ .id = .{ .text = "card.ok" }, .label = .{ .text = "OK" }, .on_click = .{ .f = noop, .ctx = null } });
-            text_mod.label(.{ .label = .{ .text = "short", .size = 14 } });
+            text_mod.label(.{ .label = .{ .text = "short", .size = .{ .px = 14 } } });
         }
         fn noop(_: ?*anyopaque) void {}
     }.declare;

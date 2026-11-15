@@ -35,7 +35,7 @@ pub fn DialogScreen(scope: *Scope) void {
         .h = .grow,
         .bg = scope.theme.colors.background,
         .pad = props.Pad.all(16),
-        .gap = 12,
+        .gap = .{ .px = 12 },
     }, scope, body);
 }
 
@@ -51,7 +51,7 @@ fn body(scope: *Scope) void {
             .id = .{ .text = "dlg-actions" },
             .w = .grow,
             .h = .{ .fixed = 40 },
-            .gap = 8,
+            .gap = .{ .px = 8 },
         }, scope, actionRow);
     } else {
         box_mod.box(.{
@@ -72,7 +72,7 @@ fn body(scope: *Scope) void {
         .bg = t.colors.surface,
         .radius = props.Radius.all(8),
         .pad = props.Pad.all(12),
-        .gap = 4,
+        .gap = .{ .px = 4 },
     }, scope, statusChildren);
 }
 

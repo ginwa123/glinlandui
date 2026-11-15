@@ -28,7 +28,7 @@ pub const BoxProps = struct {
     /// The background while the pointer is over this box, or `bg` when it is not.
     hover_bg: ?Color = null,
     pad: prop.Pad = .{},
-    gap: u16 = 0,
+    gap: prop.Len = .{},
     radius: prop.Radius = .{},
     border: prop.Border = .{},
     child_align: cl.ChildAlignment = .{},
@@ -51,7 +51,7 @@ pub fn box(p: BoxProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void)
             .direction = dir,
             .sizing = .{ .w = p.w.clay(), .h = p.h.clay() },
             .padding = p.pad.clay(),
-            .child_gap = p.gap,
+            .child_gap = p.gap.whole(),
             .child_alignment = p.child_align,
         },
         .background_color = if (bg) |b| b.toClay() else .{ 0, 0, 0, 0 },
@@ -212,10 +212,10 @@ test "BoxProps carries neutral defaults" {
     try std.testing.expect(std.meta.activeTag(p.w) == .fit);
     try std.testing.expect(std.meta.activeTag(p.h) == .fit);
     try std.testing.expect(p.bg == null);
-    try std.testing.expectEqual(@as(u16, 0), p.pad.top);
-    try std.testing.expectEqual(@as(u16, 0), p.gap);
-    try std.testing.expectEqual(@as(u16, 0), p.radius.top_left);
-    try std.testing.expectEqual(@as(u16, 0), p.border.width);
+    try std.testing.expectEqual(@as(f32, 0), p.pad.top.pts());
+    try std.testing.expectEqual(@as(f32, 0), p.gap.pts());
+    try std.testing.expectEqual(@as(f32, 0), p.radius.top_left.pts());
+    try std.testing.expectEqual(@as(f32, 0), p.border.width.pts());
 }
 
 fn declareFractional() void {

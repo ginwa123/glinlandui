@@ -37,16 +37,16 @@ pub const App = struct {
             .h = .grow,
             .bg = Color.rgb(0x1e, 0x1e, 0x1e),
             .pad = props.Pad.all(16),
-            .gap = 12,
+            .gap = .{ .px = 12 },
         }, self, Self.children);
     }
 
     fn children(self: *App) void {
         components.text.label(.{
-            .label = .{ .text = "glinlandui", .size = 24, .color = Color.rgb(0xf0, 0xf0, 0xf0) },
+            .label = .{ .text = "glinlandui", .size = .{ .px = 24 }, .color = Color.rgb(0xf0, 0xf0, 0xf0) },
         });
         components.text.label(.{
-            .label = .{ .text = "real pixels, identical tests on Linux, macOS and the web", .size = 14, .color = Color.rgb(0x9a, 0x9a, 0x9a) },
+            .label = .{ .text = "real pixels, identical tests on Linux, macOS and the web", .size = .{ .px = 14 }, .color = Color.rgb(0x9a, 0x9a, 0x9a) },
         });
         components.button.button(.{
             .id = .{ .text = "click-me" },
@@ -63,19 +63,19 @@ pub const App = struct {
         });
         components.slider.slider(.{
             .id = .{ .text = "slider" },
-            .w = 220,
-            .h = 24,
+            .w = props.Size.px(220),
+            .h = props.Size.px(24),
             .value = self.slider_frac,
             .on_change = .{ .f = onSlider, .ctx = self },
         });
         components.text.label(.{
-            .label = .{ .text = self.statusText(), .size = 13, .color = Color.rgb(0x7a, 0xb8, 0xff) },
+            .label = .{ .text = self.statusText(), .size = .{ .px = 13 }, .color = Color.rgb(0x7a, 0xb8, 0xff) },
         });
 
         // The file dialog, on the platforms that have one.
         if (glinlandui.file_dialog.available()) {
             components.text.label(.{
-                .label = .{ .text = "XDG portal file dialog", .size = 14, .color = Color.rgb(0xf0, 0xf0, 0xf0) },
+                .label = .{ .text = "XDG portal file dialog", .size = .{ .px = 14 }, .color = Color.rgb(0xf0, 0xf0, 0xf0) },
             });
             components.button.button(.{
                 .id = .{ .text = "open-file" },
@@ -92,7 +92,7 @@ pub const App = struct {
                 .on_click = .{ .f = onOpenFolder, .ctx = self },
             });
             components.text.label(.{
-                .label = .{ .text = self.pickText(), .size = 13, .color = Color.rgb(0x9a, 0x9a, 0x9a) },
+                .label = .{ .text = self.pickText(), .size = .{ .px = 13 }, .color = Color.rgb(0x9a, 0x9a, 0x9a) },
             });
         }
     }

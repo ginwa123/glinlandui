@@ -354,7 +354,7 @@ pub const Field = struct {
     id: prop.Id = .{ .text = "" },
     // The text the field shows. It wins whenever it CHANGES, so an app can drive the field from its state.
     value: []const u8 = "",
-    font_size: u16 = 14,
+    font_size: prop.Len = .{ .px = 14 },
     fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
     bg: Color = Color.rgb(0x26, 0x26, 0x26),
     // A selected run carries a colour only: this renderer has no per-run background at glyph fidelity.
@@ -390,7 +390,7 @@ pub const Field = struct {
     name_buf: [96]u8 = undefined,
     name_len: usize = 0,
     // Left padding, written by `textField` each frame so a click and the caret share one origin.
-    pad_lr: f32 = 8,
+    pad_lr: prop.Len = .{ .px = 8 },
     // True while this field owns a drag in flight; the field ticks it, so the app never has to.
     dragging: bool = false,
     bound: bool = false,
@@ -418,20 +418,20 @@ pub const Field = struct {
 
     // How tall one line of a multiline field is: the glyphs, plus the room the caret bar needs.
     pub fn lineHeight(self: *const Field) f32 {
-        return @as(f32, @floatFromInt(self.font_size)) + 6;
+        return self.font_size.pts() + 6;
     }
 
     // The byte offset a point lands on, with `x`/`y` already relative to the field's text origin: a click in a multiline field picks the line first.
     pub fn caretOffsetAtPoint(self: *const Field, x: f32, y: f32) usize {
         const ed = &self.editor;
-        if (!self.multiline) return text_editor.offsetAtX(ed.text(), x, self.font_size, self.measure);
+        if (!self.multiline) return text_editor.offsetAtX(ed.text(), x, self.font_size.whole(), self.measure);
         const raw = @floor(@max(y, 0) / self.lineHeight());
         const last = ed.lineCount() - 1;
         const line = @min(@as(usize, @intFromFloat(raw)), last);
         const start = ed.lineStartAt(line);
         var end = start;
         while (end < ed.len and ed.buf[end] != '\n') end += 1;
-        return start + text_editor.offsetAtX(ed.buf[start..end], x, self.font_size, self.measure);
+        return start + text_editor.offsetAtX(ed.buf[start..end], x, self.font_size.whole(), self.measure);
     }
 
     // Adopt a value from the model: it does NOT report, because the model is where it came from.
@@ -558,8 +558,8 @@ fn dragSelect(field: *Field) void {
         frame_mod.ptr_press_y >= bb.y and frame_mod.ptr_press_y <= bb.y + bb.height;
     if (!field.dragging and !began_here) return;
     // `extend` is false on the anchoring frame (place the caret) and true after it (grow the selection from that anchor).
-    const x = frame_mod.ptr_x - bb.x - field.pad_lr;
-    const y = frame_mod.ptr_y - bb.y - @as(f32, @floatFromInt(field.pad.top));
+    const x = frame_mod.ptr_x - bb.x - field.pad_lr.pts();
+    const y = frame_mod.ptr_y - bb.y - field.pad.top.pts();
     field.editor.setCaret(field.caretOffsetAtPoint(x, y), field.dragging);
     if (!field.dragging) {
         field.dragging = true;
@@ -574,7 +574,7 @@ pub fn textField(field: *Field) void {
     const input = &field.editor;
     const name = field.rememberName();
     // The click and drag handlers need the same origin and metrics the text is drawn with.
-    field.pad_lr = @floatFromInt(field.pad.left);
+    field.pad_lr = field.pad.left;
     // The model's value wins when it CHANGED; an unchanged value leaves the draft and the caret alone.
     const adopt = if (field.declared_known) !field.declaredIs(field.value) else input.len == 0;
     if (!field.declared_known or adopt) {
@@ -663,7 +663,7 @@ fn drawSingleLine(field: *Field, draft: []const u8, blink_on: bool, fg: Color, n
         const span = input.caret.selection().?;
         const s = span.start;
         const e = span.end;
-        if (s > 0) cl.text(draft[0..s], .{ .font_size = field.font_size, .color = fg.toClay() });
+        if (s > 0) cl.text(draft[0..s], .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
         cl.UI()(.{
             .id = .IDI(name, 1),
             .layout = .{
@@ -672,13 +672,13 @@ fn drawSingleLine(field: *Field, draft: []const u8, blink_on: bool, fg: Color, n
             },
             .background_color = field.sel_bg.toClay(),
         })({
-            cl.text(draft[s..e], .{ .font_size = field.font_size, .color = field.sel_fg.toClay() });
+            cl.text(draft[s..e], .{ .font_size = field.font_size.whole(), .color = field.sel_fg.toClay() });
         });
-        if (e < draft.len) cl.text(draft[e..], .{ .font_size = field.font_size, .color = fg.toClay() });
+        if (e < draft.len) cl.text(draft[e..], .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
         return;
     }
     // One run for the value, caret floated over it; an empty one draws a space so `.fit` keeps a line.
-    cl.text(if (draft.len == 0) " " else draft, .{ .font_size = field.font_size, .color = fg.toClay() });
+    cl.text(if (draft.len == 0) " " else draft, .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
     if (blink_on) caretBar(field, draft);
 }
 
@@ -716,21 +716,21 @@ fn drawLines(field: *Field, draft: []const u8, blink_on: bool, fg: Color, name: 
 fn drawLine(field: *Field, line: []const u8, line_start: usize, sel: ?text_editor.Span, fg: Color, name: []const u8, index: usize) void {
     // An empty line still draws a cell, so its box has a height for the caret to float in.
     if (line.len == 0) {
-        cl.text(" ", .{ .font_size = field.font_size, .color = fg.toClay() });
+        cl.text(" ", .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
         return;
     }
     const span = sel orelse {
-        cl.text(line, .{ .font_size = field.font_size, .color = fg.toClay() });
+        cl.text(line, .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
         return;
     };
     const line_end = line_start + line.len;
     if (span.end <= line_start or span.start >= line_end) {
-        cl.text(line, .{ .font_size = field.font_size, .color = fg.toClay() });
+        cl.text(line, .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
         return;
     }
     const a = @min(@max(span.start, line_start) - line_start, line.len);
     const b = @min(@max(span.end, line_start) - line_start, line.len);
-    if (a > 0) cl.text(line[0..a], .{ .font_size = field.font_size, .color = fg.toClay() });
+    if (a > 0) cl.text(line[0..a], .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
     cl.UI()(.{
         .id = .IDI(name, lineSelIndex(index)),
         .layout = .{
@@ -739,9 +739,9 @@ fn drawLine(field: *Field, line: []const u8, line_start: usize, sel: ?text_edito
         },
         .background_color = field.sel_bg.toClay(),
     })({
-        cl.text(line[a..b], .{ .font_size = field.font_size, .color = field.sel_fg.toClay() });
+        cl.text(line[a..b], .{ .font_size = field.font_size.whole(), .color = field.sel_fg.toClay() });
     });
-    if (b < line.len) cl.text(line[b..], .{ .font_size = field.font_size, .color = fg.toClay() });
+    if (b < line.len) cl.text(line[b..], .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
 }
 
 // The caret inside a line row: the row already sits past the field's padding, so no extra offset is added.
@@ -749,8 +749,8 @@ fn caretBarInLine(field: *Field, name: []const u8, index: usize, line: []const u
     const clamped = @min(at, line.len);
     caret_mod.declare(.{
         .id = .IDI(name, lineCaretIndex(index)),
-        .x = field.measure(line[0..clamped], field.font_size),
-        .height = @floatFromInt(field.font_size + 4),
+        .x = .{ .px = field.measure(line[0..clamped], field.font_size.whole()) },
+        .height = .{ .px = field.font_size.pts() + 4 },
         .color = field.caret_fg orelse Color.rgb(0xd8, 0xd8, 0xd8),
         .anchor = .center,
     });
@@ -761,8 +761,8 @@ fn onFieldDoubleClick(ctx: ?*anyopaque) void {
     const field: *Field = @ptrCast(@alignCast(ctx.?));
     const data = cl.getElementData(cl.getElementId(field.name()));
     if (!data.found) return;
-    const x = frame_mod.ptr_x - data.bounding_box.x - field.pad_lr;
-    const y = frame_mod.ptr_y - data.bounding_box.y - @as(f32, @floatFromInt(field.pad.top));
+    const x = frame_mod.ptr_x - data.bounding_box.x - field.pad_lr.pts();
+    const y = frame_mod.ptr_y - data.bounding_box.y - field.pad.top.pts();
     text_editor.selectWordAt(&field.editor, field.caretOffsetAtPoint(x, y));
     field.editor.idle = 0;
     frame_mod.setFocus(field.name());
@@ -775,8 +775,8 @@ fn caretBar(field: *Field, text: []const u8) void {
     caret_mod.declare(.{
         // The padding is part of the parent box, so the offset starts from the border box, not the text.
         .id = .IDI(field.name(), 2),
-        .x = @as(f32, @floatFromInt(field.pad.left)) + field.measure(text[0..at], field.font_size),
-        .height = @floatFromInt(field.font_size + 4),
+        .x = .{ .px = field.pad.left.pts() + field.measure(text[0..at], field.font_size.whole()) },
+        .height = .{ .px = field.font_size.pts() + 4 },
         .color = field.caret_fg orelse Color.rgb(0xd8, 0xd8, 0xdc),
         .anchor = .center,
     });
@@ -787,8 +787,8 @@ fn onFieldClick(ctx: ?*anyopaque) void {
     const field: *Field = @ptrCast(@alignCast(ctx.?));
     const data = cl.getElementData(cl.getElementId(field.name()));
     if (!data.found) return;
-    const x = frame_mod.ptr_x - data.bounding_box.x - field.pad_lr;
-    const y = frame_mod.ptr_y - data.bounding_box.y - @as(f32, @floatFromInt(field.pad.top));
+    const x = frame_mod.ptr_x - data.bounding_box.x - field.pad_lr.pts();
+    const y = frame_mod.ptr_y - data.bounding_box.y - field.pad.top.pts();
     field.editor.setCaret(field.caretOffsetAtPoint(x, y), false);
     field.editor.idle = 0;
     frame_mod.setFocus(field.name());
@@ -865,12 +865,12 @@ test "insert appends until full, backspace drops bytes" {
 
 test "Field carries neutral dark defaults" {
     const p = Field{ .id = .{ .text = "x" } };
-    try std.testing.expectEqual(@as(u16, 14), p.font_size);
+    try std.testing.expectEqual(@as(f32, 14), p.font_size.pts());
     try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.fg);
     try std.testing.expectEqual(Color.rgb(0x26, 0x26, 0x26), p.bg);
-    try std.testing.expectEqual(@as(u16, 6), p.radius.top_left);
+    try std.testing.expectEqual(@as(f32, 6), p.radius.top_left.pts());
     try std.testing.expect(std.meta.activeTag(p.w) == .grow);
-    try std.testing.expectEqual(@as(u16, 0), p.pad.top);
+    try std.testing.expectEqual(@as(f32, 0), p.pad.top.pts());
 }
 
 // ---- Field: the draft, the value prop, and the intents ----
@@ -998,7 +998,7 @@ test "Ctrl+Enter submits a multiline field instead of typing another line" {
 
 test "a click in a multiline field lands on the line and column under the pointer" {
     var buf: [64]u8 = undefined;
-    var field = Field{ .id = .{ .text = "m" }, .multiline = true, .font_size = 14 };
+    var field = Field{ .id = .{ .text = "m" }, .multiline = true, .font_size = .{ .px = 14 } };
     field.bindTo(&buf);
     field.setText("one\ntwo\nthree");
     const line_h = field.lineHeight();
@@ -1368,7 +1368,7 @@ test "disabled field dims to disabled_bg" {
     try std.testing.expect(found);
 }
 
-var border_field: Field = .{ .id = .{ .text = "test-border-field" }, .value = "hi", .border = .{ .width = 1, .color = Color.rgb(0xff, 0x00, 0x00) } };
+var border_field: Field = .{ .id = .{ .text = "test-border-field" }, .value = "hi", .border = .{ .width = .{ .px = 1 }, .color = Color.rgb(0xff, 0x00, 0x00) } };
 
 fn declareBorderField() void {
     textField(&border_field);

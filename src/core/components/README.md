@@ -25,6 +25,31 @@ one app's theme cannot be used by the next app.
 That is also why every component takes its colours as props with neutral defaults. There is no
 theme import and no global palette — the caller passes `bg`, `fg`, `hover_bg` and so on.
 
+## A props field is a word, not a number
+
+Every field of a props struct is a **type from `props.zig`**, never a bare `u16`, `u32` or
+`f32`. A number at a call site names no unit, so `.gap = 8` is a bug waiting to be
+misread; `.gap = .{ .px = 8 }` says what 8 is.
+
+| field | type | written at the call site |
+|---|---|---|
+| an axis of the widget | `prop.Size` | `.w = .grow`, `.w = prop.Size.px(220)`, `.w = .{ .fixed = 220 }` |
+| a length the widget measures or computes with (gap, radius, row height, border width, font size) | `prop.Len` | `.gap = .{ .px = 8 }`, `.radius = .{ .px = 6 }` |
+| padding, border, radius, label, id, callbacks | `prop.Pad`, `prop.Border`, `prop.Radius`, `prop.Label`, `prop.Id`, `prop.Click`/`Select`/`Change` | `.pad = prop.Pad.all(12)`, `.label = .{ .text = "OK" }` |
+
+A **funnel** — `Pad.all(12)`, `Border.all(1, c)`, `Radius.all(6)`, `Label.of(t).sized(14)`,
+`Size.px(220)` — is allowed to take a plain number, because its own name states the unit, in
+exactly the way `Color.rgb(0x8b, 0xa4, 0xb0)` does. The rule is about **fields**, which a
+caller fills in by hand and which have no name to carry the meaning.
+
+What stays a plain number: a count or an index (`cols: usize`, `depth: u16`), a fraction the
+application owns (`SliderProps.value/min/max`), and the payload *inside* a vocabulary type
+(`Size.fixed`, `Color.r`, `Len.px`).
+
+`w`/`h` are a `Size`, so a widget can fit, grow or be pinned; a field whose own geometry is
+derived from it (`ToggleProps.h`, which decides the knob) is a `Len`, because the component
+has to compute with the number and a growing axis gives it none.
+
 ## The catalogue
 
 | file | what it declares |

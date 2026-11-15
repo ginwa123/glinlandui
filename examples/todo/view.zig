@@ -20,7 +20,7 @@ const Theme = glinlandui.theme.Theme;
 
 const list_id = "todo.list";
 const rows_id = "todo.rows";
-const row_h: u32 = 40;
+const row_h: props.Len = .{ .px = 40 };
 
 // What a composable reads: the theme, the model, and this frame's snapshot of its state. The field and the click contexts are the model's.
 pub const Scope = struct {
@@ -54,7 +54,7 @@ fn header(scope: *Scope) void {
         .direction = .row,
         .w = .grow,
         .pad = props.Pad.all(16),
-        .gap = 8,
+        .gap = .{ .px = 8 },
         .child_align = .{ .y = .center },
     }, scope, headerChildren);
 }
@@ -109,7 +109,7 @@ fn listChildren(scope: *Scope) void {
         .row_h = row_h,
         .row_bg = t.colors.background,
         .hover_bg = t.colors.hover,
-        .radius = 0,
+        .radius = .{},
         .on_select = .{ .f = onRow, .ctx = scope.vm },
     }, scope.state.items(), scope, renderRow);
 }
@@ -129,7 +129,7 @@ fn renderRow(scope: *Scope, todo: state_mod.Todo, index: usize) void {
     checkbox_mod.checkbox(.{
         .id = .{ .text = frame.elementId("todo.row.check", index) },
         .checked = todo.done,
-        .size = 18,
+        .size = .{ .px = 18 },
         .box_bg = t.colors.surface,
         .checked_bg = t.colors.primary,
         .check_color = t.colors.on_primary,
@@ -170,7 +170,7 @@ fn footer(scope: *Scope) void {
         .h = .{ .fixed = 26 },
         .direction = .row,
         .pad = props.Pad.all(8),
-        .gap = 12,
+        .gap = .{ .px = 12 },
         .child_align = .{ .y = .center },
     }, scope, footerChildren);
 }

@@ -5,6 +5,7 @@
 // `dark` and `light` are neutral defaults; `dragon` is the Kanagawa Dragon kit, and an app may copy any of them.
 const std = @import("std");
 const Color = @import("color.zig").Color;
+const prop = @import("props.zig");
 
 // The colour roles a screen reads. Fewer than Material's thirty, and each one is a role rather than a shade.
 pub const Colors = struct {
@@ -31,10 +32,15 @@ pub const Colors = struct {
 
 // The type scale, in points. Four sizes cover a list screen; an app that needs more adds fields.
 pub const TypeScale = struct {
-    title: u16,
-    body: u16,
-    label: u16,
-    caption: u16,
+    title: prop.Len,
+    body: prop.Len,
+    label: prop.Len,
+    caption: prop.Len,
+
+    // A scale written the way a designer says it, four sizes in points.
+    pub fn of(title: f32, body: f32, label: f32, caption: f32) TypeScale {
+        return .{ .title = prop.Len.of(title), .body = prop.Len.of(body), .label = prop.Len.of(label), .caption = prop.Len.of(caption) };
+    }
 };
 
 pub const Theme = struct {
@@ -56,7 +62,7 @@ pub const dark = Theme{
         .divider = Color.hexC("#2e2e38"),
         .hover = Color.hexC("#1f1f26"),
     },
-    .type_scale = .{ .title = 18, .body = 14, .label = 13, .caption = 12 },
+    .type_scale = TypeScale.of(18, 14, 13, 12),
 };
 
 pub const light = Theme{
@@ -73,7 +79,7 @@ pub const light = Theme{
         .divider = Color.hexC("#d8d8de"),
         .hover = Color.hexC("#f0f0f5"),
     },
-    .type_scale = .{ .title = 18, .body = 14, .label = 13, .caption = 12 },
+    .type_scale = TypeScale.of(18, 14, 13, 12),
 };
 
 // Kanagawa Dragon: the same eleven roles, ink on paper — the palette the UI kit specifies.
@@ -91,7 +97,7 @@ pub const dragon = Theme{
         .divider = Color.hexC("#393836"),
         .hover = Color.hexC("#282727"),
     },
-    .type_scale = .{ .title = 18, .body = 14, .label = 13, .caption = 12 },
+    .type_scale = TypeScale.of(18, 14, 13, 12),
 };
 
 // The one tone no role covers: the selected row. A fill is not a cue on its own, so a component draws a bar too.
@@ -128,8 +134,8 @@ test "dragon is the kit's ink-on-paper palette" {
 
 test "the type scale is ordered, so a caption is never larger than a title" {
     for ([_]Theme{ dark, light, dragon }) |t| {
-        try std.testing.expect(t.type_scale.title > t.type_scale.body);
-        try std.testing.expect(t.type_scale.body >= t.type_scale.label);
-        try std.testing.expect(t.type_scale.label > t.type_scale.caption);
+        try std.testing.expect(t.type_scale.title.pts() > t.type_scale.body.pts());
+        try std.testing.expect(t.type_scale.body.pts() >= t.type_scale.label.pts());
+        try std.testing.expect(t.type_scale.label.pts() > t.type_scale.caption.pts());
     }
 }

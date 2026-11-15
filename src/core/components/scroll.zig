@@ -28,25 +28,25 @@ pub const ScrollProps = struct {
     direction: Direction = .vertical,
     w: box_mod.Size = .grow,
     h: box_mod.Size = .grow,
-    min_w: f32 = 0,
-    min_h: f32 = 0,
-    max_w: f32 = 0,
-    max_h: f32 = 0,
+    min_w: prop.Len = .{},
+    min_h: prop.Len = .{},
+    max_w: prop.Len = .{},
+    max_h: prop.Len = .{},
     bg: ?Color = null,
-    pad: u16 = 0,
-    gap: u16 = 0,
-    radius: u32 = 0,
-    border_width: u16 = 0,
+    pad: prop.Len = .{},
+    gap: prop.Len = .{},
+    radius: prop.Len = .{},
+    border_width: prop.Len = .{},
     border_color: Color = Color.rgb(0x00, 0x00, 0x00),
     disabled: bool = false,
     show_scrollbar: bool = true,
-    scrollbar_width: u16 = 9,
-    scrollbar_margin: f32 = 4,
+    scrollbar_width: prop.Len = .{ .px = 9 },
+    scrollbar_margin: prop.Len = .{ .px = 4 },
     track_bg: ?Color = null,
     thumb_bg: Color = Color.rgb(0x5a, 0x5a, 0x5a),
     thumb_hover_bg: Color = Color.rgb(0x7a, 0x7a, 0x7a),
-    thumb_radius: u32 = 4,
-    min_thumb: f32 = 24,
+    thumb_radius: prop.Len = .{ .px = 4 },
+    min_thumb: prop.Len = .{ .px = 24 },
     z_index: i16 = 10,
 };
 
@@ -175,11 +175,13 @@ pub fn dragScroll(x: f32, y: f32, dx: f32, dy: f32) void {
     }
 }
 
-fn toSizingAxis(s: box_mod.Size, min: f32, max: f32) cl.SizingAxis {
-    const constrained = min > 0 or max > 0;
+fn toSizingAxis(s: box_mod.Size, min: prop.Len, max: prop.Len) cl.SizingAxis {
+    const lo = min.pts();
+    const hi = max.pts();
+    const constrained = !min.isNone() or !max.isNone();
     return switch (s) {
-        .fit => if (constrained) .fitMinMax(.{ .min = min, .max = max }) else .fit,
-        .grow => if (constrained) .growMinMax(.{ .min = min, .max = max }) else .grow,
+        .fit => if (constrained) .fitMinMax(.{ .min = lo, .max = hi }) else .fit,
+        .grow => if (constrained) .growMinMax(.{ .min = lo, .max = hi }) else .grow,
         .fixed => |v| .fixed(v),
         .percent => |v| .percent(v),
         .clamp => |c| if (c.grow) .growMinMax(.{ .min = c.min, .max = c.max }) else .fitMinMax(.{ .min = c.min, .max = c.max }),
@@ -197,10 +199,10 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
     };
     // The thumb floats OVER the viewport, so an overflowing container insets its content by the gutter the thumb occupies.
     const pad = cl.Padding{
-        .left = props.pad,
-        .right = props.pad + scrollbarGutter(props, axes.v, true),
-        .top = props.pad,
-        .bottom = props.pad + scrollbarGutter(props, axes.h, false),
+        .left = props.pad.whole(),
+        .right = props.pad.add(scrollbarGutter(props, axes.v, true)).whole(),
+        .top = props.pad.whole(),
+        .bottom = props.pad.add(scrollbarGutter(props, axes.h, false)).whole(),
     };
     cl.UI()(.{
         .id = props.id.clay(),
@@ -211,15 +213,15 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
                 .h = toSizingAxis(props.h, props.min_h, props.max_h),
             },
             .padding = pad,
-            .child_gap = props.gap,
+            .child_gap = props.gap.whole(),
         },
         // By ID, not Clay_GetScrollOffset(): that matches the open element by a stale pointer and drops the offset when an earlier element blinks.
         .clip = .{ .horizontal = axes.h, .vertical = axes.v, .child_offset = cl.getScrollOffsetById(props.id.clay()) },
         .background_color = if (props.bg) |b| b.toClay() else .{ 0, 0, 0, 0 },
-        .corner_radius = .all(@floatFromInt(props.radius)),
-        .border = if (props.border_width > 0) .{
+        .corner_radius = .all(props.radius.pts()),
+        .border = if (!props.border_width.isNone()) .{
             .color = props.border_color.toClay(),
-            .width = .outside(props.border_width),
+            .width = .outside(props.border_width.whole()),
         } else .{},
     })({
         // Clip ancestry for the semantics layer: every node registered inside this container records it, so resolve() can compute what is actually visible and.
@@ -244,14 +246,14 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
 }
 
 // Width a scrollbar takes out of the content on its axis: the thumb plus the margin it floats by, or zero when nothing overflows.
-fn scrollbarGutter(props: ScrollProps, axis: bool, vertical: bool) u16 {
-    if (!axis or !props.show_scrollbar or props.disabled) return 0;
+fn scrollbarGutter(props: ScrollProps, axis: bool, vertical: bool) prop.Len {
+    if (!axis or !props.show_scrollbar or props.disabled) return prop.Len.none;
     const data = cl.getScrollContainerData(props.id.clay());
-    if (!data.found) return 0;
+    if (!data.found) return prop.Len.none;
     const viewport = if (vertical) data.scroll_container_dimensions.h else data.scroll_container_dimensions.w;
     const content = if (vertical) data.content_dimensions.h else data.content_dimensions.w;
-    if (!needsScrollbar(viewport, content)) return 0;
-    return props.scrollbar_width + @as(u16, @intFromFloat(props.scrollbar_margin));
+    if (!needsScrollbar(viewport, content)) return prop.Len.none;
+    return props.scrollbar_width.add(props.scrollbar_margin);
 }
 
 /// Floating scrollbar thumbs for every overflowing scroll axis, attached to the viewport (previous-frame scroll data; first frame declares nothing —.
@@ -264,24 +266,24 @@ fn declareScrollbars(props: ScrollProps) void {
         const viewport = data.scroll_container_dimensions.h;
         const content = data.content_dimensions.h;
         if (needsScrollbar(viewport, content)) {
-            const track = @max(0, viewport - props.scrollbar_margin * 2);
-            const len = thumbLen(viewport, content, track, props.min_thumb);
+            const track = @max(0, viewport - props.scrollbar_margin.scaled(2).pts());
+            const len = thumbLen(viewport, content, track, props.min_thumb.pts());
             if (len > 0) {
                 const off = thumbOffset(data.scroll_position.y, viewport, content, track, len);
-                const w: f32 = @floatFromInt(props.scrollbar_width);
+                const w: f32 = props.scrollbar_width.pts();
                 if (props.track_bg) |tb| {
                     cl.UI()(.{
                         .floating = .{
                             .attach_to = .to_element_with_id,
                             .parentId = parent_id,
                             .attach_points = .{ .element = .right_top, .parent = .right_top },
-                            .offset = .{ .x = -props.scrollbar_margin, .y = props.scrollbar_margin },
+                            .offset = .{ .x = -props.scrollbar_margin.pts(), .y = props.scrollbar_margin.pts() },
                             .z_index = props.z_index,
                             .pointer_capture_mode = .passthrough,
                         },
                         .layout = .{ .sizing = .{ .w = .fixed(w), .h = .fixed(track) } },
                         .background_color = tb.toClay(),
-                        .corner_radius = .all(@floatFromInt(props.thumb_radius)),
+                        .corner_radius = .all(props.thumb_radius.pts()),
                     })({});
                 }
                 // The attach point is the edge the bar sits against, so the margin is the whole offset: subtracting the width pushed it 8 px in.
@@ -291,13 +293,13 @@ fn declareScrollbars(props: ScrollProps) void {
                         .attach_to = .to_element_with_id,
                         .parentId = parent_id,
                         .attach_points = .{ .element = .right_top, .parent = .right_top },
-                        .offset = .{ .x = -props.scrollbar_margin, .y = props.scrollbar_margin + off },
+                        .offset = .{ .x = -props.scrollbar_margin.pts(), .y = props.scrollbar_margin.pts() + off },
                         .z_index = props.z_index + 1,
                         .pointer_capture_mode = .passthrough,
                     },
                     .layout = .{ .sizing = .{ .w = .fixed(w), .h = .fixed(len) } },
                     .background_color = (if (cl.hovered()) props.thumb_hover_bg else props.thumb_bg).toClay(),
-                    .corner_radius = .all(@floatFromInt(props.thumb_radius)),
+                    .corner_radius = .all(props.thumb_radius.pts()),
                 })({});
             }
         }
@@ -306,24 +308,24 @@ fn declareScrollbars(props: ScrollProps) void {
         const viewport = data.scroll_container_dimensions.w;
         const content = data.content_dimensions.w;
         if (needsScrollbar(viewport, content)) {
-            const track = @max(0, viewport - props.scrollbar_margin * 2);
-            const len = thumbLen(viewport, content, track, props.min_thumb);
+            const track = @max(0, viewport - props.scrollbar_margin.scaled(2).pts());
+            const len = thumbLen(viewport, content, track, props.min_thumb.pts());
             if (len > 0) {
                 const off = thumbOffset(data.scroll_position.x, viewport, content, track, len);
-                const w: f32 = @floatFromInt(props.scrollbar_width);
+                const w: f32 = props.scrollbar_width.pts();
                 if (props.track_bg) |tb| {
                     cl.UI()(.{
                         .floating = .{
                             .attach_to = .to_element_with_id,
                             .parentId = parent_id,
                             .attach_points = .{ .element = .left_bottom, .parent = .left_bottom },
-                            .offset = .{ .x = props.scrollbar_margin, .y = -props.scrollbar_margin },
+                            .offset = .{ .x = props.scrollbar_margin.pts(), .y = -props.scrollbar_margin.pts() },
                             .z_index = props.z_index,
                             .pointer_capture_mode = .passthrough,
                         },
                         .layout = .{ .sizing = .{ .w = .fixed(track), .h = .fixed(w) } },
                         .background_color = tb.toClay(),
-                        .corner_radius = .all(@floatFromInt(props.thumb_radius)),
+                        .corner_radius = .all(props.thumb_radius.pts()),
                     })({});
                 }
                 cl.UI()(.{
@@ -332,13 +334,13 @@ fn declareScrollbars(props: ScrollProps) void {
                         .attach_to = .to_element_with_id,
                         .parentId = parent_id,
                         .attach_points = .{ .element = .left_bottom, .parent = .left_bottom },
-                        .offset = .{ .x = props.scrollbar_margin + off, .y = -props.scrollbar_margin },
+                        .offset = .{ .x = props.scrollbar_margin.pts() + off, .y = -props.scrollbar_margin.pts() },
                         .z_index = props.z_index + 1,
                         .pointer_capture_mode = .passthrough,
                     },
                     .layout = .{ .sizing = .{ .w = .fixed(len), .h = .fixed(w) } },
                     .background_color = (if (cl.hovered()) props.thumb_hover_bg else props.thumb_bg).toClay(),
-                    .corner_radius = .all(@floatFromInt(props.thumb_radius)),
+                    .corner_radius = .all(props.thumb_radius.pts()),
                 })({});
             }
         }
@@ -374,17 +376,17 @@ test "ScrollProps carries neutral defaults (scrollbar on)" {
     try std.testing.expect(p.w == .grow);
     try std.testing.expect(p.h == .grow);
     try std.testing.expect(p.bg == null);
-    try std.testing.expectEqual(@as(u16, 0), p.pad);
-    try std.testing.expectEqual(@as(u16, 0), p.gap);
-    try std.testing.expectEqual(@as(u32, 0), p.radius);
-    try std.testing.expectEqual(@as(u16, 0), p.border_width);
+    try std.testing.expectEqual(@as(f32, 0), p.pad.pts());
+    try std.testing.expectEqual(@as(f32, 0), p.gap.pts());
+    try std.testing.expectEqual(@as(f32, 0), p.radius.pts());
+    try std.testing.expectEqual(@as(f32, 0), p.border_width.pts());
     try std.testing.expect(!p.disabled);
     try std.testing.expect(p.show_scrollbar);
-    try std.testing.expectEqual(@as(u16, 9), p.scrollbar_width);
+    try std.testing.expectEqual(@as(f32, 9), p.scrollbar_width.pts());
     try std.testing.expect(p.track_bg == null);
     try std.testing.expectEqual(Color.rgb(0x5a, 0x5a, 0x5a), p.thumb_bg);
     try std.testing.expectEqual(Color.rgb(0x7a, 0x7a, 0x7a), p.thumb_hover_bg);
-    try std.testing.expectEqual(@as(f32, 24), p.min_thumb);
+    try std.testing.expectEqual(@as(f32, 24), p.min_thumb.pts());
 }
 
 test "clipAxes maps direction to Clay clip flags" {

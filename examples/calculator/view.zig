@@ -31,7 +31,7 @@ const COLOR_ACCENT_HOVER = Color.hexC("#4a82ff");
 /// Keypad geometry. Four columns x five rows, fixed-size keys: `box` has no wrap/flex-grow for its children, so the grid is laid out explicitly rather than left to the layout engine.
 const key_w: u32 = 72;
 const key_h: u32 = 52;
-const key_gap: u32 = 8;
+const key_gap: props.Len = .{ .px = 8 };
 
 const ROW_IDS = [_][]const u8{
     "calc-row-0",
@@ -44,8 +44,8 @@ const ROW_IDS = [_][]const u8{
 const DISPLAY_H: f32 = 72;
 
 /// Font sizes make the display, the expression line and the key labels unambiguous inside one frame's command list.
-const DISPLAY_FONT: u16 = 34;
-const EXPR_FONT: u16 = 14;
+const DISPLAY_FONT: props.Len = .{ .px = 34 };
+const EXPR_FONT: props.Len = .{ .px = 14 };
 
 /// What a composable reads: the model, and nothing else. The machine, its scratch buffers and the click context all live there, because dispatch runs after the declare returns.
 pub const Scope = struct {
@@ -75,7 +75,7 @@ pub fn CalculatorScreen(scope: *Scope) void {
         .h = .grow,
         .bg = COLOR_BG,
         .pad = props.Pad.all(12),
-        .gap = 10,
+        .gap = .{ .px = 10 },
     }, scope, children);
 }
 
@@ -99,7 +99,7 @@ fn children(scope: *Scope) void {
         .id = .{ .text = "calc-keys" },
         .w = .grow,
         .h = .grow,
-        .gap = @intCast(key_gap),
+        .gap = key_gap,
     }, scope, keysChildren);
 }
 
@@ -118,7 +118,7 @@ fn keysChildren(scope: *Scope) void {
             .id = .{ .text = ROW_IDS[r] },
             .w = .grow,
             .h = .{ .fixed = @floatFromInt(key_h) },
-            .gap = @intCast(key_gap),
+            .gap = key_gap,
         }, &rc, rowChildren);
     }
 }
@@ -137,7 +137,7 @@ fn rowChildren(ctx: *RowCtx) void {
         const fill = tint(key);
         components.button.button(.{
             .id = .{ .text = state_mod.KEY_IDS[i] },
-            .label = .{ .text = state_mod.KEY_LABELS[i], .size = 18 },
+            .label = .{ .text = state_mod.KEY_LABELS[i], .size = .{ .px = 18 } },
             .w = .{ .fixed = @floatFromInt(key_w) },
             .h = .{ .fixed = @floatFromInt(key_h) },
             .radius = props.Radius.all(10),
@@ -194,7 +194,7 @@ fn displayString(cmds: []const glinlandui.RenderCommand) ?[]const u8 {
     for (cmds) |c| {
         if (c.command_type != .text) continue;
         const td = c.render_data.text;
-        if (td.font_size == DISPLAY_FONT) return cmdText(c);
+        if (td.font_size == DISPLAY_FONT.whole()) return cmdText(c);
     }
     return null;
 }
@@ -204,7 +204,7 @@ fn expressionString(cmds: []const glinlandui.RenderCommand) ?[]const u8 {
     for (cmds) |c| {
         if (c.command_type != .text) continue;
         const td = c.render_data.text;
-        if (td.font_size == EXPR_FONT) return cmdText(c);
+        if (td.font_size == EXPR_FONT.whole()) return cmdText(c);
     }
     return null;
 }
@@ -213,7 +213,7 @@ fn displayColor(cmds: []const glinlandui.RenderCommand) ?[4]f32 {
     for (cmds) |c| {
         if (c.command_type != .text) continue;
         const td = c.render_data.text;
-        if (td.font_size == DISPLAY_FONT) return td.text_color;
+        if (td.font_size == DISPLAY_FONT.whole()) return td.text_color;
     }
     return null;
 }
@@ -327,7 +327,7 @@ test "the keypad lays out as five rows of four, without overlap" {
             try std.testing.expect(bb.x > left.x);
             try std.testing.expectApproxEqAbs(left.y, bb.y, 0.01);
             try std.testing.expectApproxEqAbs(
-                @as(f32, @floatFromInt(key_gap)),
+                key_gap.pts(),
                 bb.x - (left.x + left.width),
                 1.0,
             );

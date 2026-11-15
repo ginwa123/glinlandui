@@ -16,12 +16,12 @@ pub const RadioProps = struct {
     // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
     src: ?std.builtin.SourceLocation = null,
     selected: bool = false,
-    size: u32 = 16,
+    size: prop.Len = .{ .px = 16 },
     outer_bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
     selected_border: Color = Color.rgb(0x4c, 0xaf, 0x50),
     border_color: Color = Color.rgb(0x55, 0x55, 0x55),
     dot_color: Color = Color.rgb(0x4c, 0xaf, 0x50),
-    border_width: u16 = 2,
+    border_width: prop.Len = .{ .px = 2 },
     hover_bg: ?Color = null,
     disabled: bool = false,
     disabled_bg: Color = Color.rgb(0x2a, 0x2a, 0x2a),
@@ -31,32 +31,33 @@ pub const RadioProps = struct {
 /// Declare a radio button: outer circle (fixed size x size) + optional inner dot circle when `selected`.
 pub fn radio(props: RadioProps) void {
     // NOTE: cl.hovered() must be evaluated INSIDE the UI() config literal (after Clay__OpenElement runs, while this element is open) so it queries this.
+    const size: f32 = props.size.pts();
     cl.UI()(.{
         .id = props.id.clay(),
         .layout = .{
             .sizing = .{
-                .w = .fixed(@floatFromInt(props.size)),
-                .h = .fixed(@floatFromInt(props.size)),
+                .w = .fixed(size),
+                .h = .fixed(size),
             },
             .child_alignment = .center,
         },
         .background_color = (if (props.disabled) props.disabled_bg else if (cl.hovered()) (props.hover_bg orelse props.outer_bg) else props.outer_bg).toClay(),
-        .corner_radius = .all(@as(f32, @floatFromInt(props.size)) / 2.0),
-        .border = if (props.border_width > 0) .{
+        .corner_radius = .all(size / 2.0),
+        .border = if (!props.border_width.isNone()) .{
             .color = (if (props.selected) props.selected_border else props.border_color).toClay(),
-            .width = .outside(props.border_width),
+            .width = .outside(props.border_width.whole()),
         } else .{},
     })({
         if (props.selected) {
             cl.UI()(.{
                 .layout = .{
                     .sizing = .{
-                        .w = .fixed(@as(f32, @floatFromInt(props.size)) / 2.0),
-                        .h = .fixed(@as(f32, @floatFromInt(props.size)) / 2.0),
+                        .w = .fixed(size / 2.0),
+                        .h = .fixed(size / 2.0),
                     },
                 },
                 .background_color = props.dot_color.toClay(),
-                .corner_radius = .all(@as(f32, @floatFromInt(props.size)) / 4.0),
+                .corner_radius = .all(size / 4.0),
             })({});
         }
     });
@@ -98,12 +99,12 @@ test "radio emits outer circle only, plus dot when selected, and no text" {
 test "RadioProps carries neutral defaults" {
     const p = RadioProps{ .id = .{ .text = "x" } };
     try std.testing.expect(!p.selected);
-    try std.testing.expectEqual(@as(u32, 16), p.size);
+    try std.testing.expectEqual(@as(f32, 16), p.size.pts());
     try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.outer_bg);
     try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50), p.selected_border);
     try std.testing.expectEqual(Color.rgb(0x55, 0x55, 0x55), p.border_color);
     try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50), p.dot_color);
-    try std.testing.expectEqual(@as(u16, 2), p.border_width);
+    try std.testing.expectEqual(@as(u16, 2), p.border_width.whole());
     try std.testing.expect(p.hover_bg == null);
     try std.testing.expect(!p.disabled);
     try std.testing.expectEqual(Color.rgb(0x2a, 0x2a, 0x2a), p.disabled_bg);

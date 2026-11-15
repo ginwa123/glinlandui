@@ -2,6 +2,7 @@
 const std = @import("std");
 const cl = @import("zclay");
 const headless = @import("../testing/headless.zig");
+const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 
 // ---- Glyph table (Font Awesome codepoints, present in Nerd Fonts) ---- Drill-in / expand affordances (replace the ASCII ">" chevron).
@@ -24,7 +25,7 @@ pub const lock: []const u8 = "\u{F023}";
 /// Icon props.
 pub const IconProps = struct {
     glyph: []const u8 = "",
-    font_size: u16 = 14,
+    font_size: prop.Len = .{ .px = 14 },
     color: Color = Color.rgb(0xe8, 0xe8, 0xe8),
     disabled: bool = false,
     disabled_color: Color = Color.rgb(0x77, 0x77, 0x77),
@@ -33,7 +34,7 @@ pub const IconProps = struct {
 /// Declare a single icon element.
 pub fn icon(props: IconProps) void {
     cl.text(props.glyph, .{
-        .font_size = props.font_size,
+        .font_size = props.font_size.whole(),
         .color = (if (props.disabled) props.disabled_color else props.color).toClay(),
     });
 }
@@ -52,7 +53,7 @@ test "icon emits exactly one text command, no rectangles" {
 
 test "IconProps carries neutral defaults" {
     const p = IconProps{ .glyph = chevron_right };
-    try std.testing.expectEqual(@as(u16, 14), p.font_size);
+    try std.testing.expectEqual(@as(f32, 14), p.font_size.pts());
     try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.color);
     try std.testing.expect(!p.disabled);
     try std.testing.expectEqual(Color.rgb(0x77, 0x77, 0x77), p.disabled_color);

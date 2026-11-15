@@ -36,7 +36,7 @@ pub fn Screen(scope: *Scope) void {
         .h = .grow,
         .direction = .column,
         .bg = scope.theme.colors.background,
-        .gap = 0,
+        .gap = .{ .px = 0 },
     }, scope, body);
 }
 
@@ -54,7 +54,7 @@ fn header(scope: *Scope) void {
         .direction = .row,
         .bg = scope.theme.colors.surface,
         .pad = props.Pad.all(10),
-        .gap = 12,
+        .gap = .{ .px = 12 },
     }, scope, headerChildren);
 }
 
@@ -168,7 +168,7 @@ fn row(scope: *Scope, index: usize) void {
         .w = .grow,
         .h = .{ .fixed = state_mod.row_h },
         .pad = props.Pad.axes(6, 8),
-        .gap = 16,
+        .gap = .{ .px = 16 },
         .child_align = .{ .x = .left, .y = .center },
         .bg = if (index % 2 == 0) t.colors.background else t.colors.surface,
         .hover_bg = t.colors.hover,
@@ -191,7 +191,7 @@ fn footer(scope: *Scope) void {
         .direction = .row,
         .bg = scope.theme.colors.surface,
         .pad = props.Pad.all(8),
-        .gap = 12,
+        .gap = .{ .px = 12 },
     }, scope, footerChildren);
 }
 

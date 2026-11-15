@@ -43,7 +43,7 @@ pub const TodoViewModel = struct {
             .caret_fg = t.colors.primary,
             .radius = glinlandui.props.Radius.all(6),
             .pad = glinlandui.props.Pad.axes(8, 10),
-            .border = .{ .width = 1, .color = t.colors.divider },
+            .border = .{ .width = .{ .px = 1 }, .color = t.colors.divider },
             .w = .{ .clamp = .{ .min = 120, .max = 640, .grow = true } },
             .on_change = .{ .f = onDraft, .ctx = self },
             .on_submit = .{ .f = onSubmit, .ctx = self },

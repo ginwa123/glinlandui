@@ -28,33 +28,33 @@ pub const ListProps = struct {
     direction: Direction = .vertical,
     /// Grid only: fixed column count for this frame (see gridCols).
     cols: usize = 3,
-    /// Grid only: fixed cell size in px (see gridCell).
-    cell_w: u32 = 140,
-    cell_h: u32 = 78,
-    row_h: u32 = 34,
+    /// Grid only: fixed cell size (see gridCell).
+    cell_w: prop.Len = .{ .px = 140 },
+    cell_h: prop.Len = .{ .px = 78 },
+    row_h: prop.Len = .{ .px = 34 },
     row_bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
     selected_bg: Color = Color.rgb(0x3a, 0x3a, 0x3a),
     row_fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
     selected_fg: Color = Color.rgb(0xff, 0xff, 0xff),
     hover_bg: Color = Color.rgb(0x2d, 0x2d, 0x2d),
-    radius: u32 = 4,
-    gap: u16 = 0,
+    radius: prop.Len = .{ .px = 4 },
+    gap: prop.Len = .{},
     /// Container width clamps (grow axis, 0 = no constraint).
-    min_w: f32 = 0,
-    max_w: f32 = 0,
+    min_w: prop.Len = .{},
+    max_w: prop.Len = .{},
     /// Row height clamps (0 = no constraint; clamps row_h per row).
-    row_min_h: f32 = 0,
-    row_max_h: f32 = 0,
+    row_min_h: prop.Len = .{},
+    row_max_h: prop.Len = .{},
     /// Uniform row border (0 = none) + color; emits a Clay BORDER per row.
-    border_width: u16 = 0,
+    border_width: prop.Len = .{},
     border_color: Color = Color.rgb(0x00, 0x00, 0x00),
     /// Grid/horizontal cell fill (null = transparent, e.g.
     cell_bg: ?Color = null,
     /// Grid/horizontal selected ring (0 = none; vertical rows show selected_bg instead and ignore these unless border_width is set).
-    selected_border_width: u16 = 0,
+    selected_border_width: prop.Len = .{},
     selected_border_color: Color = Color.rgb(0x7a, 0xb8, 0xff),
     /// Grid/horizontal hover ring on enabled unselected cells (0 = none; vertical rows show hover_bg instead).
-    hover_border_width: u16 = 0,
+    hover_border_width: prop.Len = .{},
     hover_border_color: Color = Color.rgb(0x5a, 0x5a, 0x5a),
     /// Disabled list: rows render `disabled_bg`, never take hover chrome, and register no clicks (declare never fires; owners must also check).
     disabled: bool = false,
@@ -68,14 +68,14 @@ pub const ListProps = struct {
 };
 
 fn rowHeight(props: ListProps) f32 {
-    var h: f32 = @floatFromInt(props.row_h);
-    if (props.row_min_h > 0 and h < props.row_min_h) h = props.row_min_h;
-    if (props.row_max_h > 0 and h > props.row_max_h) h = props.row_max_h;
+    var h: f32 = props.row_h.pts();
+    if (!props.row_min_h.isNone() and h < props.row_min_h.pts()) h = props.row_min_h.pts();
+    if (!props.row_max_h.isNone() and h > props.row_max_h.pts()) h = props.row_max_h.pts();
     return h;
 }
 
 fn listSizingW(props: ListProps) cl.SizingAxis {
-    if (props.min_w > 0 or props.max_w > 0) return .growMinMax(.{ .min = props.min_w, .max = props.max_w });
+    if (!props.min_w.isNone() or !props.max_w.isNone()) return .growMinMax(.{ .min = props.min_w.pts(), .max = props.max_w.pts() });
     return .grow;
 }
 
@@ -87,9 +87,9 @@ pub fn gridCols(content_w: u32) usize {
 }
 
 /// Pure: grid cell size filling content_w with `cols` columns at `gap` px.
-pub fn gridCell(content_w: u32, cols: usize, gap: u16) [2]u32 {
+pub fn gridCell(content_w: u32, cols: usize, gap: prop.Len) [2]u32 {
     const c: u32 = @intCast(@max(cols, 1));
-    const g: u32 = gap;
+    const g: u32 = gap.whole();
     const total_gap = (c - 1) * g;
     const w: u32 = if (content_w > total_gap) (content_w - total_gap) / c else 1;
     const h: u32 = @max((w * 9) / 16, 1);
@@ -166,7 +166,7 @@ fn listVertical(
         .layout = .{
             .direction = .top_to_bottom,
             .sizing = .{ .w = listSizingW(props), .h = .fit },
-            .child_gap = props.gap,
+            .child_gap = props.gap.whole(),
         },
     })({
         for (items, 0..) |item, i| {
@@ -186,10 +186,10 @@ fn listVertical(
                     .child_gap = 8,
                 },
                 .background_color = (if (!props.disabled and !is_sel and cl.hovered()) props.hover_bg else base_bg).toClay(),
-                .corner_radius = .all(@floatFromInt(props.radius)),
-                .border = if (props.border_width > 0) .{
+                .corner_radius = .all(props.radius.pts()),
+                .border = if (!props.border_width.isNone()) .{
                     .color = props.border_color.toClay(),
-                    .width = .outside(props.border_width),
+                    .width = .outside(props.border_width.whole()),
                 } else .{},
             })({
                 renderItem(item_ctx, item, i);
@@ -209,7 +209,7 @@ fn listHorizontal(
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{ .w = listSizingW(props), .h = .fit },
-            .child_gap = props.gap,
+            .child_gap = props.gap.whole(),
         },
     })({
         for (items, 0..) |item, i| {
@@ -225,10 +225,10 @@ fn listHorizontal(
                     .child_gap = 8,
                 },
                 .background_color = (if (!props.disabled and !is_sel and cl.hovered()) props.hover_bg else base_bg).toClay(),
-                .corner_radius = .all(@floatFromInt(props.radius)),
-                .border = if (props.border_width > 0) .{
+                .corner_radius = .all(props.radius.pts()),
+                .border = if (!props.border_width.isNone()) .{
                     .color = props.border_color.toClay(),
-                    .width = .outside(props.border_width),
+                    .width = .outside(props.border_width.whole()),
                 } else .{},
             })({
                 renderItem(item_ctx, item, i);
@@ -249,7 +249,7 @@ fn listGrid(
         .layout = .{
             .direction = .top_to_bottom,
             .sizing = .{ .w = listSizingW(props), .h = .fit },
-            .child_gap = props.gap,
+            .child_gap = props.gap.whole(),
         },
     })({
         var row: usize = 0;
@@ -259,7 +259,7 @@ fn listGrid(
                 .layout = .{
                     .direction = .left_to_right,
                     .sizing = .{ .w = .grow, .h = .fit },
-                    .child_gap = props.gap,
+                    .child_gap = props.gap.whole(),
                 },
             })({
                 var col: usize = 0;
@@ -273,18 +273,18 @@ fn listGrid(
                         .id = .IDI(props.id.str(), @as(u32, @intCast(i + 1))),
                         .layout = .{
                             .direction = .left_to_right,
-                            .sizing = .{ .w = .fixed(@floatFromInt(props.cell_w)), .h = .fixed(@floatFromInt(props.cell_h)) },
+                            .sizing = .{ .w = .fixed(props.cell_w.pts()), .h = .fixed(props.cell_h.pts()) },
                             .child_alignment = .{ .x = .center, .y = .center },
                         },
                         .background_color = if (props.cell_bg) |bg| bg.toClay() else .{ 0, 0, 0, 0 },
-                        .corner_radius = .all(@floatFromInt(props.radius)),
+                        .corner_radius = .all(props.radius.pts()),
                         // Selected ring wins; hover ring only on enabled unselected cells (evaluated inside the literal).
-                        .border = if (is_sel and props.selected_border_width > 0) .{
+                        .border = if (is_sel and !props.selected_border_width.isNone()) .{
                             .color = props.selected_border_color.toClay(),
-                            .width = .outside(props.selected_border_width),
-                        } else if (!props.disabled and !is_sel and props.hover_border_width > 0 and cl.hovered()) .{
+                            .width = .outside(props.selected_border_width.whole()),
+                        } else if (!props.disabled and !is_sel and !props.hover_border_width.isNone() and cl.hovered()) .{
                             .color = props.hover_border_color.toClay(),
-                            .width = .outside(props.hover_border_width),
+                            .width = .outside(props.hover_border_width.whole()),
                         } else .{},
                     })({
                         renderItem(item_ctx, item, i);
@@ -397,14 +397,14 @@ test "generic list with string items renders title + trailing per row" {
 
 test "ListProps carries neutral dark defaults + null selection/callbacks" {
     const p = ListProps{ .id = .{ .text = "x" } };
-    try std.testing.expectEqual(@as(u32, 34), p.row_h);
+    try std.testing.expectEqual(@as(f32, 34), p.row_h.pts());
     try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.row_bg);
     try std.testing.expectEqual(Color.rgb(0x3a, 0x3a, 0x3a), p.selected_bg);
     try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.row_fg);
     try std.testing.expectEqual(Color.rgb(0xff, 0xff, 0xff), p.selected_fg);
     try std.testing.expectEqual(Color.rgb(0x2d, 0x2d, 0x2d), p.hover_bg);
-    try std.testing.expectEqual(@as(u32, 4), p.radius);
-    try std.testing.expectEqual(@as(u16, 0), p.gap);
+    try std.testing.expectEqual(@as(f32, 4), p.radius.pts());
+    try std.testing.expectEqual(@as(f32, 0), p.gap.pts());
     try std.testing.expect(p.selected == null);
     try std.testing.expect(p.on_select.f == null);
     try std.testing.expect(p.on_select.ctx == null);
@@ -530,7 +530,7 @@ const gap_items = [_]TitleItem{
 const gap_slice: []const TitleItem = &gap_items;
 
 fn declareGapList() void {
-    list(.{ .id = .{ .text = "test-gap-list" }, .gap = 8 }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-gap-list" }, .gap = .{ .px = 8 } }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 fn declareNoGapList() void {
@@ -553,7 +553,7 @@ test "list gap separates rows by row_h + gap" {
 }
 
 fn declareRadiusList() void {
-    list(.{ .id = .{ .text = "test-radius-list" }, .radius = 12 }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-radius-list" }, .radius = .{ .px = 12 } }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "list radius prop reaches row rects" {
@@ -799,11 +799,11 @@ test "ListProps direction defaults to vertical with grid sizing defaults" {
     const p = ListProps{ .id = .{ .text = "x" } };
     try std.testing.expectEqual(Direction.vertical, p.direction);
     try std.testing.expectEqual(@as(usize, 3), p.cols);
-    try std.testing.expectEqual(@as(u32, 140), p.cell_w);
-    try std.testing.expectEqual(@as(u32, 78), p.cell_h);
+    try std.testing.expectEqual(@as(f32, 140), p.cell_w.pts());
+    try std.testing.expectEqual(@as(f32, 78), p.cell_h.pts());
     try std.testing.expect(p.cell_bg == null);
-    try std.testing.expectEqual(@as(u16, 0), p.selected_border_width);
-    try std.testing.expectEqual(@as(u16, 0), p.hover_border_width);
+    try std.testing.expectEqual(@as(f32, 0), p.selected_border_width.pts());
+    try std.testing.expectEqual(@as(f32, 0), p.hover_border_width.pts());
 }
 
 test "gridCols adapts 2/3/4 across breakpoints" {
@@ -818,10 +818,10 @@ test "gridCols adapts 2/3/4 across breakpoints" {
 
 test "gridCell fills width at 16:9" {
     // 3 cols in 479px: (479 - 16) / 3 = 154 wide, 86 tall.
-    try std.testing.expectEqual([2]u32{ 154, 86 }, gridCell(479, 3, 8));
+    try std.testing.expectEqual([2]u32{ 154, 86 }, gridCell(479, 3, .{ .px = 8 }));
     // 2 cols in 300px: (300 - 8) / 2 = 146 wide, 82 tall.
-    try std.testing.expectEqual([2]u32{ 146, 82 }, gridCell(300, 2, 8));
-    try std.testing.expectEqual([2]u32{ 1, 1 }, gridCell(0, 3, 8));
+    try std.testing.expectEqual([2]u32{ 146, 82 }, gridCell(300, 2, .{ .px = 8 }));
+    try std.testing.expectEqual([2]u32{ 1, 1 }, gridCell(0, 3, .{ .px = 8 }));
 }
 
 const h_items = [_]TitleItem{
@@ -864,7 +864,7 @@ const g_items = [_]TitleItem{
 const g_slice: []const TitleItem = &g_items;
 
 fn declareGrid() void {
-    list(.{ .id = .{ .text = "test-grid" }, .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60 }, g_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-grid" }, .direction = .grid, .cols = 3, .cell_w = .{ .px = 100 }, .cell_h = .{ .px = 60 } }, g_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "grid wraps 5 items in 3 cols with transparent cells" {
@@ -900,7 +900,7 @@ fn gridBorderForId(cmds: []cl.RenderCommand, id: u32) ?cl.BorderRenderData {
 
 fn declareSelGrid() void {
     list(
-        .{ .id = .{ .text = "test-sel-grid" }, .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60, .selected = 1, .selected_border_width = 2 },
+        .{ .id = .{ .text = "test-sel-grid" }, .direction = .grid, .cols = 3, .cell_w = .{ .px = 100 }, .cell_h = .{ .px = 60 }, .selected = 1, .selected_border_width = .{ .px = 2 } },
         g_slice,
         CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) },
         renderA,
@@ -921,7 +921,7 @@ test "grid selected cell draws the selected ring, others none" {
 
 fn declareNoSelGrid() void {
     list(
-        .{ .id = .{ .text = "test-nosel-grid" }, .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60, .selected_border_width = 2 },
+        .{ .id = .{ .text = "test-nosel-grid" }, .direction = .grid, .cols = 3, .cell_w = .{ .px = 100 }, .cell_h = .{ .px = 60 }, .selected_border_width = .{ .px = 2 } },
         g_slice,
         CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) },
         renderA,
@@ -945,11 +945,11 @@ test "grid hover draws the hover ring on one cell only" {
         .id = .{ .text = "test-hov-grid" },
         .direction = .grid,
         .cols = 3,
-        .cell_w = 100,
-        .cell_h = 60,
+        .cell_w = .{ .px = 100 },
+        .cell_h = .{ .px = 60 },
         .selected = 1,
-        .selected_border_width = 2,
-        .hover_border_width = 2,
+        .selected_border_width = .{ .px = 2 },
+        .hover_border_width = .{ .px = 2 },
     };
     _ = &hover_grid;
     cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
@@ -978,7 +978,7 @@ var grid_click_rec = SelectCtx{};
 
 fn declareClickGrid() void {
     list(
-        .{ .id = .{ .text = "test-click-grid" }, .direction = .grid, .cols = 3, .cell_w = 100, .cell_h = 60, .on_select = .{ .f = testOnSelect, .ctx = &grid_click_rec } },
+        .{ .id = .{ .text = "test-click-grid" }, .direction = .grid, .cols = 3, .cell_w = .{ .px = 100 }, .cell_h = .{ .px = 60 }, .on_select = .{ .f = testOnSelect, .ctx = &grid_click_rec } },
         g_slice,
         CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) },
         renderA,

@@ -8,7 +8,7 @@ const Color = @import("../color.zig").Color;
 
 pub const BadgeProps = struct {
     id: prop.Id,
-    label: prop.Label = .{ .size = 11, .color = Color.rgb(0x8a, 0x8a, 0x94) },
+    label: prop.Label = .{ .size = .{ .px = 11 }, .color = Color.rgb(0x8a, 0x8a, 0x94) },
     bg: Color = Color.rgb(0x26, 0x26, 0x2c),
     pad: prop.Pad = prop.Pad.axes(1, 6),
     radius: prop.Radius = prop.Radius.all(4),
@@ -27,7 +27,7 @@ pub fn badge(props: BadgeProps) void {
         .background_color = props.bg.toClay(),
         .corner_radius = props.radius.clay(),
     })({
-        cl.text(props.label.text, .{ .font_size = props.label.size, .color = props.label.color.toClay() });
+        cl.text(props.label.text, .{ .font_size = props.label.size.whole(), .color = props.label.color.toClay() });
     });
 }
 

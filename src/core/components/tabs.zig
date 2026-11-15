@@ -25,13 +25,13 @@ pub const TabsProps = struct {
     // Where the app declared this widget: `@src()` at the call site, which the devtool then shows as the declaration.
     src: ?std.builtin.SourceLocation = null,
     tabs: []const Tab = &.{},
-    h: u32 = 34,
+    h: prop.Size = .{ .fixed = 34 },
     bg: Color = Color.rgb(0x1a, 0x1a, 0x1d),
     active_bg: Color = Color.rgb(0x14, 0x14, 0x16),
     fg: Color = Color.rgb(0x8a, 0x8a, 0x94),
     active_fg: Color = Color.rgb(0xf0, 0xf0, 0xf4),
     close_fg: Color = Color.rgb(0x5a, 0x5a, 0x64),
-    pad_lr: u16 = 11,
+    pad_lr: prop.Len = .{ .px = 11 },
     on_select: prop.Select = .{},
     on_close: prop.Select = .{},
     click_z: i16 = 0,
@@ -59,7 +59,7 @@ pub fn tabs(props: TabsProps) void {
         .id = props.id.clay(),
         .layout = .{
             .direction = .left_to_right,
-            .sizing = .{ .w = .grow, .h = .fixed(@floatFromInt(props.h)) },
+            .sizing = .{ .w = .grow, .h = props.h.clay() },
             .child_gap = 1,
         },
         .background_color = props.bg.toClay(),
@@ -77,7 +77,7 @@ fn tabUi(props: TabsProps, tab: Tab, i: usize) void {
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{ .w = .fit, .h = .grow },
-            .padding = .{ .left = props.pad_lr, .right = props.pad_lr },
+            .padding = .{ .left = props.pad_lr.whole(), .right = props.pad_lr.whole() },
             .child_alignment = .{ .x = .left, .y = .center },
             .child_gap = 8,
         },

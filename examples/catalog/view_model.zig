@@ -46,7 +46,7 @@ pub const CatalogViewModel = struct {
             .sel_fg = t.colors.text,
             .sel_bg = glinlandui.theme.selected,
             .caret_fg = t.colors.primary,
-            .border = .{ .width = 1, .color = t.colors.divider },
+            .border = .{ .width = .{ .px = 1 }, .color = t.colors.divider },
             .on_change = .{ .f = onDraft, .ctx = self },
         };
         self.field.bind();
