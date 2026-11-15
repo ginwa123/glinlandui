@@ -18,7 +18,7 @@ Rules for anyone (human or agent) changing this repository.
 
 ```sh
 zig build                  # the library, the demo, and the examples
-zig build test             # the cross-platform parity suite (969 tests on macOS)
+zig build test             # the cross-platform parity suite (982 tests on macOS)
 zig build native-test      # Linux only: the Wayland/EGL/GLES3 backend
 zig build run              # the demo window
 zig build run-calculator   # the calculator example

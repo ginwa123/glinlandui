@@ -85,6 +85,8 @@ pub fn shoot(
             i.startPicking();
             i.takePick();
         }
+        // A query narrows the tree the shot shows; the box itself is not in that tree, so the flag is the only way in.
+        if (opts.query) |q| i.setQuery(q);
     }
     var i: usize = 1;
     while (i < opts.frames) : (i += 1) driver.frame();

@@ -386,6 +386,8 @@ pub const Field = struct {
     on_submit: prop.Submit = .{},
     // Called after a click places the caret, so the app can take focus.
     on_focus: prop.Click = .{},
+    // Dispatch priority for the field's own hit target: an overlay that swallows clicks passes a z above its own, so the field still answers.
+    click_z: i16 = 0,
     // Measures a run with the font that draws the field. The engine's text backend is that font.
     measure: *const fn ([]const u8, u16) f32 = text_backend.runWidth,
     // Copy, cut and paste: the system clipboard unless a caller (or a test) hands in its own.
@@ -709,7 +711,7 @@ pub fn textField(field: *Field) void {
             .actions = .{ .set_text = true },
         });
     }
-    registry.registerClickDoubleCursor(field.id.clay(), onFieldClick, onFieldDoubleClick, field, .text);
+    registry.registerClickDoubleCursorZ(field.id.clay(), onFieldClick, onFieldDoubleClick, field, .text, field.click_z);
 }
 
 // How many lines of a multiline field are drawn: a buffer is bounded by its own length, but a frame's command stream is not free.
