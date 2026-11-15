@@ -5,6 +5,7 @@ const cl = @import("zclay");
 const soft = @import("../core/render_software.zig");
 const glyphs = @import("../core/glyphs.zig");
 const text_face = @import("../core/text_face.zig");
+const scale_mod = @import("../core/scale.zig");
 
 /// The CPU surface type the software renderer draws into; still the reference the golden gate compares against.
 pub const Surface = soft.Surface;
@@ -89,8 +90,8 @@ pub const Renderer = struct {
 
     /// Attach the renderer to a window's view. Called by the window before the first frame; without it every draw is a no-op.
     pub fn attach(self: *Renderer, nsview: ?*anyopaque) void {
-        // OPT-IN: the GPU path renders correctly (see metal_parity_test), but the window does not yet pump frames into a layer-backed view.
-        if (std.c.getenv("GLIN_METAL") == null) return;
+        // The GPU path is the default; GLIN_NO_METAL forces the CPU renderer for an A/B on the same window.
+        if (std.c.getenv("GLIN_NO_METAL") != null) return;
         if (self.handle != null or nsview == null) return;
         self.handle = c.glin_metal_create(nsview);
         self.created = true;
@@ -117,7 +118,9 @@ pub const Renderer = struct {
 
     fn drawMetal(self: *Renderer, h: *c.GlinMetal, commands: []cl.RenderCommand, win_w: i32, win_h: i32) void {
         if (win_w <= 0 or win_h <= 0) return;
-        _ = c.glin_metal_resize(h, win_w, win_h);
+        // The drawable is DEVICE pixels: the vertex buffer is built at logical x render_scale, so a 2x display needs 2x the drawable.
+        const px = scale_mod.pixelSize(@intCast(win_w), @intCast(win_h), soft.renderScale());
+        _ = c.glin_metal_resize(h, @intCast(px.w), @intCast(px.h));
 
         self.verts.clearRetainingCapacity();
         self.segs.clearRetainingCapacity();

@@ -10,6 +10,7 @@
 #import <AppKit/AppKit.h>
 
 #include <stdlib.h>
+#include <string.h>
 #include "metal.h"
 
 /* One vertex. Must stay in step with the struct in `vertex_src` below and with
@@ -30,6 +31,10 @@ struct GlinMetal {
     id<MTLCommandQueue> queue;
     id<MTLRenderPipelineState> pipeline;
     id<MTLTexture> atlas;
+    /* A real buffer, grown on demand. setVertexBytes is capped at 4 KB by Metal
+     * and aborts above it, which a real screen passes easily. */
+    id<MTLBuffer> vbuf;
+    NSUInteger vbuf_bytes;
     CAMetalLayer *layer;
     NSView *view;
     int width;
@@ -172,6 +177,9 @@ GlinMetal *glin_metal_create(void *nsview) {
         // A SUBLAYER, not view.layer: replacing the view's own layer stops AppKit
         // calling drawRect:, which is what drives the frame loop.
         view.wantsLayer = YES;
+        // Layer-backed views default to redrawing only on resize, so setNeedsDisplay
+        // would produce exactly one frame and then silence.
+        view.layerContentsRedrawPolicy = 1; /* NSViewLayerContentsRedrawPolicyOnSetNeedsDisplay */
         m->view = view;
         layer.frame = view.bounds;
         layer.contentsScale = view.window.backingScaleFactor;
@@ -192,6 +200,7 @@ void glin_metal_destroy(GlinMetal *m) {
     }
     m->pipeline = nil;
     m->atlas = nil;
+    m->vbuf = nil;
     [m->layer removeFromSuperlayer];
     m->layer = nil;
     m->view = nil;
@@ -237,6 +246,16 @@ void glin_metal_set_atlas(GlinMetal *m, const unsigned char *bytes, int w, int h
 }
 
 /* Shared by the on-screen and offscreen paths so the two cannot drift. */
+static id<MTLBuffer> ensure_vbuf(GlinMetal *m, NSUInteger bytes) {
+    if (m->vbuf != nil && m->vbuf_bytes >= bytes) {
+        return m->vbuf;
+    }
+    NSUInteger cap = bytes < 65536 ? 65536 : bytes;
+    m->vbuf = [m->device newBufferWithLength:cap options:MTLResourceStorageModeShared];
+    m->vbuf_bytes = (m->vbuf != nil) ? cap : 0;
+    return m->vbuf;
+}
+
 static void encode_segments(GlinMetal *m, id<MTLRenderCommandEncoder> enc, const void *verts,
                             int total_verts, const GlinSegment *segs, int seg_count) {
     if (m->atlas != nil) {
@@ -245,7 +264,13 @@ static void encode_segments(GlinMetal *m, id<MTLRenderCommandEncoder> enc, const
     if (verts == NULL || segs == NULL || seg_count <= 0) {
         return;
     }
-    [enc setVertexBytes:verts length:(NSUInteger)total_verts * sizeof(GlinVertex) atIndex:0];
+    NSUInteger vbytes = (NSUInteger)total_verts * sizeof(GlinVertex);
+    id<MTLBuffer> vbuf = ensure_vbuf(m, vbytes);
+    if (vbuf == nil) {
+        return;
+    }
+    memcpy(vbuf.contents, verts, vbytes);
+    [enc setVertexBuffer:vbuf offset:0 atIndex:0];
     float res[2] = { (float)m->width, (float)m->height };
     [enc setVertexBytes:res length:sizeof(res) atIndex:1];
 
