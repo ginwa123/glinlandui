@@ -265,14 +265,20 @@ test "the same run on the same sub-pixel phase paints identical coverage" {
 }
 
 test "a label sits inside the pill the layout drew around it" {
-    // A button's content box starts at y = 166.4 and is 16.8 tall: no glyph row may land on the border above or below it.
-    if (requireFace() == null) return error.SkipZigTest;
+    // A button's content box starts at y = 166.4 and is one line tall: the run's ink has to end inside its bottom edge.
+    const face = requireFace() orelse return error.SkipZigTest;
     const box_h = text_face.lineHeight(13);
-    const bmp = rasterizeRun(std.testing.allocator, "Run query", 13, 36.4, 166.4, box_h) orelse return error.SkipZigTest;
+    const origin_y: f32 = 166.4;
+    const bmp = rasterizeRun(std.testing.allocator, "Run query", 13, 36.4, origin_y, box_h) orelse return error.SkipZigTest;
     defer bmp.deinit(std.testing.allocator);
-    const bottom = inkBottom(bmp) orelse return error.SkipZigTest;
-    try std.testing.expect(firstInkRow(bmp) != null);
-    try std.testing.expect(@as(f32, @floatFromInt(bottom)) <= box_h);
+    // The bitmap hangs off `floor(origin_y)`, so its rows only mean something back on the pixel grid the blit draws them on.
+    const grid = @floor(origin_y);
+    const top = grid + @as(f32, @floatFromInt(firstInkRow(bmp) orelse return error.SkipZigTest));
+    const bottom = grid + @as(f32, @floatFromInt(inkBottom(bmp) orelse return error.SkipZigTest));
+    try std.testing.expect(bottom <= @ceil(origin_y + box_h));
+    // Ink shorter than the cap box means the bitmap clipped a glyph instead of laying it out inside the box.
+    const cap = glyphs.capBox(face, 13) orelse return error.SkipZigTest;
+    try std.testing.expect(bottom - top >= cap.height);
 }
 
 test "a space advances the pen without inking it" {
