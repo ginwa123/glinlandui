@@ -17,6 +17,13 @@ const text_face = @import("text_face.zig");
 /// App declare callback: builds the Clay tree for a w x h window.
 pub const RootFn = *const fn (?*anyopaque, u32, u32) void;
 
+/// The devtool service, if the app hosts one: the frame loop fires a waiting request before the app declares, and serialises its reply once the tree is resolved.
+pub const ServiceHooks = struct {
+    ptr: *anyopaque,
+    begin: *const fn (ptr: *anyopaque, host: *Host) void,
+    end: *const fn (ptr: *anyopaque, host: *Host, w: u32, h: u32) void,
+};
+
 pub const Host = struct {
     alloc: std.mem.Allocator,
     renderer: ?render.Renderer = null,
@@ -44,6 +51,8 @@ pub const Host = struct {
     root_fn: RootFn,
     /// The devtool. Non-null turns the app into one that answers a right click with its own component tree; the app's own code is untouched.
     inspect: ?*inspector_mod.Inspector = null,
+    /// The devtool service. Non-null means a client may be waiting on this frame, so the loop fires its request before declaring and answers after resolving.
+    service: ?ServiceHooks = null,
 
     pub fn init(alloc: std.mem.Allocator, ctx: ?*anyopaque, root_fn: RootFn) !Host {
         var self = Host{ .alloc = alloc, .root_ctx = ctx, .root_fn = root_fn };
@@ -68,6 +77,8 @@ pub const Host = struct {
 
     /// The per-frame declare phase: reset the per-frame registries, then run the app's root callback.
     pub fn declareFrame(self: *Host, w: u32, h: u32) void {
+        // A devtool client is waiting: fire its action BEFORE the registries are cleared, so it lands in the targets the last frame declared.
+        if (self.service) |svc| svc.begin(svc.ptr, self);
         // Fresh registries per frame (components self-register during declare; stale boxes must never ghost-fire).
         registry.beginFrame();
         scroll_mod.beginScrollFrame();
@@ -114,8 +125,8 @@ pub const Host = struct {
         // clayFrame resolves the cursor shape AFTER endLayout into frame_mod.currentShape() (it also returns it; void here keeps Delegate.on_frame and all.
         var effective: frame_mod.FrameOptions = if (options) |opts| opts.* else .{};
         // A devtool reads the resolved tree, so attaching one turns the resolve on: the app never has to know its frames are being watched.
-        if (self.inspect != null) effective.resolve_semantics = true;
-        return frame_mod.clayFrameWithOptions(
+        if (self.inspect != null or self.service != null) effective.resolve_semantics = true;
+        const shape = frame_mod.clayFrameWithOptions(
             self.alloc,
             &self.renderer,
             &self.renderer_attempted,
@@ -130,6 +141,9 @@ pub const Host = struct {
             self,
             &effective,
         );
+        // The tree is resolved now, so a waiting client can be answered from this frame rather than the last one.
+        if (self.service) |svc| svc.end(svc.ptr, self, w, h);
+        return shape;
     }
 
     pub fn onPointerEvent(self: *Host, x: f32, y: f32, pressed: bool, button: u32) void {

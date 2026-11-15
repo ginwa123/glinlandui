@@ -4,6 +4,7 @@ const cl = @import("zclay");
 const host_mod = @import("../host.zig");
 const testing = @import("../testing/root.zig");
 const finders = @import("../testing/finders.zig");
+const dispatch = @import("../components/dispatch.zig");
 const snapshot_mod = @import("snapshot.zig");
 
 // How many `--do` actions one run takes, in order.
@@ -102,7 +103,7 @@ pub fn parse(args: []const []const u8) Options {
 }
 
 // `kind:TAG` or `kind:TAG:ARGS` — the tag is the one the tree prints, so a value the tree showed is a value this accepts.
-fn parseAction(value: []const u8) ?Action {
+pub fn parseAction(value: []const u8) ?Action {
     const first = std.mem.indexOfScalar(u8, value, ':') orelse value.len;
     const kind_text = value[0..first];
     const rest = if (first < value.len) value[first + 1 ..] else "";
@@ -137,7 +138,7 @@ fn number(comptime T: type, a: []const u8, flag: []const u8, args: []const []con
 }
 
 // `X,Y`, the point a `@x,y` target names and the delta a drag or a scroll takes.
-fn parsePoint(text: []const u8) ?cl.Vector2 {
+pub fn parsePoint(text: []const u8) ?cl.Vector2 {
     const comma = std.mem.indexOfScalar(u8, text, ',') orelse return null;
     const x = std.fmt.parseFloat(f32, text[0..comma]) catch return null;
     const y = std.fmt.parseFloat(f32, text[comma + 1 ..]) catch return null;
@@ -188,47 +189,68 @@ pub fn run(
     }
 }
 
-// One action, through the same pointer path a real click takes: nothing is faked, the app's own handlers run.
+// Where an action's target is: a tag resolved to the node's VISIBLE centre, so a clipped row is hit where it shows, or `@x,y` as-is.
+pub fn targetOf(action: Action) !cl.Vector2 {
+    if (std.mem.startsWith(u8, action.target, "@")) return parsePoint(action.target[1..]) orelse error.BadPoint;
+    return (try finders.findSole(.{ .tag = action.target })).visibleCenter();
+}
+
+// The instant half of an action, through the app's own pointer and key path: nothing is faked, the app's handlers run. The caller runs the frame that shows it.
+pub fn performOn(host: *host_mod.Host, action: Action, at: cl.Vector2) !void {
+    switch (action.kind) {
+        .click => {
+            host.onPointerEvent(at.x, at.y, true, dispatch.BTN_LEFT);
+            host.onPointerEvent(at.x, at.y, false, dispatch.BTN_LEFT);
+        },
+        .press => host.onPointerEvent(at.x, at.y, true, dispatch.BTN_LEFT),
+        .release => host.onPointerEvent(at.x, at.y, false, dispatch.BTN_LEFT),
+        .move => host.onPointerEvent(at.x, at.y, false, 0),
+        .scroll => {
+            const d = parsePoint(action.args) orelse return error.BadDelta;
+            host.onPointerEvent(at.x, at.y, false, 0);
+            host.onScrollEvent(d.x, d.y);
+        },
+        .drag => {
+            const d = parsePoint(action.args) orelse return error.BadDelta;
+            host.onPointerEvent(at.x, at.y, true, dispatch.BTN_LEFT);
+            host.onPointerEvent(at.x + d.x, at.y + d.y, false, 0);
+            host.onPointerEvent(at.x + d.x, at.y + d.y, false, dispatch.BTN_LEFT);
+        },
+        .type_text => {
+            // Focus first: typing goes to the focused field, exactly as a user's caret does.
+            host.onPointerEvent(at.x, at.y, true, dispatch.BTN_LEFT);
+            host.onPointerEvent(at.x, at.y, false, dispatch.BTN_LEFT);
+            for (action.args) |byte| {
+                const k = testing.keyForAscii(byte) orelse return error.UnsupportedCharacter;
+                if (k.shift) _ = host.onKeyEvent(testing.key_shift, true);
+                _ = host.onKeyEvent(k.code, true);
+                _ = host.onKeyEvent(k.code, false);
+                if (k.shift) _ = host.onKeyEvent(testing.key_shift, false);
+            }
+        },
+        // The two kinds the callers own: a key needs no point, and a hold spans frames.
+        .key, .longpress => unreachable,
+    }
+}
+
+// One action for the headless run: resolve, fire, and run the frame that shows the result.
 fn perform(driver: *testing.Driver, action: Action) !void {
     if (action.kind == .key) {
         const code = std.fmt.parseInt(u32, action.target, 10) catch return error.BadKeyCode;
         _ = try driver.key(code);
         return;
     }
-    // A tag resolves to the node's VISIBLE centre, so a clipped row is hit where it shows; `@x,y` is taken as-is.
-    const at: cl.Vector2 = if (std.mem.startsWith(u8, action.target, "@"))
-        parsePoint(action.target[1..]) orelse return error.BadPoint
-    else
-        (try finders.findSole(.{ .tag = action.target })).visibleCenter();
-
-    switch (action.kind) {
-        .click => driver.clickAt(at.x, at.y),
-        .longpress => {
-            driver.pressAt(at.x, at.y);
-            // Held across frames: that is what a long press looks like to the app, and what a press-and-hold reacts to.
-            var i: usize = 0;
-            while (i < long_press_frames) : (i += 1) driver.frame();
-            driver.releaseAt(at.x, at.y);
-        },
-        .press => driver.pressAt(at.x, at.y),
-        .release => driver.releaseAt(at.x, at.y),
-        .move => driver.move(at.x, at.y),
-        .scroll => {
-            const d = parsePoint(action.args) orelse return error.BadDelta;
-            driver.move(at.x, at.y);
-            driver.scroll(d.x, d.y);
-        },
-        .drag => {
-            const d = parsePoint(action.args) orelse return error.BadDelta;
-            driver.drag(at.x, at.y, at.x + d.x, at.y + d.y);
-        },
-        .type_text => {
-            // Focus first: typing goes to the focused field, exactly as a user's caret does.
-            driver.clickAt(at.x, at.y);
-            try driver.typeText(action.args);
-        },
-        .key => unreachable,
+    // The service keeps a press down across frames; here the driver can simply run them.
+    const at = try targetOf(action);
+    if (action.kind == .longpress) {
+        driver.pressAt(at.x, at.y);
+        var i: usize = 0;
+        while (i < long_press_frames) : (i += 1) driver.frame();
+        driver.releaseAt(at.x, at.y);
+        return;
     }
+    try performOn(driver.host, action, at);
+    driver.frame();
 }
 
 pub const usage =

@@ -547,16 +547,16 @@ fn scrollAncestor(n: semantics.Node) ?semantics.Node {
 pub const RootFn = host_mod.RootFn;
 
 // evdev KEY_LEFTSHIFT, the modifier the keycode route has to hold for an uppercase or shifted byte.
-const key_shift: u32 = 42;
+pub const key_shift: u32 = 42;
 
 // The key a printable ASCII byte is typed with, and whether Shift is part of the gesture.
 
 // The table is the US layout the toolkit's `input.keyChar` decodes, so a byte typed here reads back as the same byte there.
 
 // Letters are NOT contiguous in evdev (q..p is 16..25, a..l is 30..38, z..m is 44..50), which is the mistake a `byte - 'a' + 16` shortcut makes.
-const KeyStroke = struct { code: u32, shift: bool };
+pub const KeyStroke = struct { code: u32, shift: bool };
 
-fn keyForAscii(byte: u8) ?KeyStroke {
+pub fn keyForAscii(byte: u8) ?KeyStroke {
     const lower = "qwertyuiopasdfghjklzxcvbnm";
     const letter_codes = [_]u32{ 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 30, 31, 32, 33, 34, 35, 36, 37, 38, 44, 45, 46, 47, 48, 49, 50 };
     for (lower, 0..) |c, i| {
