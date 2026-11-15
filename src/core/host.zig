@@ -13,6 +13,7 @@ const cl = @import("zclay");
 const scroll_mod = @import("components/scroll.zig");
 const input_mod = @import("components/input.zig");
 const context_menu = @import("components/context_menu.zig");
+const reorder_mod = @import("components/reorder.zig");
 const semantics = @import("semantics.zig");
 const inspector_mod = @import("devtools/inspector.zig");
 const glyphs = @import("glyphs.zig");
@@ -88,6 +89,7 @@ pub const Host = struct {
         // Fresh registries per frame (components self-register during declare; stale boxes must never ghost-fire).
         registry.beginFrame();
         context_menu.beginFrame();
+        reorder_mod.beginFrame();
         scroll_mod.beginScrollFrame();
         input_mod.beginFrame();
         image_widgets.beginFrame();
@@ -169,6 +171,10 @@ pub const Host = struct {
         }
         // A left press belongs to an open card: inside it a row answers on release, outside it dismisses and goes no further.
         if (button == dispatch.BTN_LEFT and pressed and context_menu.leftPress(x, y)) return;
+        // A drag-to-reorder starts on a press over a draggable row, and reports on the release.
+        if (button == dispatch.BTN_LEFT) {
+            if (pressed) reorder_mod.press(x, y) else _ = reorder_mod.release(x, y);
+        }
         // The picker follows the pointer between frames, so the outline is under the cursor before the click lands.
         if (self.inspect) |dev| dev.onPointerMove(x, y);
         const last_x = self.ptr.x;
@@ -186,6 +192,7 @@ pub const Host = struct {
         // Slider-style drag: while a press-drag is in flight, nudge the scroll container under the pointer 1:1 (pointer down = scroll down).
         if (self.ptr.down and self.ptr.dragging and (x != last_x or y != last_y)) {
             scroll_mod.dragScroll(x, y, x - last_x, y - last_y);
+            reorder_mod.move(x, y);
         }
     }
 
@@ -203,6 +210,8 @@ pub const Host = struct {
             context_menu.close();
             return false;
         }
+        // Escape also abandons a drag, so a row picked up by mistake lands back where it was.
+        if (pressed and keycode == key_escape) reorder_mod.cancel();
         // Escape closes the devtool while it is up, and is never read as the app's close intent.
         if (self.inspect) |dev| {
             if (dev.onKey(keycode)) return false;

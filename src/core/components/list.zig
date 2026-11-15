@@ -5,6 +5,10 @@ const headless = @import("../testing/headless.zig");
 const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
+const reorder_mod = @import("reorder.zig");
+
+/// Drag-to-reorder: what a list hands in to make its rows draggable. Null (the default) = not draggable.
+pub const Reorder = reorder_mod.Reorder;
 const semantics = @import("../semantics.zig");
 
 /// Selection callback: plain fn pointer + opaque ctx (no closures).
@@ -65,6 +69,8 @@ pub const ListProps = struct {
     clicks: ?[]const RowClick = null,
     /// Dispatch priority for this list's rows: highest-z containing match wins regardless of declare order (overlay dropdowns float above in-flow rows).
     click_z: i16 = 0,
+    /// Drag to reorder. Null (the default) leaves the rows static; a spec with `on_move` makes them draggable.
+    reorder: ?Reorder = null,
 };
 
 fn rowHeight(props: ListProps) f32 {
@@ -174,10 +180,13 @@ fn listVertical(
             const base_bg: Color = if (props.disabled) props.disabled_bg else if (is_sel) props.selected_bg else props.row_bg;
             // Registered BEFORE the row: a later entry wins the hit test, so a button declared inside the row beats the row.
             registerCell(props, i);
+            // A draggable row offers itself to the reorder module, which owns the press/move/release dance.
+            const row_id = rowId(props.id.str(), i);
+            if (props.reorder) |spec| reorder_mod.register(props.id.str(), row_id, i, spec);
             // NOTE: cl.hovered() must be evaluated INSIDE this row's UI() config literal (while the row element is open) so it queries this row — calling it.
             cl.UI()(.{
                 // +1: CLAY_ID(base) == CLAY_IDI(base, 0) — row i takes IDI(base, i + 1) so row 0 never collides with the container .ID(props.id) above.
-                .id = .IDI(props.id.str(), @as(u32, @intCast(i + 1))),
+                .id = row_id,
                 .layout = .{
                     .direction = .left_to_right,
                     .sizing = .{ .w = .grow, .h = .fixed(rowHeight(props)) },
@@ -195,6 +204,8 @@ fn listVertical(
                 renderItem(item_ctx, item, i);
             });
         }
+        // Last, so it paints over the rows it separates: the line where the dragged row would land.
+        reorder_mod.declareLine(props.id.str());
     });
 }
 

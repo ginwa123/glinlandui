@@ -115,6 +115,7 @@ pub const components = struct {
     pub const input = @import("core/components/input.zig");
     pub const list = @import("core/components/list.zig");
     pub const radio = @import("core/components/radio.zig");
+    pub const reorder = @import("core/components/reorder.zig");
     pub const scroll = @import("core/components/scroll.zig");
     // A resizable, collapsible panel: the app hands it children, it owns the width and the grab line.
     pub const sidebar = @import("core/components/sidebar.zig");
