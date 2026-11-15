@@ -40,6 +40,8 @@ entries=(
   "file_dialog|portable|src/core/file_dialog_portable.zig|Kind Rule Filter Options Status Selection Error available openFile openFolder saveFile"
 
   "clipboard|mac|src/mac/clipboard.zig|max_bytes read write"
+  "clipboard|linux|src/linux/clipboard.zig|max_bytes read write"
+  "clipboard|windows|src/windows/clipboard.zig|max_bytes read write"
   "clipboard|portable|src/core/clipboard_portable.zig|max_bytes read write"
 
   "devtools|linux|src/linux/devtools_service.zig|Handle open request socketPath"

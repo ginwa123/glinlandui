@@ -265,6 +265,15 @@ typedef void (*GlinWinOnPath)(void *user, const char *path_utf8);
 int glin_win_file_dialog(const GlinWinFileRequest *request,
                         GlinWinOnPath on_path, void *user);
 
+/// The clipboard's text as UTF-8, copied into `buf` (at most `cap` bytes).
+///
+/// Returns the byte count, or 0 when the clipboard holds no text — or when another process has it open, which
+/// is normal during a cut/paste race and must read as "nothing there" rather than an error.
+int glin_win_clipboard_read(char *buf, int cap);
+
+/// Replace the clipboard's text with `len` bytes of UTF-8.
+void glin_win_clipboard_write(const char *text_utf8, int len);
+
 /// The byte order the D3D11 swap chain and the probe target are created in:
 /// straight (non-premultiplied) R,G,B,A, alpha ignored by the blend stage
 /// because the pipeline uses no blending. Exposed as a number rather than a

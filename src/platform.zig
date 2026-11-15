@@ -42,8 +42,12 @@ else switch (builtin.os.tag) {
 pub const clipboard = if (builtin.is_test)
     @import("core/clipboard_portable.zig")
 else switch (builtin.os.tag) {
+    // The pasteboard, directly.
     .macos => @import("mac/clipboard.zig"),
-    // No backend yet on the other platforms: the port still exists, so an app compiles and its paste is a no-op.
+    // Linux has no one clipboard: the backend drives the session's helper (`wl-copy`/`wl-paste`, else `xclip`, else `xsel`).
+    .linux => @import("linux/clipboard.zig"),
+    .windows => @import("windows/clipboard.zig"),
+    // No backend for anything else: the port still exists, so an app compiles and its paste is a no-op.
     else => @import("core/clipboard_portable.zig"),
 };
 

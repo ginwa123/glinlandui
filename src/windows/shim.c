@@ -1652,3 +1652,66 @@ int glin_win_file_dialog(const GlinWinFileRequest *request,
     IFileDialog_Release(dialog);
     return result;
 }
+
+// ---- Clipboard: CF_UNICODETEXT in, UTF-8 out (and back) -------------------------------------------
+//
+// Win32's clipboard is UTF-16 and, for anything bigger than a pointer, a HANDLE into global memory that the
+// window station owns. The caller's buffer is UTF-8, so this is where the conversion happens: doing it here
+// keeps the Zig side a two-line port and means a truncated read costs nothing (there is no allocation at all
+// on the read path).
+//
+// `OpenClipboard(NULL)` fails when another process has the clipboard open. That is a normal, transient state
+// during a copy, so it reads as "no text" instead of an error the app would have to explain to a user.
+
+int glin_win_clipboard_read(char *buf, int cap) {
+    if (!buf || cap <= 0) return 0;
+    if (!OpenClipboard(NULL)) return 0;
+
+    int written = 0;
+    HANDLE handle = GetClipboardData(CF_UNICODETEXT);
+    if (handle) {
+        const wchar_t *text = (const wchar_t *)GlobalLock(handle);
+        if (text) {
+            // Bound the conversion by the caller's buffer in UTF-16 units: a unit is never more than 3 UTF-8
+            // bytes for BMP text and a surrogate pair is 2 units for 4 bytes, so `units <= cap` always fits.
+            int units = 0;
+            while (text[units] != 0 && units < cap) units++;
+            if (units > 0) {
+                const int got = WideCharToMultiByte(CP_UTF8, 0, text, units, buf, cap, NULL, NULL);
+                if (got > 0) written = got;
+            }
+            GlobalUnlock(handle);
+        }
+    }
+    CloseClipboard();
+    return written;
+}
+
+void glin_win_clipboard_write(const char *text_utf8, int len) {
+    if (!text_utf8 || len < 0) return;
+
+    // Two-pass: ask how many UTF-16 units the text needs, then convert into one global block that the
+    // clipboard takes ownership of. `+ 1` is the terminator Win32 requires.
+    const int units = MultiByteToWideChar(CP_UTF8, 0, text_utf8, len, NULL, 0);
+    if (units <= 0) return;
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, ((SIZE_T)units + 1) * sizeof(wchar_t));
+    if (!mem) return;
+    wchar_t *dst = (wchar_t *)GlobalLock(mem);
+    if (!dst) {
+        GlobalFree(mem);
+        return;
+    }
+    MultiByteToWideChar(CP_UTF8, 0, text_utf8, len, dst, units);
+    dst[units] = 0;
+    GlobalUnlock(mem);
+
+    if (!OpenClipboard(NULL)) {
+        GlobalFree(mem);
+        return;
+    }
+    EmptyClipboard();
+    // On success the system owns `mem`; freeing it here would corrupt the clipboard.
+    if (!SetClipboardData(CF_UNICODETEXT, mem)) GlobalFree(mem);
+    CloseClipboard();
+}
+

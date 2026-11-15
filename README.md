@@ -524,15 +524,27 @@ than leaked.
 
 - **macOS** (`mac/clipboard.zig`) uses `NSPasteboard` through the shim, so it is
   the same pasteboard every other app on the machine reads and writes.
-- **Linux, Windows and the browser** (`core/clipboard_portable.zig`) are a
-  no-op: `read` returns empty and `write` drops the text. The port exists on
-  every target so a caller compiles everywhere; a UI that cares can gate on
-  `clipboard.max_bytes` or on the read coming back empty.
+- **Windows** (`windows/clipboard.zig`) uses the Win32 clipboard
+  (`CF_UNICODETEXT`) through the shim, which is also where the UTF-16 conversion
+  happens — the Zig side stays UTF-8, and a read costs no allocation.
+- **Linux** (`linux/clipboard.zig`) has no single clipboard: Wayland owns the
+  selection through a data device and X11 through its own. The backend runs the
+  session's helper — `wl-copy`/`wl-paste` when `WAYLAND_DISPLAY` is set, else
+  `xclip`, else `xsel` — and which one to run is decided by
+  `linux/clipboard_model.zig`, which is pure and therefore tested on every OS.
+  A session with none of them installed reads as empty and drops writes.
+- **Anywhere else** (`core/clipboard_portable.zig`) is a no-op: `read` returns
+  empty and `write` drops the text. The port exists on every target so a caller
+  compiles everywhere.
 
-The library does **not** bind Cmd+C to copy, because a text field is the app's
-model, not the library's: `text_editor.copySelection`, `cutSelection` and
-`paste` are the edits, and the app decides which keystroke calls them. See
-`Text arrives two ways` in `src/core/components/README.md` for the typing half.
+`core/clipboard_contract.zig` holds the one ceiling and the two rules every
+backend follows — `cap` and `trim` — so the numbers cannot drift per platform.
+
+A declared `input.Field` already binds Ctrl/Cmd+C, +X and +V for you, through
+the pasteboard above. What stays the app's is what "copy" *means*: an app that
+draws its own editor calls `text_editor.copySelection`, `cutSelection` and
+`paste` itself and hands them this clipboard. See `Text arrives two ways` in
+`src/core/components/README.md` for the typing half.
 
 ## Architecture
 
@@ -1183,8 +1195,9 @@ Honest list; each is a reasonable next task.
 - **List rows carry no label** — the text comes from the caller's `renderItem`
   callback, so E2E tests select rows with
   `onNodeWithIndex(.{ .role = .list_item }, i)` rather than by text.
-- **`box` registers no semantics** (they are layout containers, not targets), so
-  only `scroll` contributes clip ancestry today.
+- **`box` registers semantics as a container, or as a button when it carries
+  `on_click`**, and a container only contributes clip ancestry — so `scroll` is
+  still the only element whose clipping a click is tested against.
 - **No accessibility bridge.** The semantics tree is exactly what an AT-SPI / UIA
   backend would consume, but nothing wires it up yet.
 - **Windows has a real backend** (`src/windows/`): a Win32 window composited by
@@ -1194,6 +1207,9 @@ Honest list; each is a reasonable next task.
   have is a Direct3D *rasterizer*: the shared CPU rasterizer draws, and D3D11
   composites, exactly as CoreGraphics does on macOS. Only the Linux GLES3 path
   rasterizes on the GPU.
+- **The Linux clipboard needs a helper installed** (`wl-clipboard`, `xclip` or
+  `xsel`) until the Wayland data-device protocol is implemented in the backend
+  itself; without one, copy and paste are a no-op there and nowhere else.
 - **`core/frame.zig` owns the cursor-shape mapping**, which is a Wayland
   `cursor-shape-v1` concern living in the platform-agnostic layer.
 - **The file dialog's error set is per backend**, so the `switch (err)` that

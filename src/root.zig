@@ -162,6 +162,9 @@ test {
     _ = @import("core/file_dialog_contract.zig");
     _ = @import("core/file_dialog_portable.zig");
     _ = @import("core/clipboard_portable.zig");
+    // The rules all three clipboard backends share, and the Linux one's choice of helper — both pure, so both run here.
+    _ = @import("core/clipboard_contract.zig");
+    _ = @import("linux/clipboard_model.zig");
     // The scriptable dialog a consumer's test installs.
     _ = @import("core/file_dialog_fake.zig");
     // The Color type every color-bearing prop uses.
