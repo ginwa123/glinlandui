@@ -794,7 +794,9 @@ pub const Window = struct {
                 .{ .fd = self.wake_fd orelse -1, .events = std.posix.POLL.IN, .revents = 0 },
             };
             const watched = if (self.wake_fd != null) fds[0..2] else fds[0..1];
-            const ready = std.posix.poll(watched, -1) catch 0;
+            // The frame-capped test mode gets a bounded wait, so a compositor that stops sending frame callbacks fails a job instead of wedging it.
+            const timeout_ms: i32 = if (max_frames != null) 100 else -1;
+            const ready = std.posix.poll(watched, timeout_ms) catch 0;
             if (ready > 0 and fds[1].revents != 0) {
                 // Drain the pipe: one byte per request, and the frame below is the one that answers it.
                 var drain: [64]u8 = undefined;

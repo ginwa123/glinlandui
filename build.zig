@@ -440,8 +440,11 @@ pub fn build(b: *std.Build) void {
             }),
         });
         b.installArtifact(inspect);
-        const build_inspect_step = b.step("build-dp", "Compile glinlanduidp, the devtool (installed by a plain `zig build`)");
-        build_inspect_step.dependOn(&inspect.step);
+        // `zig build build-dp` installs just the client, so a CI step can run it without building the apps it never touches.
+        const build_dp_step = b.step("build-dp", "Compile and install glinlanduidp (a plain `zig build` does this too)");
+        build_dp_step.dependOn(&b.addInstallArtifact(dp, .{}).step);
+        const build_replay_step = b.step("build-replay", "Compile and install glinlandui-replay, the headless runner");
+        build_replay_step.dependOn(&b.addInstallArtifact(inspect, .{}).step);
 
         // `zig build inspect -- --app=todo --json`: the same tree the in-app inspector draws, on stdout, for a script or an agent.
         const run_inspect = b.addRunArtifact(inspect);

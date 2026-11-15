@@ -79,10 +79,31 @@ jobs:
           test -f /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf
 
       - name: Check formatting
-        run: zig fmt --check build.zig src examples
+        run: zig fmt --check build.zig src examples tools
+
+      # The two rules in AGENTS.md that nothing used to gate: one line per comment
+      # block, and no .zig file over 3000 lines.
+      - name: Lint (zginlint) and the 3000-line size cap
+        run: |
+          zig build zginlint:check
+          zig build lines:check
 
       - name: Cross-platform parity test suite (count checked against tests.lock)
         run: ./ci/check_test_parity.sh
+
+      # The debug process: its own tests, then the one behaviour that needs no
+      # compositor — a socket file nobody owns must read as "nothing serving",
+      # not as a panic. That regression is why it connects by hand.
+      - name: Devtool client (glinlanduidp)
+        run: |
+          set -euo pipefail
+          zig build build-dp
+          zig build test-dp --summary all
+          ./zig-out/bin/glinlanduidp --help | head -n1 | grep -q 'glinlanduidp'
+          runtime="${XDG_RUNTIME_DIR:-/tmp}"
+          # A real socket file with nobody listening: the case a killed app leaves behind.
+          python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.close()' "$runtime/glinlandui-demo.sock"
+          test -z "$(./zig-out/bin/glinlanduidp devices)"
 
       # native-test is the Linux-only Wayland/EGL/GLES3/Pango superset. The
       # calculator example's tests are NOT here: they are portable, so they
@@ -115,7 +136,7 @@ jobs:
           version: 0.16.0
 
       - name: Check formatting
-        run: zig fmt --check build.zig src examples
+        run: zig fmt --check build.zig src examples tools
 
       - name: Cross-platform parity test suite (count checked against tests.lock)
         run: ./ci/check_test_parity.sh
@@ -238,7 +259,7 @@ jobs:
           fi
 
       - name: Check formatting
-        run: zig fmt --check build.zig src examples
+        run: zig fmt --check build.zig src examples tools
 
       - name: Layering rules (core / linux / mac / windows)
         run: ./ci/check_layering.sh
@@ -368,7 +389,7 @@ jobs:
           version: 0.16.0
 
       - name: Check formatting (includes examples/)
-        run: zig fmt --check build.zig src examples
+        run: zig fmt --check build.zig src examples tools
 
       # The example links the real native stack, exactly like the main demo.
       - name: Install native Linux dependencies
@@ -539,7 +560,7 @@ jobs:
           version: 0.16.0
 
       - name: Check formatting (includes examples/)
-        run: zig fmt --check build.zig src examples
+        run: zig fmt --check build.zig src examples tools
 
       # Same native dependency set as every other desktop leg. The example
       # links the real stack — it is a real window — so it needs it.
@@ -739,7 +760,7 @@ jobs:
           node-version: "20"
 
       - name: Check formatting
-        run: zig fmt --check build.zig src examples
+        run: zig fmt --check build.zig src examples tools
 
       # No `apt-get` step, deliberately. The wasm build is the one artifact in
       # this repository that needs no system library — no Wayland, no EGL, no
@@ -860,7 +881,7 @@ jobs:
           echo "C_INCLUDE_PATH=/usr/lib/$(gcc -print-multiarch)/glib-2.0/include" >> "$GITHUB_ENV"
 
       - name: Check formatting (includes examples/)
-        run: zig fmt --check build.zig src examples
+        run: zig fmt --check build.zig src examples tools
 
       # `test-lazy-scroll` is the example's own suite and nothing else: the
       # parity step would also work, but it runs the whole toolkit and this job
