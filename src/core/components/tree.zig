@@ -59,7 +59,7 @@ fn innerId(base: []const u8, i: usize, slot: u32) cl.ElementId {
 
 /// Declare a tree: one clickable row per entry, indented by `depth`.
 pub fn tree(props: TreeProps) void {
-    semantics.register(.{
+    semantics.registerAt(@src(), .{
         .id = props.id.clay(),
         .tag = props.id.str(),
         .role = .list,
@@ -132,7 +132,7 @@ fn rowUi(props: TreeProps, row: Row, i: usize) void {
         }
     });
 
-    semantics.register(.{
+    semantics.registerAt(@src(), .{
         .id = rowId(props.id.str(), i),
         .role = .list_item,
         .flags = .{ .enabled = true, .selected = row.selected },

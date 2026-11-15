@@ -56,7 +56,7 @@ pub fn toggle(props: ToggleProps) void {
         })({});
     });
     // Semantics: `.on` is the toggle's checked state.
-    semantics.register(.{
+    semantics.registerAt(@src(), .{
         .id = props.id.clay(),
         .tag = props.id.str(),
         .role = .toggle,

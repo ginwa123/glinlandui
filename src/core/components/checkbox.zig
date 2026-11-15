@@ -62,7 +62,7 @@ pub fn checkbox(props: CheckboxProps) void {
         }
     });
     // Semantics: `checked` is the state a test asserts on, and the node is registered even when disabled so `assertIsDisabled` can find it.
-    semantics.register(.{
+    semantics.registerAt(@src(), .{
         .id = props.id.clay(),
         .tag = props.id.str(),
         .role = .checkbox,

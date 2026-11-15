@@ -59,7 +59,7 @@ pub fn radio(props: RadioProps) void {
         }
     });
     // Semantics: radios report SELECTED, not checked.
-    semantics.register(.{
+    semantics.registerAt(@src(), .{
         .id = props.id.clay(),
         .tag = props.id.str(),
         .role = .radio,

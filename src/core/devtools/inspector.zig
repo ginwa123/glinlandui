@@ -54,6 +54,13 @@ pub const Inspector = struct {
         return @max(160, h - 24);
     }
 
+    // What the overlay outlines: the picker's node while it is armed, else the selected row — and nothing at all unless the window is open.
+    pub fn outlinedNode(self: *const Inspector) ?usize {
+        if (self.picking) return self.hover_index;
+        if (!self.open) return null;
+        return self.selected;
+    }
+
     // A commit to memory: nothing is open, so the overlay draws nothing at all.
     pub fn isIdle(self: *const Inspector) bool {
         return self.menu == null and !self.open and !self.picking;
@@ -167,9 +174,7 @@ pub const Inspector = struct {
             }
         }
         self.flatten();
-        // The outline: the picker's node, else the menu's, else the row that is selected — so a row click lights up its component in the app.
-        const outlined: ?usize = if (self.picking) self.hover_index else if (self.menu != null) self.picked else if (self.open) self.selected else null;
-        if (outlined) |i| self.declareOutline(i);
+        if (self.outlinedNode()) |i| self.declareOutline(i);
         if (self.menu) |m| self.declareMenu(m);
         if (self.open) self.declarePanel();
         if (self.picking) self.declarePickCatcher();
@@ -417,6 +422,7 @@ pub const Inspector = struct {
             .corner_radius = .{ .bottom_left = 10, .bottom_right = 10 },
             .border = .{ .color = divider.toClay(), .width = .{ .top = 1 } },
         })({
+            const selected_index = self.selected orelse 0;
             const item = if (self.selected) |i| self.snapshot.items[i] else null;
             if (item) |it| {
                 cl.text(frame.formatText("{s}  ({s})", .{ if (it.tag.len > 0) it.tag else "(unnamed)", @tagName(it.role) }), .{ .font_size = 12, .color = fg.toClay() });
@@ -432,19 +438,52 @@ pub const Inspector = struct {
                     snapshot_mod.actionList(it.actions, &action_buf),
                     snapshot_mod.flagList(it.flags, &flag_buf),
                 }), .{ .font_size = 11, .color = dim.toClay() });
+                // Where the code that declared this node lives, which is the first thing to read after its name.
+                if (it.source.len > 0) {
+                    cl.text(it.source, .{ .font_size = 11, .color = accent.toClay() });
+                }
                 if (it.label.len > 0) {
                     cl.text(frame.formatText("\"{s}\"", .{it.label}), .{ .font_size = 11, .color = accent.toClay() });
                 }
+                // Its path from the root, so the selection has a place in the app and not only a parent.
+                const path = self.ancestryText(selected_index);
+                if (path.len > 0) cl.text(path, .{ .font_size = 10, .color = dim.toClay() });
             } else {
                 cl.text("Right-click the app, then Inspect element.", .{ .font_size = 11, .color = dim.toClay() });
             }
         });
     }
 
+    // The selected node's nearest ancestors, as one line: where the row sits, without a path too long to draw.
+    fn ancestryText(self: *const Inspector, index: usize) []const u8 {
+        if (index >= self.snapshot.count) return "";
+        const buf = frame.claimText(240);
+        if (buf.len == 0) return "";
+        var w = std.Io.Writer.fixed(buf);
+        var chain: [16]usize = undefined;
+        var n: usize = 0;
+        var p = self.snapshot.items[index].parent;
+        while (p >= 0 and n < chain.len) : (p = self.snapshot.items[@intCast(p)].parent) {
+            chain[n] = @intCast(p);
+            n += 1;
+        }
+        // The three nearest parents, outermost first: the deepest are what identify the row, the root is implied.
+        const shown = @min(n, 3);
+        if (n > shown) w.writeAll("... > ") catch return w.buffered();
+        var i = shown;
+        while (i > 0) {
+            i -= 1;
+            const ancestor = self.snapshot.items[chain[i]];
+            w.writeAll(if (ancestor.tag.len > 0) ancestor.tag else "(unnamed)") catch return w.buffered();
+            if (i > 0) w.writeAll(" > ") catch return w.buffered();
+        }
+        return w.buffered();
+    }
+
     // ---- ids, colours, constants ----
 
     const row_h: f32 = 21;
-    const detail_h: f32 = 92;
+    const detail_h: f32 = 124;
     const badge_h: f32 = 18;
     // Render z of the overlay: above any app float, which keeps the panel on top of popovers and dropdowns.
     const panel_z: i16 = 4000;
@@ -553,6 +592,8 @@ fn onMenuInspect(ctx: ?*anyopaque, _: usize) void {
 fn onClose(ctx: ?*anyopaque, _: usize) void {
     const self: *Inspector = @ptrCast(@alignCast(ctx.?));
     self.open = false;
+    self.picking = false;
+    self.hover_index = null;
 }
 
 // The header's pick button: arm the picker, or stand it down when it is already armed.
@@ -582,6 +623,7 @@ fn swallow(_: ?*anyopaque, _: usize) void {}
 // ---- Tests: the whole flow, through a real Host frame ----
 
 const host_mod = @import("../host.zig");
+const frame_mod = @import("../frame.zig");
 const button_mod = @import("../components/button.zig");
 const box_mod = @import("../components/box.zig");
 const dispatch = @import("../components/dispatch.zig");
@@ -616,15 +658,47 @@ const TestApp = struct {
     }
 };
 
+// The frame probe: the ids of the rectangles one frame actually emitted, which is the only honest "is it on screen" answer.
+fn captureRects(user_data: ?*anyopaque, commands: []const cl.RenderCommand, _: u32, _: u32) void {
+    const self: *Harness = @ptrCast(@alignCast(user_data.?));
+    self.rect_len = 0;
+    for (commands) |cmd| {
+        if (cmd.command_type != .rectangle) continue;
+        if (self.rect_len >= self.rects.len) return;
+        self.rects[self.rect_len] = cmd.id;
+        self.rect_len += 1;
+    }
+}
+
 const Harness = struct {
     app: TestApp = .{},
     insp: Inspector = .{},
     host: host_mod.Host = undefined,
+    // The ids of the last frame's rectangles, so a test can distinguish "drawn" from "still in Clay's id map".
+    rects: [512]u32 = undefined,
+    rect_len: usize = 0,
 
     fn init(self: *Harness) !void {
         // page_allocator, matching every other Host test: the Clay arena is process-lifetime by design.
         self.host = try host_mod.Host.init(std.heap.page_allocator, &self.app, TestApp.root);
         self.host.inspect = &self.insp;
+    }
+
+    fn frame(self: *Harness, w: u32, h: u32) void {
+        self.rect_len = 0;
+        var options = frame_mod.FrameOptions{
+            .resolve_semantics = true,
+            .probe = captureRects,
+            .probe_user_data = @ptrCast(self),
+        };
+        _ = self.host.frameWithOptions(w, h, &options);
+    }
+
+    fn drewRect(self: *const Harness, id: cl.ElementId) bool {
+        for (self.rects[0..self.rect_len]) |drawn| {
+            if (drawn == id.id) return true;
+        }
+        return false;
     }
 
     fn rightClick(self: *Harness, x: f32, y: f32) void {
@@ -647,13 +721,13 @@ fn centreOf(id: cl.ElementId) cl.Vector2 {
 test "a right click summons the menu and never reaches the app" {
     var h = Harness{};
     try h.init();
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     // The point is over the app's own button.
     h.rightClick(20, 20);
     try std.testing.expectEqual(@as(u32, 0), h.app.clicks);
     try std.testing.expect(h.insp.menu != null);
     try std.testing.expect(!h.insp.isIdle());
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     try std.testing.expect(cl.getElementData(menuId()).found);
     // The node under the pointer was picked, so the menu can name it.
     try std.testing.expect(h.insp.picked != null);
@@ -663,16 +737,16 @@ test "a right click summons the menu and never reaches the app" {
 test "clicking the menu opens the tree window, and the window draws its rows" {
     var h = Harness{};
     try h.init();
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     h.rightClick(20, 20);
-    h.host.frame(480, 360);
+    h.frame(480, 360);
 
     const item = centreOf(menuId());
     h.click(item.x, item.y);
     try std.testing.expect(h.insp.open);
     try std.testing.expect(h.insp.menu == null);
 
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     try std.testing.expect(cl.getElementData(panelId()).found);
     try std.testing.expect(cl.getElementData(bodyId()).found);
     // The picked node's ancestors are expanded, so its row is on screen and clickable.
@@ -686,12 +760,12 @@ test "clicking the menu opens the tree window, and the window draws its rows" {
 test "escape closes the window and is not the app's close intent" {
     var h = Harness{};
     try h.init();
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     h.rightClick(20, 20);
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     const item = centreOf(menuId());
     h.click(item.x, item.y);
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     try std.testing.expect(h.insp.open);
 
     try std.testing.expect(!h.host.onKeyEvent(1, true));
@@ -703,12 +777,12 @@ test "escape closes the window and is not the app's close intent" {
 test "the app stays usable while the window is up: a click away from it reaches the button" {
     var h = Harness{};
     try h.init();
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     h.rightClick(20, 20);
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     const item = centreOf(menuId());
     h.click(item.x, item.y);
-    h.host.frame(480, 360);
+    h.frame(480, 360);
 
     // The panel is docked to the right, so the button at 0..120 x 0..40 is clear of it.
     const b = centreOf(cl.getElementId("dev.btn"));
@@ -719,9 +793,9 @@ test "the app stays usable while the window is up: a click away from it reaches 
 test "a right click on a menu that is already up just moves it" {
     var h = Harness{};
     try h.init();
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     h.rightClick(20, 20);
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     const first = h.insp.menu.?;
     h.rightClick(120, 90);
     try std.testing.expectApproxEqAbs(@as(f32, 120), h.insp.menu.?.x, 0.001);
@@ -731,12 +805,12 @@ test "a right click on a menu that is already up just moves it" {
 test "the picker outlines the node under the pointer, and a click opens the window on it" {
     var h = Harness{};
     try h.init();
-    h.host.frame(480, 360);
+    h.frame(480, 360);
 
     // Arm the picker, then walk over the button and over the container behind it: the outline follows the deepest node.
     h.insp.startPicking();
     h.host.onPointerEvent(20, 20, false, 0);
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     const over_button = cl.getElementData(outlineId()).bounding_box;
     const btn = cl.getElementData(cl.getElementId("dev.btn")).bounding_box;
     try std.testing.expectApproxEqAbs(btn.x, over_button.x, 0.5);
@@ -746,28 +820,28 @@ test "the picker outlines the node under the pointer, and a click opens the wind
     try std.testing.expectEqualStrings("dev.btn", h.insp.snapshot.items[h.insp.hover_index.?].tag);
 
     h.host.onPointerEvent(300, 300, false, 0);
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     const over_root = cl.getElementData(outlineId()).bounding_box;
     try std.testing.expectEqualStrings("dev.root", h.insp.snapshot.items[h.insp.hover_index.?].tag);
     try std.testing.expectApproxEqAbs(@as(f32, 480), over_root.width, 0.5);
 
     // Back over the button, then click: that node is taken and the window opens; the app's own button never fires.
     h.host.onPointerEvent(20, 20, false, 0);
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     h.click(20, 20);
     try std.testing.expect(h.insp.open);
     try std.testing.expect(!h.insp.picking);
     try std.testing.expectEqual(@as(u32, 0), h.app.clicks);
     try std.testing.expectEqualStrings("dev.btn", h.insp.snapshot.items[h.insp.selected.?].tag);
 
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     try std.testing.expect(cl.getElementData(panelId()).found);
 }
 
 test "escape stands the picker down before it closes anything else" {
     var h = Harness{};
     try h.init();
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     h.insp.startPicking();
     try std.testing.expect(!h.host.onKeyEvent(1, true));
     try std.testing.expect(!h.insp.picking);
@@ -778,14 +852,14 @@ test "escape stands the picker down before it closes anything else" {
 test "clicking a tree row outlines the component that row names" {
     var h = Harness{};
     try h.init();
-    h.host.frame(480, 360);
+    h.frame(480, 360);
 
     // Right-click the button and open the window on it: the row for it is selected, so the outline is already on it.
     h.rightClick(20, 20);
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     const menu_item = centreOf(menuId());
     h.click(menu_item.x, menu_item.y);
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     const btn = cl.getElementData(cl.getElementId("dev.btn")).bounding_box;
     try std.testing.expectApproxEqAbs(btn.x, cl.getElementData(outlineId()).bounding_box.x, 0.5);
     try std.testing.expectApproxEqAbs(btn.width, cl.getElementData(outlineId()).bounding_box.width, 0.5);
@@ -794,11 +868,53 @@ test "clicking a tree row outlines the component that row names" {
     const root = @as(usize, @intCast(h.insp.snapshot.roots[0]));
     const row = centreOf(rowId(@intCast(root)));
     h.click(row.x, row.y);
-    h.host.frame(480, 360);
+    h.frame(480, 360);
     try std.testing.expectEqualStrings("dev.root", h.insp.snapshot.items[h.insp.selected.?].tag);
     const outlined = cl.getElementData(outlineId()).bounding_box;
     try std.testing.expectApproxEqAbs(@as(f32, 0), outlined.x, 0.5);
     try std.testing.expectApproxEqAbs(@as(f32, 480), outlined.width, 0.5);
     // The badge names the selected node too, not only the picker's.
     try std.testing.expect(cl.getElementData(outlineBadgeId()).found);
+}
+
+test "a right click paints the menu, and no outline until the window is open" {
+    var h = Harness{};
+    try h.init();
+    h.frame(480, 360);
+
+    h.rightClick(20, 20);
+    h.frame(480, 360);
+    // The menu is up and names the node under the pointer...
+    try std.testing.expect(h.drewRect(menuId()));
+    // ...but nothing is painted over the app: the outline belongs to the window, and no window is open yet.
+    try std.testing.expect(!h.drewRect(outlineId()));
+    try std.testing.expect(!h.drewRect(outlineBadgeId()));
+    try std.testing.expect(h.insp.outlinedNode() == null);
+
+    // Opening the window is what starts the outline, and it frames the node that was inspected.
+    const menu_item = centreOf(menuId());
+    h.click(menu_item.x, menu_item.y);
+    h.frame(480, 360);
+    try std.testing.expect(h.drewRect(outlineId()));
+    const btn = cl.getElementData(cl.getElementId("dev.btn")).bounding_box;
+    try std.testing.expectApproxEqAbs(btn.width, cl.getElementData(outlineId()).bounding_box.width, 0.5);
+
+    // Closing the window takes the outline with it.
+    h.click(centreOf(closeId()).x, centreOf(closeId()).y);
+    h.frame(480, 360);
+    try std.testing.expect(!h.insp.open);
+    try std.testing.expect(!h.drewRect(outlineId()));
+}
+
+test "every node names the component that declared it" {
+    var h = Harness{};
+    try h.init();
+    h.frame(480, 360);
+
+    const snap = Snapshot.build(480, 360);
+    const btn = snap.find(cl.getElementId("dev.btn").id).?;
+    // The path Zig reports for the module the component lives in, with the line that declared the node.
+    try std.testing.expect(std.mem.startsWith(u8, btn.source, "core/components/button.zig:"));
+    const root = snap.find(cl.getElementId("dev.root").id).?;
+    try std.testing.expect(std.mem.startsWith(u8, root.source, "core/components/box.zig:"));
 }

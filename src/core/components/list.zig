@@ -105,7 +105,7 @@ pub fn list(
     const ti = @typeInfo(ItemsT);
     if (ti != .pointer or ti.pointer.size != .slice) @compileError("list: items must be a slice");
     // Semantics: the container is a list; each cell registers itself below.
-    semantics.register(.{
+    semantics.registerAt(@src(), .{
         .id = props.id.clay(),
         .tag = props.id.str(),
         .role = .list,
@@ -133,7 +133,7 @@ pub fn list(
 /// Shared click wiring for one cell/row (Stage B clicks win over the legacy on_select; disabled registers nothing so hover stays .default).
 fn registerCell(props: ListProps, i: usize) void {
     // Semantics FIRST, before the disabled early-return: a disabled row must still be discoverable so `assertIsDisabled` has something to assert on.
-    semantics.register(.{
+    semantics.registerAt(@src(), .{
         .id = rowId(props.id.str(), i),
         .role = .list_item,
         .flags = .{

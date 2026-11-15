@@ -49,7 +49,7 @@ pub fn button(p: ButtonProps) void {
         });
     });
     // Semantics: registered for EVERY button, not only the ones with a click callback.
-    semantics.register(.{
+    semantics.registerAt(@src(), .{
         .id = p.id.clay(),
         .tag = p.id.str(),
         .role = .button,

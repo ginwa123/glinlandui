@@ -57,7 +57,7 @@ pub fn box(p: BoxProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void)
         semantics.popAncestor();
     });
     // Registered AFTER the pop, so a container is never its own ancestor.
-    semantics.register(.{
+    semantics.registerAt(@src(), .{
         .id = p.id.clay(),
         .tag = p.id.str(),
         .role = .container,

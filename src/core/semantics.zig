@@ -64,6 +64,8 @@ pub const Node = struct {
     role: Role = .unknown,
     label: []const u8 = "",
     value: []const u8 = "",
+    // Where the widget that declared this node lives, as `file:line` — what the devtool shows as the component's origin.
+    source: []const u8 = "",
     actions: Actions = .{},
     flags: Flags = .{},
     z: i16 = 0,
@@ -131,6 +133,14 @@ pub fn register(node: Node) void {
     n.ancestor_len = @intCast(depth);
     nodes[count] = n;
     count += 1;
+}
+
+/// Register a node together with the source line that declared it: a component writes `registerAt(@src(), .{...})` and the devtool can then say which file and line a node came from.
+pub fn registerAt(comptime loc: std.builtin.SourceLocation, node: Node) void {
+    var n = node;
+    // Comptime formatted, so the string lives in the binary and a frame pays nothing for it.
+    n.source = std.fmt.comptimePrint("{s}:{d}", .{ loc.file, loc.line });
+    register(n);
 }
 
 /// Fill geometry for every registered node, then fold in clickability.

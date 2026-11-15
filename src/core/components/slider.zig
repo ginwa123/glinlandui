@@ -110,7 +110,7 @@ pub fn slider(props: SliderProps) void {
         });
     });
     // Semantics: a slider is draggable, so it reports `drag` rather than a plain click.
-    semantics.register(.{
+    semantics.registerAt(@src(), .{
         .id = props.id.clay(),
         .tag = props.id.str(),
         .role = .slider,

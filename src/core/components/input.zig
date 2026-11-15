@@ -603,7 +603,7 @@ pub fn textField(field: *Field) void {
 
     // Semantics: an editable field declares `set_text`, so a test can type into it by name and a reader can find it.
     if (!field.disabled and name.len > 0) {
-        semantics.register(.{
+        semantics.registerAt(@src(), .{
             .id = field.id.clay(),
             .tag = name,
             .role = .text_field,

@@ -61,7 +61,7 @@ pub fn image(props: ImageProps) void {
         .image = .{ .image_data = slot },
     })({});
     // Semantics: an image is a leaf with no state and no text.
-    semantics.register(.{
+    semantics.registerAt(@src(), .{
         .id = props.id.clay(),
         .tag = props.id.str(),
         .role = .image,

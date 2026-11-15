@@ -16,6 +16,8 @@ pub const Item = struct {
     role: semantics.Role = .unknown,
     label: []const u8 = "",
     value: []const u8 = "",
+    // Where the widget that declared the node lives, as `file:line`.
+    source: []const u8 = "",
     actions: semantics.Actions = .{},
     flags: semantics.Flags = .{},
     z: i16 = 0,
@@ -58,7 +60,7 @@ pub const Snapshot = struct {
         return s;
     }
 
-    // Rebuild in place from the live semantics list, then re-attach the geometry the previous snapshot resolved for the same ids.
+    // Rebuild in place from the live semantics list, then re-attach what the previous snapshot resolved for the same ids.
     pub fn rebuildPreserving(self: *Snapshot) void {
         const prev = self.*;
         self.rebuild();
@@ -68,6 +70,9 @@ pub const Snapshot = struct {
             item.bounds = old.bounds;
             item.clip = old.clip;
             item.visible = old.visible;
+            // Clickability and z are folded in at resolve, so they are one frame old too.
+            item.actions = old.actions;
+            item.z = old.z;
         }
     }
 
@@ -82,6 +87,7 @@ pub const Snapshot = struct {
                 .role = node.role,
                 .label = node.label,
                 .value = node.value,
+                .source = node.source,
                 .actions = node.actions,
                 .flags = node.flags,
                 .z = node.z,
@@ -247,6 +253,10 @@ pub const Snapshot = struct {
         try w.print("{d}", .{item.id});
         try w.writeAll(",\"role\":");
         try writeJsonString(w, @tagName(item.role));
+        if (item.source.len > 0) {
+            try w.writeAll(",\"source\":");
+            try writeJsonString(w, item.source);
+        }
         try w.writeAll(",\"label\":");
         try writeJsonString(w, item.label);
         if (item.value.len > 0) {
@@ -335,6 +345,7 @@ fn writeTextItem(w: *std.Io.Writer, item: Item) std.Io.Writer.Error!void {
     var action_buf: [96]u8 = undefined;
     const actions = actionList(item.actions, &action_buf);
     if (actions.len > 0) try w.print(" [{s}]", .{actions});
+    if (item.source.len > 0) try w.print("  @{s}", .{item.source});
 }
 
 fn writeRectJson(w: *std.Io.Writer, r: cl.BoundingBox) std.Io.Writer.Error!void {

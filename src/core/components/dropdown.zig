@@ -116,7 +116,7 @@ pub fn dropdown(
     comptime renderItem: fn (@TypeOf(item_ctx), []const u8, usize) void,
 ) void {
     // Semantics: the closed field is the dropdown's identity; the expanded rows come from list.zig and register themselves as list items.
-    semantics.register(.{
+    semantics.registerAt(@src(), .{
         .id = cl.getElementId(props.field_id),
         .tag = props.field_id,
         .role = .dropdown,

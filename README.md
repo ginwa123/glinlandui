@@ -949,15 +949,19 @@ _ = glinlandui.devtools.attach(alloc, &host);
 ```
 
 Right-click anywhere in the window and a context menu names the node under the pointer. **Inspect element** opens a
-floating window with the component tree: id, role and label per row, expandable and scrollable, with the selected
-node's box, clip rectangle, z, actions and flags in the footer. `Escape` closes it, and the app underneath keeps
-running and staying clickable outside the window.
+floating window with the component tree: id, role and label per row, expandable and scrollable. The footer describes
+the selected node — box, clip rectangle, z, actions, flags, its label, and the file and line of the widget that
+declared it (`core/components/button.zig:52`, the path Zig reports relative to the module), plus its nearest ancestors
+so a row has a place in the app and not only a parent. `Escape` closes it, and the app underneath keeps running and
+staying clickable outside the window.
 
 The outline is how the two halves stay connected, and it works in both directions. Click a row in the tree and that
 component is outlined and labelled in the app, so a name in the list is a place on the screen. The header's **pick**
 button arms the other direction, like a browser's element inspector: whatever the pointer is over is outlined — the
-deepest node under it, so a key inside a row names the key — and the next click opens that node in the window. The
-outline also appears while the right-click menu is up, so you see what you are about to inspect before you choose it.
+deepest node under it, so a key inside a row names the key — and the next click opens that node in the window.
+
+Nothing is painted over the app unless the window is open: a right-click on its own only raises the menu, which already
+names the node it would inspect. Closing the window takes the outline with it.
 
 The tree holds every widget that registers semantics (`button`, `input`, `list`, `tree`, `scroll`, …), every container
 declared with `box`, and the parent of each. Text runs are not nodes: a Clay text element has no id, so it has no box a
@@ -981,7 +985,7 @@ zig build inspect -- --app=todo --pick=120,80        # the node under one point
 `--app` is `demo`, `calculator`, `todo`, `catalog`, `file-dialog` or `lazy-scroll`. `--size=WxH` overrides the app's
 own window size and `--frames=N` how long to run before reading (default 3). The JSON is the shape a program wants:
 `{"frame":{"width":…,"height":…,"nodes":N},"roots":[{…,"children":[…]}]}`, each node carrying `tag`, `hash`, `role`,
-`label`, `bounds`, `visible`, `flags` and `actions`.
+`label`, `source` (the component's `file:line`), `bounds`, `visible`, `flags` and `actions`.
 
 `--shot=PATH.tga` writes the frame instead — the same tree, with the inspection window open — so a machine with no
 compositor can still see what it is describing. A `--pick` alongside it arms the picker over that point, which puts

@@ -229,7 +229,7 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
         semantics.popAncestor();
     });
     // The container's own node is registered AFTER the pop, so it does not list itself as an ancestor.
-    semantics.register(.{
+    semantics.registerAt(@src(), .{
         .id = props.id.clay(),
         .tag = props.id.str(),
         .role = .scroll,
