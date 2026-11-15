@@ -409,7 +409,7 @@ pub fn build(b: *std.Build) void {
         const dp = b.addExecutable(.{
             .name = "glinlanduidp",
             .root_module = b.createModule(.{
-                .root_source_file = b.path("src/dp_main.zig"),
+                .root_source_file = b.path("tools/dp/main.zig"),
                 .target = target,
                 .optimize = optimize,
                 // A client needs the C runtime for `getenv` and nothing else.
@@ -582,7 +582,7 @@ pub fn build(b: *std.Build) void {
     const zginlint_check = b.step("zginlint:check", "Enforce the zginlint rules on the tree (zero findings)");
     const run_zginlint_check = b.addRunArtifact(zginlint_exe);
     run_zginlint_check.setCwd(b.path("."));
-    run_zginlint_check.addArgs(&.{ "--max-comment-lines", "1", "src", "build.zig" });
+    run_zginlint_check.addArgs(&.{ "--max-comment-lines", "1", "src", "tools", "build.zig" });
     run_zginlint_check.has_side_effects = true;
     zginlint_check.dependOn(&run_zginlint_check.step);
 

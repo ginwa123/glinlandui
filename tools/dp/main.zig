@@ -100,13 +100,13 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("glinlanduidp: {s} needs an operand (see --help)\n", .{verb});
         std.process.exit(2);
     };
-    const name = opts.device orelse onlyDevice(io) orelse {
+    const name = opts.device orelse onlyDevice() orelse {
         std.debug.print("glinlanduidp: nothing is serving, or several are: name one with -s (see `glinlanduidp devices`)\n", .{});
         std.process.exit(2);
     };
     var out_buf: [8192]u8 = undefined;
-    var out = std.Io.File.stdout().writer(io, &out_buf);
-    talk(io, name, line, &out.interface) catch |err| {
+    var out = std.Io.File.stdout().writerStreaming(io, &out_buf);
+    talk(name, line, &out.interface) catch |err| {
         std.debug.print("glinlanduidp: {s}: {s}\n", .{ name, @errorName(err) });
         std.process.exit(2);
     };
@@ -131,47 +131,70 @@ fn request(verb: []const u8, opts: Options, buf: []u8) ?[]const u8 {
     return null;
 }
 
-// One request per connection, and the app closes it when the answer is complete.
-fn talk(io: std.Io, name: []const u8, line: []const u8, out: *std.Io.Writer) !void {
+// One request per connection: write one line, then read until the app closes it, which is when the answer is complete.
+fn talk(name: []const u8, line: []const u8, out: *std.Io.Writer) !void {
     var path_buf: [108]u8 = undefined;
     const path = socketPath(name, &path_buf) orelse return error.NameTooLong;
-    const addr = try std.Io.net.UnixAddress.init(path);
-    const stream = try addr.connect(io);
-    defer stream.close(io);
-    // The request is one line, and the app closes the connection when its answer is complete.
-    var write_buf: [256]u8 = undefined;
-    var w = stream.writer(io, &write_buf);
-    try w.interface.writeAll(line);
-    try w.interface.writeAll("\n");
-    try w.interface.flush();
-    var read_buf: [256]u8 = undefined;
-    var r = stream.reader(io, &read_buf);
-    _ = try r.interface.stream(out, .unlimited);
+    const fd = try connectUnix(path);
+    defer _ = std.c.close(fd);
+    try writeAll(fd, line);
+    try writeAll(fd, "\n");
+    var buf: [4096]u8 = undefined;
+    while (true) {
+        const n = std.c.read(fd, &buf, buf.len);
+        if (n <= 0) break;
+        try out.writeAll(buf[0..@intCast(n)]);
+    }
+}
+
+fn writeAll(fd: std.posix.fd_t, bytes: []const u8) !void {
+    var off: usize = 0;
+    while (off < bytes.len) {
+        const n = std.c.write(fd, bytes[off..].ptr, bytes.len - off);
+        if (n <= 0) return error.WriteFailed;
+        off += @intCast(n);
+    }
+}
+
+// Connecting by hand: a leftover socket file from a killed app is exactly the case `devices` has to survive, and the helper panics on it.
+fn connectUnix(path: []const u8) !std.posix.fd_t {
+    if (@import("builtin").os.tag == .windows) return error.Unsupported;
+    const fd = std.c.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0);
+    if (fd < 0) return error.SocketFailed;
+    var addr: std.c.sockaddr.un = std.mem.zeroes(std.c.sockaddr.un);
+    addr.family = std.posix.AF.UNIX;
+    if (@hasField(@TypeOf(addr), "len")) addr.len = @sizeOf(@TypeOf(addr));
+    @memcpy(addr.path[0..path.len], path);
+    if (std.c.connect(fd, @ptrCast(&addr), @sizeOf(@TypeOf(addr))) != 0) {
+        _ = std.c.close(fd);
+        return error.NotServing;
+    }
+    return fd;
 }
 
 fn devices(io: std.Io) !void {
     var buf: [1024]u8 = undefined;
     var out = std.Io.File.stdout().writer(io, &buf);
     for (app_names) |name| {
-        if (!alive(io, name)) continue;
+        if (!alive(name)) continue;
         try out.interface.print("{s}\n", .{name});
     }
     try out.interface.flush();
 }
 
 // An app is alive when it answers: there is no registry to read, so each name is asked one small question.
-fn alive(io: std.Io, name: []const u8) bool {
+fn alive(name: []const u8) bool {
     var sink_buf: [256]u8 = undefined;
     var sink = std.Io.Writer.fixed(&sink_buf);
-    talk(io, name, "pick 0,0", &sink) catch return false;
+    talk(name, "pick 0,0", &sink) catch return false;
     return true;
 }
 
 // The only app that answers, or null when none or several do.
-fn onlyDevice(io: std.Io) ?[]const u8 {
+fn onlyDevice() ?[]const u8 {
     var found: ?[]const u8 = null;
     for (app_names) |name| {
-        if (!alive(io, name)) continue;
+        if (!alive(name)) continue;
         if (found != null) return null;
         found = name;
     }
