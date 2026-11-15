@@ -69,7 +69,7 @@ pub fn main(init: std.process.Init) !void {
 
     var buf: [8192]u8 = undefined;
     var out = std.Io.File.stdout().writer(io, &buf);
-    try devtools.cli.dump(gpa, opts, app.ctx, app.root, &out.interface);
+    try devtools.cli.run(gpa, opts, app.ctx, app.root, &out.interface);
     try out.interface.flush();
 }
 

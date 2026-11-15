@@ -354,9 +354,13 @@ fn writeTextItem(w: *std.Io.Writer, item: Item) std.Io.Writer.Error!void {
     const r = item.visibleRect();
     try w.print("  {d:.0},{d:.0} {d:.0}x{d:.0}", .{ r.x, r.y, r.width, r.height });
     if (item.visible > 0 and item.visible < 1) try w.print(" vis={d:.2}", .{item.visible});
+    // Labelled, because a dump is read by machines as well as people: `actions=[click] flags=[enabled]`.
     var action_buf: [96]u8 = undefined;
     const actions = actionList(item.actions, &action_buf);
-    if (actions.len > 0) try w.print(" [{s}]", .{actions});
+    if (actions.len > 0) try w.print("  actions=[{s}]", .{actions});
+    var flag_buf: [96]u8 = undefined;
+    const flags = flagList(item.flags, &flag_buf);
+    if (flags.len > 0) try w.print("  flags=[{s}]", .{flags});
     if (item.source.len > 0) try w.print("  src={s}", .{item.source});
     if (item.declared) |declared| try w.print("  app={s}/{s}:{d}", .{ declared.module, declared.file, declared.line });
 }

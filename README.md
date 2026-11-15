@@ -1011,6 +1011,33 @@ zig build inspect -- --app=todo --shot=/tmp/todo.tga
 zig build inspect -- --app=calculator --pick=40,300 --shot=/tmp/key.tga
 ```
 
+### Driving an app from the CLI
+
+`--do=ACTION`, repeatable and played in order, acts on a component by the tag the tree printed. The tree is printed
+after the last action, in the same process, so the effect is visible:
+
+```sh
+zig build inspect -- --app=todo --do=type:todo.field:buy milk --do=key:28
+```
+
+That run starts with 7 nodes and prints 12: the typed text reached the field, Enter raised the app's intent, and the
+new row, its checkbox, spacer and delete button are in the dump. The actions go through the same pointer and key path
+a user does — nothing is faked, the app's own handlers run.
+
+| action | what it does |
+|---|---|
+| `click:TAG` | press and release |
+| `longpress:TAG` | hold the press across frames, then release |
+| `press:TAG` / `release:TAG` | one half of a click, for a drag held by hand |
+| `move:TAG` | move the pointer onto it |
+| `scroll:TAG:DX,DY` | wheel over it, in points |
+| `drag:TAG:DX,DY` | press on it and drag by DX,DY |
+| `type:TAG:TEXT` | focus it, then type TEXT |
+| `key:CODE` | press and release an evdev key code (28 is Enter, 1 Escape) |
+
+`TAG` is the id the tree prints; `@x,y` addresses a point with no tag. A tag that is not found fails with the tag named
+and a non-zero exit, so a script knows its selector was wrong rather than the app.
+
 ### Reading the tree from your own code
 
 `glinlandui.devtools.snapshot.Snapshot.build(w, h)` returns the nodes of the last resolved frame as the same `Item`
