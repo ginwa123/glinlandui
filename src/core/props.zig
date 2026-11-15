@@ -118,6 +118,13 @@ pub const Submit = struct {
     ctx: ?*anyopaque = null,
 };
 
+// An app's own content inside a component's row: told which row, it declares what it likes.
+
+pub const RowExtra = struct {
+    f: ?*const fn (?*anyopaque, usize) void = null,
+    ctx: ?*anyopaque = null,
+};
+
 // A right-click menu a component offers: the rows, in order, and who to tell which one was picked.
 
 // Empty (the default) means the component has NO menu and never reacts to a right click.

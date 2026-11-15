@@ -6,6 +6,8 @@ const headless = @import("../testing/headless.zig");
 const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
+const reorder_mod = @import("reorder.zig");
+const context_menu = @import("context_menu.zig");
 const semantics = @import("../semantics.zig");
 
 /// What a row is, which decides its colour.
@@ -47,10 +49,16 @@ pub const TreeProps = struct {
     selected_bar: ?Color = null,
     on_select: prop.Select = .{},
     click_z: i16 = 0,
+    // A right-click menu per row; a shorter slice (or null) leaves the remaining rows without one.
+    context_menus: ?[]const prop.ContextMenu = null,
+    // Drag a row onto another to reorder it; null (the default) leaves the rows static.
+    reorder: ?reorder_mod.Reorder = null,
+    // The app's own leading content for a row (a chip, an icon), declared between the caret and the label.
+    row_extra: prop.RowExtra = .{},
 };
 
 /// The element id of row `i`. `+1` so row 0 never collides with the container's own id.
-fn rowId(base: []const u8, i: usize) cl.ElementId {
+pub fn rowId(base: []const u8, i: usize) cl.ElementId {
     return cl.ElementId.IDI(base, @as(u32, @intCast(i + 1)));
 }
 
@@ -82,6 +90,8 @@ pub fn tree(props: TreeProps) void {
         semantics.pushAncestor(props.id.clay(), false);
         for (props.rows, 0..) |row, i| rowUi(props, row, i);
         semantics.popAncestor();
+        // Last, so the line paints over the rows it separates.
+        reorder_mod.declareLine(props.id.str());
     });
 }
 
@@ -120,6 +130,8 @@ fn rowUi(props: TreeProps, row: Row, i: usize) void {
             .font_size = 12,
             .color = props.caret_fg.toClay(),
         });
+        // The app's own decor comes between the caret and the label, so a chip keeps the label's alignment.
+        if (props.row_extra.f) |extra| extra(props.row_extra.ctx, i);
         // The label grows, which is what pushes the meta to the right edge.
         cl.UI()(.{
             .id = innerId(props.id.str(), i, 1),
@@ -144,6 +156,10 @@ fn rowUi(props: TreeProps, row: Row, i: usize) void {
     });
     if (props.on_select.f) |cb| {
         registry.registerZCursor(rowId(props.id.str(), i), cb, props.on_select.ctx, i, props.click_z, .pointer);
+    }
+    if (props.reorder) |spec| reorder_mod.register(props.id.str(), rowId(props.id.str(), i), i, spec);
+    if (props.context_menus) |menus| {
+        if (i < menus.len and !menus[i].isNone()) context_menu.register(rowId(props.id.str(), i), menus[i], props.click_z);
     }
 }
 
@@ -200,4 +216,66 @@ test "selected_bar draws one 2px left border per row, transparent when unselecte
 test "TreeProps needs only an id" {
     const p = TreeProps{ .id = .{ .text = "x" } };
     try std.testing.expectEqual(@as(usize, 0), p.rows.len);
+}
+
+var extra_ctx: struct { seen: usize = 0, last: usize = 0 } = .{};
+
+fn onExtra(ctx: ?*anyopaque, index: usize) void {
+    const c: *@TypeOf(extra_ctx) = @ptrCast(@alignCast(ctx.?));
+    c.seen += 1;
+    c.last = index;
+}
+
+const menu_items = [_][]const u8{ "Rename", "Delete" };
+
+fn declareDecorated() void {
+    const menus = [_]prop.ContextMenu{
+        .{ .items = &menu_items },
+        .{},
+    };
+    tree(.{
+        .id = .{ .text = "t-decor" },
+        .rows = &bar_rows,
+        .row_extra = .{ .f = onExtra, .ctx = &extra_ctx },
+        .context_menus = &menus,
+    });
+}
+
+// ONE canvas for this file, never freed: Clay keeps a context pointer, so a later test initialising on a
+// released buffer faults — the engine's own lesson from context_menu.zig.
+var canvas: ?[]u8 = null;
+
+fn canvasOnce() void {
+    if (canvas != null) return;
+    const mem = std.heap.page_allocator.alloc(u8, cl.minMemorySize()) catch @panic("OOM");
+    const arena = cl.Arena.init(mem);
+    _ = cl.initialize(arena, .{ .w = 320, .h = 240 }, .{});
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
+    canvas = mem;
+}
+
+test "row_extra runs once per row, and only the rows with a menu answer a right click" {
+    canvasOnce();
+    extra_ctx = .{};
+    context_menu.close();
+    registry.beginFrame();
+    context_menu.beginFrame();
+    reorder_mod.beginFrame();
+    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
+    cl.beginLayout();
+    declareDecorated();
+    _ = cl.endLayout();
+
+    // The app's decor was asked for every row, in order.
+    try std.testing.expectEqual(bar_rows.len, extra_ctx.seen);
+    try std.testing.expectEqual(bar_rows.len - 1, extra_ctx.last);
+
+    // Row 1 has no menu of its own, so a right click on it is nobody's.
+    const none = cl.getElementData(rowId("t-decor", 1)).bounding_box;
+    try std.testing.expect(!context_menu.secondaryClick(none.x + 4, none.y + 4, 320, 240));
+    // Row 0 does.
+    const with_menu = cl.getElementData(rowId("t-decor", 0)).bounding_box;
+    try std.testing.expect(context_menu.secondaryClick(with_menu.x + 4, with_menu.y + 4, 320, 240));
+    try std.testing.expect(context_menu.isOpen());
+    context_menu.close();
 }
