@@ -241,8 +241,7 @@ fn declareDecorated() void {
     });
 }
 
-// ONE canvas for this file, never freed: Clay keeps a context pointer, so a later test initialising on a
-// released buffer faults — the engine's own lesson from context_menu.zig.
+// ONE canvas for this file, never freed: Clay keeps a context pointer, and re-initialising on a released buffer faults.
 var canvas: ?[]u8 = null;
 
 fn canvasOnce() void {
