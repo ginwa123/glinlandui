@@ -118,6 +118,28 @@ pub const Submit = struct {
     ctx: ?*anyopaque = null,
 };
 
+// A right-click menu a component offers: the rows, in order, and who to tell which one was picked.
+
+// Empty (the default) means the component has NO menu and never reacts to a right click.
+pub const ContextMenu = struct {
+    items: []const []const u8 = &.{},
+    on_select: Select = .{},
+    // The card's look. The defaults are a dark card; an app passes its theme's own colours.
+    bg: Color = Color.rgb(0x22, 0x22, 0x22),
+    fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
+    hover_bg: Color = Color.rgb(0x33, 0x33, 0x33),
+    border: Color = Color.rgb(0x3a, 0x3a, 0x3a),
+    font_size: Len = .{ .px = 13 },
+    row_h: Len = .{ .px = 28 },
+    pad: Len = .{ .px = 4 },
+    row_pad: Len = .{ .px = 10 },
+    radius: Len = .{ .px = 6 },
+
+    pub fn isNone(self: ContextMenu) bool {
+        return self.items.len == 0;
+    }
+};
+
 // The same, for a handler that is told WHICH row, tab or option was hit.
 
 pub const Select = struct {

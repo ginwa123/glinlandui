@@ -107,6 +107,7 @@ pub const components = struct {
     pub const caret = @import("core/components/caret.zig");
     pub const checkbox = @import("core/components/checkbox.zig");
     pub const click_registry = @import("core/components/click_registry.zig");
+    pub const context_menu = @import("core/components/context_menu.zig");
     pub const dispatch = @import("core/components/dispatch.zig");
     pub const dropdown = @import("core/components/dropdown.zig");
     pub const icon = @import("core/components/icon.zig");

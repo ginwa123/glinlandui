@@ -95,6 +95,11 @@ pub fn popClip() void {
     clip = clip_stack[clip_depth];
 }
 
+/// The viewport chain in force, so a widget that hit-tests LATER (a context menu) is clipped the same way.
+pub fn currentClip() ?Clip {
+    return clip;
+}
+
 /// Register a row hit-target (list/dropdown rows) at default priority 0.
 pub fn register(id: cl.ElementId, cb: *const fn (?*anyopaque, usize) void, ctx: ?*anyopaque, index: usize) void {
     registerZ(id, cb, ctx, index, 0);

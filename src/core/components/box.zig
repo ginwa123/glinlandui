@@ -5,6 +5,7 @@ const headless = @import("../testing/headless.zig");
 const Color = @import("../color.zig").Color;
 const prop = @import("../props.zig");
 const registry = @import("click_registry.zig");
+const context_menu = @import("context_menu.zig");
 const semantics = @import("../semantics.zig");
 
 /// The sizing type a container props uses. One definition, named where a box needs it.
@@ -36,6 +37,8 @@ pub const BoxProps = struct {
     on_click: prop.Click = .{},
     // The pointer shape over the hit target; only read when `on_click` has a handler.
     cursor: prop.Cursor = .pointer,
+    // The right-click menu this container offers; empty (the default) means it has none.
+    context_menu: prop.ContextMenu = .{},
 };
 
 /// Declare a div-like container: a Clay element named by `id`, with the mapped direction, sizing, padding, gap, radius and border; a background only when one is given.
@@ -60,6 +63,8 @@ pub fn box(p: BoxProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void)
     })({
         // The box's own hit target answers first, so a clickable child drawn on top of it wins the tie.
         if (p.on_click.f) |cb| registry.registerClickCursor(p.id.clay(), cb, p.on_click.ctx, p.cursor);
+        // A right click opens the card the engine draws, so a container is all a menu needs.
+        if (!p.context_menu.isNone()) context_menu.register(p.id.clay(), p.context_menu, 0);
         // A container is part of the component tree: the children it declares record it as their parent, which is what the devtool's tree shows.
         semantics.pushAncestor(p.id.clay(), false);
         children(ctx);

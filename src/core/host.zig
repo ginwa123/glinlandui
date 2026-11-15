@@ -4,11 +4,15 @@ const contract = @import("window_contract.zig");
 const render = @import("render.zig");
 const frame_mod = @import("frame.zig");
 const dispatch = @import("components/dispatch.zig");
+
+/// Escape under the xkb/Wayland evdev numbering, which every backend this engine runs on reports.
+const key_escape: u32 = 1;
 const registry = @import("components/click_registry.zig");
 const image_widgets = @import("components/image.zig");
 const cl = @import("zclay");
 const scroll_mod = @import("components/scroll.zig");
 const input_mod = @import("components/input.zig");
+const context_menu = @import("components/context_menu.zig");
 const semantics = @import("semantics.zig");
 const inspector_mod = @import("devtools/inspector.zig");
 const glyphs = @import("glyphs.zig");
@@ -83,11 +87,14 @@ pub const Host = struct {
         if (self.service) |svc| svc.begin(svc.ptr, self);
         // Fresh registries per frame (components self-register during declare; stale boxes must never ghost-fire).
         registry.beginFrame();
+        context_menu.beginFrame();
         scroll_mod.beginScrollFrame();
         input_mod.beginFrame();
         image_widgets.beginFrame();
         semantics.beginFrame();
         self.root_fn(self.root_ctx, w, h);
+        // The context menu is the engine's, so it needs no declaration from the app: it floats over the tree it was raised from.
+        context_menu.declare();
         // The devtool declares last, so its overlay paints over the app; it registers no semantics node, so it never shows up in its own tree.
         if (self.inspect) |dev| dev.declare(w, h);
     }
@@ -151,11 +158,17 @@ pub const Host = struct {
     }
 
     pub fn onPointerEvent(self: *Host, x: f32, y: f32, pressed: bool, button: u32) void {
-        // A right press belongs to the devtool alone: the app's pointer state, focus and click dispatch never see it.
+        // A right press asks the app's components first: a widget offering a menu owns the click it was right-clicked in.
         if (button == dispatch.BTN_RIGHT) {
-            if (pressed) if (self.inspect) |dev| dev.onSecondaryClick(x, y);
+            if (pressed) {
+                const offered = context_menu.secondaryClick(x, y, @floatFromInt(self.win_w), @floatFromInt(self.win_h));
+                // With no menu under the pointer the click is the devtool's, which is how both can live in one window.
+                if (!offered) if (self.inspect) |dev| dev.onSecondaryClick(x, y);
+            }
             return;
         }
+        // A left press belongs to an open card: inside it a row answers on release, outside it dismisses and goes no further.
+        if (button == dispatch.BTN_LEFT and pressed and context_menu.leftPress(x, y)) return;
         // The picker follows the pointer between frames, so the outline is under the cursor before the click lands.
         if (self.inspect) |dev| dev.onPointerMove(x, y);
         const last_x = self.ptr.x;
@@ -185,6 +198,11 @@ pub const Host = struct {
 
     /// The return value is CLOSE INTENT, which the window acts on: a key the focused field typed is never one.
     pub fn onKeyEvent(self: *Host, keycode: u32, pressed: bool) bool {
+        // Escape dismisses an open context menu, and stops there: it is not the app's close intent either.
+        if (pressed and keycode == key_escape and context_menu.isOpen()) {
+            context_menu.close();
+            return false;
+        }
         // Escape closes the devtool while it is up, and is never read as the app's close intent.
         if (self.inspect) |dev| {
             if (dev.onKey(keycode)) return false;
