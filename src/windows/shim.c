@@ -148,8 +148,8 @@ struct GlinWinWindow {
     ID3D11VertexShader *vs;
     ID3D11PixelShader *ps;
     ID3D11SamplerState *sampler;
-    // The per-frame upload target: DYNAMIC + CPU_ACCESS_WRITE is the usage
-    // pair D3D11 documents for UpdateSubresource out of system memory.
+    // The per-frame upload target: DEFAULT usage, because uploadSurface uses
+    // UpdateSubresource (Map/Unmap is the DYNAMIC pair, not this one).
     ID3D11Texture2D *frame_tex;
     ID3D11ShaderResourceView *frame_srv;
     UINT tex_w;
@@ -315,9 +315,13 @@ static int ensureFrameTexture(GlinWinWindow *w, int width, int height) {
     td.ArraySize = 1;
     td.Format = GLIN_DXGI_FORMAT;
     td.SampleDesc.Count = 1;
-    td.Usage = D3D11_USAGE_DYNAMIC;
+    // DEFAULT, not DYNAMIC: `uploadSurface` uses UpdateSubresource, whose
+    // documented pair is a DEFAULT resource. DYNAMIC means Map/Unmap, and
+    // UpdateSubresource on a DYNAMIC texture is invalid usage that the debug
+    // layer rejects and a strict driver is entitled to punish.
+    td.Usage = D3D11_USAGE_DEFAULT;
     td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-    td.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    td.CPUAccessFlags = 0;
     if (FAILED(ID3D11Device_CreateTexture2D(w->device, &td, NULL, &w->frame_tex))) {
         return 0;
     }
@@ -379,6 +383,12 @@ static void drawQuad(ID3D11DeviceContext *ctx, ID3D11RenderTargetView *rtv,
     ID3D11DeviceContext_PSSetShader(ctx, ps, NULL, 0);
     ID3D11DeviceContext_PSSetShaderResources(ctx, 0, 1, &srv);
     ID3D11DeviceContext_PSSetSamplers(ctx, 0, 1, &sampler);
+
+    // LOAD-BEARING: the input assembler's topology defaults to UNDEFINED, and a
+    // Draw() with no topology removes the device on the Basic Render Driver /
+    // WARP (Present then reports DXGI_ERROR_DEVICE_REMOVED, 0x887A0005), which
+    // is exactly the "D3D11 Present failed" fallback to GDI. Every draw sets it.
+    ID3D11DeviceContext_IASetPrimitiveTopology(ctx, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     // Three vertices is the biggest triangle that fits SV_VertexID, and one
     // triangle beats two here: no diagonal seam, no index buffer, no vertex
@@ -870,22 +880,64 @@ GlinWinWindow *glin_win_window_create(const char *title, int w, int h, int min_w
     win->min_w = min_w;
     win->min_h = min_h;
     win->adapter_name = "none";
-    win->tex_w = (UINT)w;
-    win->tex_h = (UINT)h;
 
-    // Centre on the primary monitor's work area, so a window is never created
-    // off-screen on a multi-monitor setup.
+    // `w`/`h` are CLIENT pixels, which is the space the toolkit lays out in: the
+    // frame is added AROUND them instead of being eaten out of them. Before
+    // this, a 960x760 request produced an 804x581 client, so the surface and the
+    // window agreed only by accident.
+    RECT outer_rect;
+    outer_rect.left = 0;
+    outer_rect.top = 0;
+    outer_rect.right = (LONG)w;
+    outer_rect.bottom = (LONG)h;
+    AdjustWindowRect(&outer_rect, WS_OVERLAPPEDWINDOW, FALSE);
+    int outer_w = (int)(outer_rect.right - outer_rect.left);
+    int outer_h = (int)(outer_rect.bottom - outer_rect.top);
+
+    // Centre on the primary monitor's work area, and never place the window off
+    // it: a request bigger than the desktop used to be centred on the REQUESTED
+    // size, which put the title bar at a negative coordinate on a small screen.
     int x = CW_USEDEFAULT;
     int y = CW_USEDEFAULT;
     RECT area;
     if (SystemParametersInfoW(SPI_GETWORKAREA, 0, &area, 0)) {
-        x = area.left + ((area.right - area.left) - w) / 2;
-        y = area.top + ((area.bottom - area.top) - h) / 2;
+        const int area_w = (int)(area.right - area.left);
+        const int area_h = (int)(area.bottom - area.top);
+        // Shave the CLIENT by the frame before clamping: the frame is part of the
+        // window, so a client that filled the work area would push the window off
+        // it. `core/window_contract.fitToWorkArea` fits the client to the area;
+        // this is the frame's share of that budget.
+        if (outer_w > area_w) {
+            w -= (outer_w - area_w);
+            outer_w = area_w;
+        }
+        if (outer_h > area_h) {
+            h -= (outer_h - area_h);
+            outer_h = area_h;
+        }
+        if (w < 1) {
+            w = 1;
+        }
+        if (h < 1) {
+            h = 1;
+        }
+        x = (int)area.left + (area_w - outer_w) / 2;
+        y = (int)area.top + (area_h - outer_h) / 2;
+        if (x < (int)area.left) {
+            x = (int)area.left;
+        }
+        if (y < (int)area.top) {
+            y = (int)area.top;
+        }
     }
+    // After the fit, so the upload target and the first swap-chain buffer are the
+    // size the client actually ends up.
+    win->tex_w = (UINT)w;
+    win->tex_h = (UINT)h;
 
     HWND hwnd = CreateWindowExW(0, kGlinWindowClass, kGlinWindowTitle,
-                                WS_OVERLAPPEDWINDOW, x, y, w, h, NULL, NULL, wc.hInstance,
-                                NULL);
+                                WS_OVERLAPPEDWINDOW, x, y, outer_w, outer_h, NULL, NULL,
+                                wc.hInstance, NULL);
     if (hwnd == NULL) {
         free(win);
         return NULL;
@@ -995,6 +1047,27 @@ void glin_win_window_run(GlinWinWindow *win, int max_frames) {
     }
     win->max_frames = max_frames;
     MSG msg;
+    if (max_frames > 0) {
+        // A capped run drives its own frames. A toolkit window repaints only
+        // when something invalidates it, so after the first WM_PAINT a loop
+        // that waits in GetMessage has nothing to wake it and never reaches
+        // the cap — `QS_SETTINGS_TEST_FRAMES=3` hung forever that way.
+        while (!win->quit && win->frames < max_frames) {
+            while (!win->quit && PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE) != 0) {
+                if (msg.message == WM_QUIT) {
+                    return;
+                }
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            if (win->quit || win->frames >= max_frames) {
+                break;
+            }
+            // UpdateWindow inside makes this one frame happen synchronously.
+            glin_win_invalidate(win);
+        }
+        return;
+    }
     while (!win->quit && GetMessageW(&msg, NULL, 0, 0) > 0) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
@@ -1060,8 +1133,13 @@ void glin_win_present(GlinWinWindow *win, const unsigned char *rgba, int w, int 
         // so the only unacceptable response is to go blank — hand the same
         // bytes to GDI instead and carry on. The frame is still counted, so the
         // frame cap can terminate a capped run.
-        char why[160];
-        snprintf(why, sizeof(why), "D3D11 Present failed (hr=0x%08lx)", (unsigned long)hr);
+        char why[192];
+        // The device-removed reason is what separates "this driver cannot do
+        // it" from "we asked it to do something invalid"; without it both
+        // report the same generic 0x887A0005.
+        snprintf(why, sizeof(why), "D3D11 Present failed (hr=0x%08lx, removed reason 0x%08lx)",
+                 (unsigned long)hr,
+                 (unsigned long)ID3D11Device_GetDeviceRemovedReason(win->device));
         degradeToGdi(win, why);
         (void)gdiBlit(win, rgba, w, h);
         win->frames += 1;
@@ -1076,6 +1154,36 @@ void glin_win_present(GlinWinWindow *win, const unsigned char *rgba, int w, int 
     // a loop-side counter would stop on a paint that produced nothing.
     if (win->max_frames > 0 && win->frames >= win->max_frames) {
         glin_win_quit(win);
+    }
+}
+
+void glin_win_work_area(int *out_w, int *out_h) {
+    if (out_w != NULL) {
+        *out_w = 0;
+    }
+    if (out_h != NULL) {
+        *out_h = 0;
+    }
+    RECT area;
+    if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &area, 0)) {
+        return;
+    }
+    // LOGICAL units, the same ones glin_win_content_size and WindowConfig use, so
+    // a fit decision compares like with like on a scaled display.
+    double scale = 1.0;
+    HDC dc = GetDC(NULL);
+    if (dc != NULL) {
+        int dpi = GetDeviceCaps(dc, LOGPIXELSX);
+        ReleaseDC(NULL, dc);
+        if (dpi > 0) {
+            scale = (double)dpi / 96.0;
+        }
+    }
+    if (out_w != NULL) {
+        *out_w = (int)((double)(area.right - area.left) / scale + 0.5);
+    }
+    if (out_h != NULL) {
+        *out_h = (int)((double)(area.bottom - area.top) / scale + 0.5);
     }
 }
 

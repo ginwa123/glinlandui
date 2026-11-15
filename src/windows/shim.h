@@ -132,6 +132,15 @@ void glin_win_quit(GlinWinWindow *win);
 /// The window's current client size in pixels (0 if the window is gone).
 void glin_win_content_size(GlinWinWindow *win, int *out_w, int *out_h);
 
+/// The primary monitor's work area, in LOGICAL units — the same ones
+/// glin_win_content_size and WindowConfig use, so a fit decision compares like
+/// with like on a scaled display. This is the screen minus the taskbar and any
+/// docked app bar: the space a window is allowed to occupy. `0, 0` when the
+/// query fails, which a host must read as "unknown", NOT as a zero-sized
+/// screen. Zig does the fitting (`core/window_contract.fitToWorkArea`, unit
+/// tested on every platform); this only reports the number.
+void glin_win_work_area(int *out_w, int *out_h);
+
 /// The window's DPI scale (96 dpi = 1.0). The toolkit renders at this density so a 150% display is sharp, not upscaled.
 double glin_win_scale(GlinWinWindow *win);
 

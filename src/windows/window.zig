@@ -104,10 +104,30 @@ pub const Window = struct {
 
         // `config.title` is already a NUL-terminated string, which is exactly what the C `const char *` parameter wants, so it passes straight through with no.
         const cfg = self.state.config;
+
+        // A window bigger than the monitor is shrunk to fit it (core/window_contract.fitToWorkArea, unit-tested); the shim only reports the work area.
+        var work_w: c_int = 0;
+        var work_h: c_int = 0;
+        c.glin_win_work_area(&work_w, &work_h);
+        const fit = contract.fitToWorkArea(
+            @intCast(@max(work_w, 0)),
+            @intCast(@max(work_h, 0)),
+            cfg.width,
+            cfg.height,
+            cfg.min_width,
+            cfg.min_height,
+        );
+        if (fit.w != cfg.width or fit.h != cfg.height) {
+            std.log.info(
+                "Windows window: {d}x{d} does not fit this monitor's {d}x{d} work area; opening at {d}x{d}",
+                .{ cfg.width, cfg.height, @max(work_w, 0), @max(work_h, 0), fit.w, fit.h },
+            );
+        }
+
         const handle = c.glin_win_window_create(
             cfg.title,
-            @intCast(cfg.width),
-            @intCast(cfg.height),
+            @intCast(fit.w),
+            @intCast(fit.h),
             @intCast(cfg.min_width),
             @intCast(cfg.min_height),
         ) orelse return error.NoWindowStation;
@@ -138,7 +158,7 @@ pub const Window = struct {
         const adapter_name = std.mem.span(c.glin_win_adapter_name(handle));
         std.log.info(
             "Windows window: {d}x{d} ({s}), presenter: {s} ({s})",
-            .{ cfg.width, cfg.height, cfg.title, presenterOf(handle).name(), adapter_name },
+            .{ fit.w, fit.h, cfg.title, presenterOf(handle).name(), adapter_name },
         );
 
         const requested: i32 = blk: {

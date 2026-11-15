@@ -25,6 +25,20 @@ pub fn clampSize(w: u32, h: u32) struct { w: u32, h: u32 } {
     return .{ .w = cw, .h = ch };
 }
 
+// The size a window should actually take on a monitor with a `work_w` x `work_h` work area: never larger than the area, never smaller than the toolkit's minimum.
+pub fn fitToWorkArea(work_w: u32, work_h: u32, want_w: u32, want_h: u32, min_w: u32, min_h: u32) struct { w: u32, h: u32 } {
+    // An unknown work area constrains nothing: 0 must never be read as a zero-sized screen.
+    if (work_w == 0 or work_h == 0) return .{ .w = want_w, .h = want_h };
+    const floor_w = @max(min_w, 1);
+    const floor_h = @max(min_h, 1);
+    // A monitor smaller than the minimum still gets the minimum: a window too small to lay out is worse than one that overflows.
+    const cap_w = @max(work_w, floor_w);
+    const cap_h = @max(work_h, floor_h);
+    const w = if (want_w == 0) floor_w else @min(@max(want_w, floor_w), cap_w);
+    const h = if (want_h == 0) floor_h else @min(@max(want_h, floor_h), cap_h);
+    return .{ .w = w, .h = h };
+}
+
 // Escape closes the window.
 pub fn keyToClose(keycode: u32) bool {
     return keycode == 1 or keycode == 0xff1b;
@@ -349,6 +363,38 @@ test "clampSize enforces min 520x360, 0 defers to client size" {
     try std.testing.expectEqual(@as(u32, 700), win.clamp(1000, 700).h);
     try std.testing.expectEqual(@as(u32, 720), clampSize(0, 0).w);
     try std.testing.expectEqual(@as(u32, 520), clampSize(100, 100).w);
+}
+
+test "fitToWorkArea shrinks a window the monitor cannot show" {
+    // The reported case: the catalog asks for 960x760 and the desktop's work area is smaller, so the window is cut off.
+    const fit = fitToWorkArea(792, 552, 960, 760, 520, 360);
+    try std.testing.expectEqual(@as(u32, 792), fit.w);
+    try std.testing.expectEqual(@as(u32, 552), fit.h);
+}
+
+test "fitToWorkArea leaves a window that already fits alone" {
+    const fit = fitToWorkArea(1920, 1040, 960, 760, 520, 360);
+    try std.testing.expectEqual(@as(u32, 960), fit.w);
+    try std.testing.expectEqual(@as(u32, 760), fit.h);
+    // Exactly the work area is a fit, not an overflow.
+    const exact = fitToWorkArea(960, 760, 960, 760, 520, 360);
+    try std.testing.expectEqual(@as(u32, 960), exact.w);
+    try std.testing.expectEqual(@as(u32, 760), exact.h);
+}
+
+test "fitToWorkArea keeps the minimum, and an unknown area constrains nothing" {
+    // A monitor smaller than the toolkit's minimum still gets the minimum: a window too small to lay out is worse than one that overflows.
+    const tiny = fitToWorkArea(320, 240, 960, 760, 520, 360);
+    try std.testing.expectEqual(@as(u32, 520), tiny.w);
+    try std.testing.expectEqual(@as(u32, 360), tiny.h);
+    // An unknown work area (0) cannot constrain anything.
+    const unknown = fitToWorkArea(0, 0, 960, 760, 520, 360);
+    try std.testing.expectEqual(@as(u32, 960), unknown.w);
+    try std.testing.expectEqual(@as(u32, 760), unknown.h);
+    // A zero request means "the minimum", exactly as WindowState.clamp reads it.
+    const unset = fitToWorkArea(1920, 1040, 0, 0, 520, 360);
+    try std.testing.expectEqual(@as(u32, 520), unset.w);
+    try std.testing.expectEqual(@as(u32, 360), unset.h);
 }
 
 test "WindowState.init stores custom config" {
