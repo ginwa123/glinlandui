@@ -6,6 +6,7 @@ const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const caret_mod = @import("caret.zig");
+const scroll_mod = @import("scroll.zig");
 const frame_mod = @import("../frame.zig");
 const text_editor = @import("../text_editor.zig");
 const text_backend = @import("../text_backend.zig");
@@ -365,6 +366,8 @@ pub const Field = struct {
     caret_fg: ?Color = null,
     // Multiline: Enter types a new line and the caret moves onto it; Ctrl/Cmd+Enter is the submit gesture instead.
     multiline: bool = false,
+    // The scroll container this field lives in: set it and a multiline field keeps the caret's line inside it.
+    scroll_id: ?[]const u8 = null,
     // A field grows to the width it is given and fits its text vertically, unless the caller says otherwise.
     w: prop.Size = .grow,
     h: prop.Size = .{ .fixed = 32 },
@@ -419,6 +422,11 @@ pub const Field = struct {
     // The draft, for an app that wants to read it.
     pub fn text(self: *const Field) []const u8 {
         return self.editor.text();
+    }
+
+    // The line the caret is on, which is what an enclosing scroll has to keep in view.
+    pub fn caretLine(self: *const Field) usize {
+        return self.editor.lineNumber(@min(self.editor.caret.offset, self.editor.len));
     }
 
     // How tall one line of a multiline field is: the glyphs, plus the room the caret bar needs.
@@ -685,6 +693,9 @@ pub fn textField(field: *Field) void {
         }
     });
 
+    // A multiline field in a scroll keeps its caret on screen, so typing a line never happens off the bottom edge.
+    if (field.multiline and input.focused) keepCaretVisible(field);
+
     // Semantics: an editable field declares `set_text`, so a test can type into it by name and a reader can find it.
     if (!field.disabled and name.len > 0) {
         semantics.registerAt(@src(), .{
@@ -702,6 +713,18 @@ pub fn textField(field: *Field) void {
 
 // How many lines of a multiline field are drawn: a buffer is bounded by its own length, but a frame's command stream is not free.
 pub const max_lines: usize = 512;
+
+// The Clay id of a line's row: what an enclosing scroll looks up to keep the caret's line in view.
+pub fn lineBoxId(name: []const u8, line: usize) cl.ElementId {
+    return .IDI(name, lineBoxIndex(line));
+}
+
+// Scroll the field's container the least amount that shows the caret's line; the line's box is the previous frame's, like every geometry read.
+fn keepCaretVisible(field: *const Field) void {
+    const scroll_id = field.scroll_id orelse return;
+    const row = frame_mod.bounds(lineBoxId(field.name(), field.caretLine())) orelse return;
+    scroll_mod.ensureVisible(scroll_id, row.y, row.height);
+}
 
 // The Clay ids a multiline field's per-line boxes live under: one space each for the line, its selection and its caret.
 fn lineBoxIndex(line: usize) u32 {
@@ -1577,4 +1600,44 @@ test "an empty unfocused field draws its placeholder, and a draft replaces it" {
     const typed = try layoutCommands(declarePlaceholderField);
     try std.testing.expect(drawnRun(typed, "Filter requests") == null);
     try std.testing.expect(drawnRun(typed, "abc") != null);
+}
+
+var scroll_field: Field = .{
+    .id = .{ .text = "test-scroll-field" },
+    .multiline = true,
+    .scroll_id = "test-scroll-box",
+    .h = .{ .fixed = 200 },
+};
+
+fn declareScrollField(_: void) void {
+    textField(&scroll_field);
+}
+
+fn declareScrollBox() void {
+    scroll_mod.scroll(.{
+        .id = .{ .text = "test-scroll-box" },
+        .direction = .vertical,
+        .w = .{ .fixed = 300 },
+        .h = .{ .fixed = 100 },
+    }, {}, declareScrollField);
+}
+
+test "a multiline field in a scroll keeps the caret's line in view" {
+    scroll_field.bind();
+    scroll_field.setText("1\n2\n3\n4\n5\n6\n7\n8\n9\n10");
+    // The caret at the end is on line 9, five lines below the 100-point viewport.
+    scroll_field.editor.setCaret(scroll_field.editor.len, false);
+    frame_mod.ptr_down = false;
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    frame_mod.setFocus("test-scroll-field");
+
+    // Two frames: the first lays the line rows out, the second is what the scroll measures against.
+    var pass: usize = 0;
+    while (pass < 2) : (pass += 1) {
+        cl.beginLayout();
+        declareScrollBox();
+        _ = cl.endLayout();
+    }
+    try std.testing.expect(scroll_mod.view("test-scroll-box").y > 0);
+    try std.testing.expectEqual(@as(usize, 9), scroll_field.caretLine());
 }

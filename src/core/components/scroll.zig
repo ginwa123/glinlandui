@@ -116,6 +116,16 @@ pub fn view(id: []const u8) View {
     };
 }
 
+/// The least scroll that puts the rect `[y, y + h)` (window coordinates, e.g. a caret's line box) inside the viewport.
+pub fn ensureVisible(id: []const u8, y: f32, h: f32) void {
+    const el = cl.getElementData(cl.getElementId(id));
+    if (!el.found) return;
+    const bb = el.bounding_box;
+    if (y < bb.y) return scrollBy(id, 0, y - bb.y);
+    const over = (y + h) - (bb.y + bb.height);
+    if (over > 0) scrollBy(id, 0, over);
+}
+
 /// Programmatic scroll: nudge the container's scroll position directly (positive dy scrolls down, matching Wayland axis coords — negated internally for.
 pub fn scrollBy(id: []const u8, dx: f32, dy: f32) void {
     nudgeClamped(id, .both, dx, dy);
@@ -714,4 +724,45 @@ test "drag outside any container scrolls nothing" {
     dragFrame();
     const y1 = cl.getElementData(cl.getElementId("scroll-probe")).bounding_box.y;
     try std.testing.expectApproxEqAbs(h.y0, y1, 0.5);
+}
+
+var ensure_child_h: f32 = 400;
+
+fn declareEnsureChild(_: void) void {
+    cl.UI()(.{
+        .id = cl.getElementId("test-ensure-child"),
+        .layout = .{ .sizing = .{ .w = .grow, .h = .{ .type = .fixed, .size = .{ .minmax = .{ .min = ensure_child_h, .max = ensure_child_h } } } } },
+    })({});
+}
+
+fn declareEnsureBox() void {
+    scroll(.{
+        .id = .{ .text = "test-ensure" },
+        .direction = .vertical,
+        .w = .{ .fixed = 200 },
+        .h = .{ .fixed = 100 },
+    }, {}, declareEnsureChild);
+}
+
+test "ensureVisible scrolls the least amount that shows a rect, and nothing when it already does" {
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    beginScrollFrame();
+    cl.beginLayout();
+    declareEnsureBox();
+    _ = cl.endLayout();
+
+    // Already inside the viewport: nothing moves.
+    ensureVisible("test-ensure", 40, 20);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), view("test-ensure").y, 0.01);
+
+    // 20 points below the bottom edge: exactly that far, no more.
+    ensureVisible("test-ensure", 300, 20);
+    try std.testing.expectApproxEqAbs(@as(f32, 220), view("test-ensure").y, 0.01);
+
+    // A rect drawn above the viewport (content 30, scrolled by 220) scrolls back up to it.
+    ensureVisible("test-ensure", -190, 20);
+    try std.testing.expectApproxEqAbs(@as(f32, 30), view("test-ensure").y, 0.01);
+
+    // And an unknown container is a no-op rather than a crash.
+    ensureVisible("test-ensure-missing", 500, 20);
 }
