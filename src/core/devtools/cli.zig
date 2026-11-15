@@ -48,6 +48,10 @@ pub const Options = struct {
     action_count: usize = 0,
     // A `--do` value the parser did not understand: reported once, rather than silently ignored.
     bad_action: bool = false,
+    // The raw `--do` values, so a client can send the same text the headless run would have executed.
+    action_text: [max_actions][]const u8 = [_][]const u8{""} ** max_actions,
+    // Attach to a running app by the name it serves under, instead of running one here.
+    attach: ?[]const u8 = null,
     help: bool = false,
 };
 
@@ -75,9 +79,12 @@ pub fn parse(args: []const []const u8) Options {
             opts.app = v;
         } else if (argValue(a, "--shot", args, &i)) |v| {
             opts.shot = v;
+        } else if (argValue(a, "--attach", args, &i)) |v| {
+            opts.attach = v;
         } else if (argValue(a, "--do", args, &i)) |v| {
             if (parseAction(v)) |action| {
                 if (opts.action_count < max_actions) {
+                    opts.action_text[opts.action_count] = v;
                     opts.actions[opts.action_count] = action;
                     opts.action_count += 1;
                 }
@@ -267,6 +274,9 @@ pub const usage =
     \\  --depth=N           levels of children to print (default 16)
     \\  --pick=X,Y          the node under one point, not the whole tree
     \\  --do=ACTION         act on a component before the tree is printed; repeatable, in order
+    \\  --attach=NAME       talk to a RUNNING app that serves NAME (needs GLIN_DEVTOOLS=1), instead of
+    \\                      running one here; --json, --pick and the first --do choose the request
+    \\  --devices           list the apps that are serving right now
     \\  -h, --help          this text
     \\
     \\ACTIONS, each `kind:TAG` or `kind:TAG:ARGS` (TAG is the id the tree prints, or @x,y):

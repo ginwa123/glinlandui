@@ -42,6 +42,9 @@ entries=(
   "clipboard|mac|src/mac/clipboard.zig|max_bytes read write"
   "clipboard|portable|src/core/clipboard_portable.zig|max_bytes read write"
 
+  "devtools|linux|src/linux/devtools_service.zig|Handle open request socketPath"
+  "devtools|portable|src/core/devtools_service_portable.zig|Handle open request"
+
   "text|linux|src/linux/text.zig|TextExtent ResolveFontError resolveFont fontCandidates readFontBytes estimatorExtent hashMeasureKey extentCacheReset measureText"
   "text|mac|src/mac/text.zig|TextExtent ResolveFontError resolveFont fontCandidates readFontBytes estimatorExtent hashMeasureKey extentCacheReset measureText"
   "text|windows|src/windows/text.zig|TextExtent ResolveFontError resolveFont fontCandidates readFontBytes estimatorExtent hashMeasureKey extentCacheReset measureText"

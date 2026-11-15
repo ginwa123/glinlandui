@@ -1038,6 +1038,30 @@ a user does — nothing is faked, the app's own handlers run.
 `TAG` is the id the tree prints; `@x,y` addresses a point with no tag. A tag that is not found fails with the tag named
 and a non-zero exit, so a script knows its selector was wrong rather than the app.
 
+### Attaching to a running app
+
+Point `--attach` at an app that serves itself and the request goes to *that* process: the tree is the window you are
+looking at, and an action changes it on screen.
+
+```sh
+GLIN_DEVTOOLS=1 ./zig-out/bin/glinlandui-todo &     # the app serves itself
+zig build inspect -- --devices                      # todo
+zig build inspect -- --attach=todo                  # its live tree
+zig build inspect -- --attach=todo --do=type:todo.field:from cli
+zig build inspect -- --attach=todo --do=key:28      # a new row appears, on screen
+```
+
+`--json`, `--pick` and the first `--do` choose the request; one request per connection, one connection per invocation.
+The socket is `$XDG_RUNTIME_DIR/glinlandui-<name>.sock` (or `/tmp` when there is no runtime dir), so it is per-user,
+needs no port, and a file a killed app left behind is replaced on the next start. With `GLIN_DEVTOOLS` unset there is
+no socket, no thread and no pipe: `serve` returns null, and the frame loop's two hooks are a null check.
+
+The service runs **in the app's own frame loop** — a request fires before the app declares, and its answer is
+serialised after the tree is resolved — so the socket thread only ever moves bytes and never touches Host or GL state.
+Linux has the wake path (the window polls the service's pipe beside the Wayland display fd, so a request wakes an idle
+window). macOS and Windows report the service as unavailable until their own wake hook lands; the library still
+compiles and runs there.
+
 ### Reading the tree from your own code
 
 `glinlandui.devtools.snapshot.Snapshot.build(w, h)` returns the nodes of the last resolved frame as the same `Item`

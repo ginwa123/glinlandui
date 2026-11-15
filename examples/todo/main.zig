@@ -5,7 +5,6 @@ const glinlandui = @import("glinlandui");
 const todo = @import("todo");
 
 pub fn main(init: std.process.Init) !void {
-    _ = init;
     const gpa = std.heap.page_allocator;
 
     var app = todo.app.App{};
@@ -26,5 +25,10 @@ pub fn main(init: std.process.Init) !void {
     // The devtool: right-click anywhere for this app's component tree. One line, and the app itself is untouched.
     _ = glinlandui.devtools.attach(gpa, &host);
     window.delegate = host.delegate();
+    // With `GLIN_DEVTOOLS=1` a client can also attach over a socket and drive this window; without it this is one null check.
+    if (glinlandui.devtools.serve(gpa, init.io, "todo")) |svc| {
+        svc.attach(&host);
+        glinlandui.devtools.wakeWindow(&window, svc.wakeFd());
+    }
     try window.run();
 }

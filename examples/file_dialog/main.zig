@@ -10,7 +10,6 @@ const WIN_W: u32 = 520;
 const WIN_H: u32 = 300;
 
 pub fn main(init: std.process.Init) !void {
-    _ = init;
 
     // `--check` is an environment variable because `zig build run-file-dialog` forwards args to the binary, so a flag would have to survive that indirection too.
     if (std.c.getenv("GLIN_FILE_DIALOG_CHECK") != null) return check();
@@ -33,6 +32,11 @@ pub fn main(init: std.process.Init) !void {
         .min_width = WIN_W,
         .min_height = WIN_H,
     });
+    // With `GLIN_DEVTOOLS=1` a client can also attach over a socket and drive this window; without it this is one null check.
+    if (glinlandui.devtools.serve(alloc, init.io, "file-dialog")) |svc| {
+        svc.attach(&host);
+        glinlandui.devtools.wakeWindow(&window, svc.wakeFd());
+    }
     window.delegate = host.delegate();
 
     window.run() catch |err| {

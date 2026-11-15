@@ -623,6 +623,8 @@ pub const Window = struct {
     needs_draw: bool = true,
     /// A wl_surface_frame request is outstanding (compositor owes us a frame.done).
     frame_pending: bool = false,
+    /// An extra fd to poll beside the display: the devtool service's wake pipe, so a request wakes an idle window. Null when no service is up.
+    wake_fd: ?std.posix.fd_t = null,
 
     // ---- Listener storage (MUST outlive the proxy) ---- wl_proxy_add_listener does NOT copy the listener struct - it keeps the caller's pointer.
     pointer_listener: c.struct_wl_pointer_listener = pointerListener(),
@@ -779,8 +781,34 @@ pub const Window = struct {
         self.frame_pending = true;
         // The frame request is surface state: it needs a commit to take effect (the pre-loop present already happened, so without this commit dispatch would.
         c.wl_surface_commit(surface);
+        // The display's own fd, so the loop can poll it together with the devtool wake pipe.
+        const display_fd = c.wl_display_get_fd(display);
         while (!self.quit) {
-            if (c.wl_display_dispatch(display) < 0) break;
+            const claimed = c.wl_display_prepare_read(display) == 0;
+            if (!claimed) {
+                if (c.wl_display_dispatch_pending(display) < 0) break;
+            }
+            _ = c.wl_display_flush(display);
+            var fds = [2]std.posix.pollfd{
+                .{ .fd = display_fd, .events = std.posix.POLL.IN, .revents = 0 },
+                .{ .fd = self.wake_fd orelse -1, .events = std.posix.POLL.IN, .revents = 0 },
+            };
+            const watched = if (self.wake_fd != null) fds[0..2] else fds[0..1];
+            const ready = std.posix.poll(watched, -1) catch 0;
+            if (ready > 0 and fds[1].revents != 0) {
+                // Drain the pipe: one byte per request, and the frame below is the one that answers it.
+                var drain: [64]u8 = undefined;
+                _ = std.posix.read(self.wake_fd.?, &drain) catch {};
+                self.needs_draw = true;
+            }
+            if (claimed) {
+                if (ready > 0 and fds[0].revents != 0) {
+                    if (c.wl_display_read_events(display) < 0) break;
+                } else {
+                    c.wl_display_cancel_read(display);
+                }
+            }
+            if (c.wl_display_dispatch_pending(display) < 0) break;
             // Test harness: every iteration is dirty (continuous drawing).
             if (max_frames != null) self.needs_draw = true;
             // Delegate-driven quit (e.g.

@@ -47,6 +47,20 @@ else switch (builtin.os.tag) {
     else => @import("core/clipboard_portable.zig"),
 };
 
+/// The devtool service: what lets a CLI attach to a running app over a unix socket and drive it. Linux first; every other host reports it as unavailable.
+pub const devtools_service = if (builtin.is_test)
+    @import("core/devtools_service_portable.zig")
+else switch (builtin.os.tag) {
+    .linux => @import("linux/devtools_service.zig"),
+    else => @import("core/devtools_service_portable.zig"),
+};
+
+/// Whether this process was started to be inspected: `GLIN_DEVTOOLS=1` costs a null check and nothing else.
+pub fn devtoolsRequested() bool {
+    if (builtin.cpu.arch.isWasm()) return false;
+    return std.c.getenv("GLIN_DEVTOOLS") != null;
+}
+
 /// The text backend.
 pub const text_impl = if (builtin.is_test)
     @import("core/text_portable.zig")

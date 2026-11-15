@@ -61,6 +61,11 @@ pub fn main(init: std.process.Init) !void {
     defer host.deinit();
     // The devtool: right-click anywhere for this app's component tree. One line, and the app itself is untouched.
     _ = glinlandui.devtools.attach(gpa, &host);
+    // With `GLIN_DEVTOOLS=1` a client can also attach over a socket and drive this window; without it this is one null check.
+    if (glinlandui.devtools.serve(gpa, init.io, "catalog")) |svc| {
+        svc.attach(&host);
+        glinlandui.devtools.wakeWindow(&window, svc.wakeFd());
+    }
     window.delegate = host.delegate();
     try window.run();
 }

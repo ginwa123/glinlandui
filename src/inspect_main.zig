@@ -44,6 +44,10 @@ pub fn main(init: std.process.Init) !void {
     var opts = devtools.cli.parse(args);
     if (opts.help) return print(io, devtools.cli.usage);
 
+    // Two modes: talk to a running app that serves itself, or run one here.
+    if (opts.attach) |name| return attachTo(io, opts, name);
+    if (hasArg(args, "--devices")) return listDevices(io);
+
     const spec = find(opts.app) orelse {
         std.debug.print("glinlandui-inspect: no app named '{s}'.\n\n", .{opts.app});
         return print(io, devtools.cli.usage);
@@ -70,6 +74,40 @@ pub fn main(init: std.process.Init) !void {
     var buf: [8192]u8 = undefined;
     var out = std.Io.File.stdout().writer(io, &buf);
     try devtools.cli.run(gpa, opts, app.ctx, app.root, &out.interface);
+    try out.interface.flush();
+}
+
+// One request to a running app: the flags choose the question, and the answer goes to stdout verbatim.
+fn attachTo(io: std.Io, opts: devtools.cli.Options, name: []const u8) !void {
+    var line_buf: [256]u8 = undefined;
+    const line = requestLine(opts, &line_buf);
+    var out_buf: [8192]u8 = undefined;
+    var out = std.Io.File.stdout().writer(io, &out_buf);
+    devtools.request(io, name, line, &out.interface) catch |err| {
+        std.debug.print("glinlandui-inspect: {s}: {s} (is it running with GLIN_DEVTOOLS=1?)\n", .{ name, @errorName(err) });
+        std.process.exit(2);
+    };
+    try out.interface.flush();
+}
+
+fn requestLine(opts: devtools.cli.Options, buf: []u8) []const u8 {
+    if (opts.action_count > 0) return std.fmt.bufPrint(buf, "do {s}", .{opts.action_text[0]}) catch "tree";
+    if (opts.pick) |p| return std.fmt.bufPrint(buf, "pick {d},{d}", .{ p.x, p.y }) catch "tree";
+    if (opts.json) return "json";
+    return "tree";
+}
+
+// A running app is one that answers: there is no registry to read, so each name is asked a one-line question.
+fn listDevices(io: std.Io) !void {
+    const names = [_][]const u8{ "demo", "calculator", "todo", "catalog", "file-dialog", "lazy-scroll" };
+    var buf: [1024]u8 = undefined;
+    var out = std.Io.File.stdout().writer(io, &buf);
+    for (names) |name| {
+        var sink_buf: [1024]u8 = undefined;
+        var sink = std.Io.Writer.fixed(&sink_buf);
+        devtools.request(io, name, "pick 0,0", &sink) catch continue;
+        try out.interface.print("{s}\n", .{name});
+    }
     try out.interface.flush();
 }
 
@@ -126,6 +164,13 @@ fn prepareLazyScroll(alloc: std.mem.Allocator, io: std.Io) !Prepared {
     app.* = .{ .io = io };
     app.start();
     return .{ .ctx = app, .root = lazy_scroll.app.App.content };
+}
+
+fn hasArg(args: []const []const u8, flag: []const u8) bool {
+    for (args) |a| {
+        if (std.mem.eql(u8, a, flag)) return true;
+    }
+    return false;
 }
 
 fn print(io: std.Io, text: []const u8) !void {

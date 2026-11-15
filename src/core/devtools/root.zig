@@ -1,16 +1,57 @@
 // The devtool's public surface: one inspector to attach to a host, one snapshot to read a tree, one CLI to dump or photograph it.
 const std = @import("std");
 const cl = @import("zclay");
+const select = @import("../select.zig");
 const host_mod = @import("../host.zig");
 const testing = @import("../testing/root.zig");
 const software = @import("../render_software.zig");
 const inspector_mod = @import("inspector.zig");
 const snapshot_mod = @import("snapshot.zig");
 const cli_mod = @import("cli.zig");
+const service_mod = @import("service.zig");
 
 pub const Inspector = inspector_mod.Inspector;
 pub const snapshot = snapshot_mod;
 pub const cli = cli_mod;
+pub const Service = service_mod.Service;
+
+// A live devtool session: the request queue a running app drains, and the transport that fills it.
+pub const Attachment = struct {
+    service: Service = .{},
+    handle: select.DevtoolsService.Handle,
+
+    // Hand the app's Host the request queue: from here the frame loop fires a waiting action and answers it.
+    pub fn attach(self: *Attachment, host: *host_mod.Host) void {
+        host.service = self.service.hooks();
+    }
+
+    // The fd a window polls to notice a request while it is idle, on a backend that has one.
+    pub fn wakeFd(self: *Attachment) ?i32 {
+        return self.handle.wakeFd();
+    }
+};
+
+// Serve this app to a devtool client, or nothing: without `GLIN_DEVTOOLS=1` this is one null check, and no socket, thread or pipe ever exists.
+pub fn serve(alloc: std.mem.Allocator, io: std.Io, name: []const u8) ?*Attachment {
+    if (!select.devtoolsRequested()) return null;
+    const att = alloc.create(Attachment) catch return null;
+    att.service = .{};
+    att.handle = select.DevtoolsService.open(alloc, io, name, &att.service) orelse {
+        alloc.destroy(att);
+        return null;
+    };
+    return att;
+}
+
+// Ask a running app one question over its socket; the answer is written to `out` verbatim. One request per connection.
+pub fn request(io: std.Io, name: []const u8, line: []const u8, out: *std.Io.Writer) !void {
+    return select.DevtoolsService.request(io, name, line, out);
+}
+
+// Give a window the fd its loop should poll, on the backends that have one; a backend without the field ignores it.
+pub fn wakeWindow(window: anytype, fd: ?i32) void {
+    if (@hasField(@TypeOf(window.*), "wake_fd")) window.wake_fd = fd;
+}
 
 // Attach the devtool to a host: right-click now inspects, and every frame resolves the tree the devtool reads.
 pub fn attach(alloc: std.mem.Allocator, host: *host_mod.Host) ?*Inspector {
