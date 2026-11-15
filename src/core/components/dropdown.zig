@@ -89,6 +89,8 @@ pub const DropdownProps = struct {
     click_z: i16 = 0,
     /// Overlay mode: when true + anchor_id set, the field + list (+ footer) render in a floating container anchored under IDI(anchor_id, anchor_index + 1).
     overlay: bool = false,
+    /// Anchor named by a TEXT id (a standalone trigger): app code cannot build a Clay IDI id, only a list can.
+    anchor_text: ?[]const u8 = null,
     /// Anchor row list base id (e.g.
     anchor_id: ?[]const u8 = null,
     /// Item index inside the anchor list (0 for single-row header lists).
@@ -125,9 +127,14 @@ pub fn dropdown(
         .role = .dropdown,
         .flags = .{ .enabled = !props.disabled },
     });
-    if (props.overlay and props.anchor_id != null) {
-        const aid = props.anchor_id.?;
-        const parent_id = cl.ElementId.IDI(aid, @as(u32, @intCast(props.anchor_index + 1))).id;
+    const anchor: ?u32 = if (props.anchor_text) |name|
+        cl.getElementId(name).id
+    else if (props.anchor_id) |aid|
+        cl.ElementId.IDI(aid, @as(u32, @intCast(props.anchor_index + 1))).id
+    else
+        null;
+    if (props.overlay and anchor != null) {
+        const parent_id = anchor.?;
         cl.UI()(.{
             .id = .ID(props.overlay_id),
             .floating = .{
@@ -493,6 +500,54 @@ fn frameY(declare_fn: *const fn () void, base: []const u8) !f32 {
     declare_fn();
     _ = cl.endLayout();
     return cl.getElementData(cl.ElementId.IDI(base, 1)).bounding_box.y;
+}
+
+fn declareTextAnchor() void {
+    cl.UI()(.{
+        .id = .ID("test-text-anchor"),
+        .layout = .{ .direction = .left_to_right, .sizing = .{ .w = .fixed(120), .h = .fixed(32) } },
+        .background_color = .{ 30, 30, 30, 255 },
+    })({});
+}
+
+fn declareTextAnchorOnly() void {
+    cl.UI()(.{
+        .id = .ID("test-text-frame"),
+        .layout = .{ .direction = .top_to_bottom, .sizing = .{ .w = .fixed(400), .h = .fit }, .child_gap = 8 },
+    })({
+        declareTextAnchor();
+        declareAfterRow();
+    });
+}
+
+fn declareTextAnchorFrame() void {
+    cl.UI()(.{
+        .id = .ID("test-text-frame"),
+        .layout = .{ .direction = .top_to_bottom, .sizing = .{ .w = .fixed(400), .h = .fit }, .child_gap = 8 },
+    })({
+        declareTextAnchor();
+        dropdown(.{
+            .field_id = "test-text-field",
+            .list_id = "test-text-list",
+            .overlay = true,
+            .anchor_text = "test-text-anchor",
+            .overlay_id = "test-text-float",
+        }, demo_slice[0..2], Ctx{
+            .kinds = demo_kinds_slice,
+            .fg = Color.rgb(0xe8, 0xe8, 0xe8),
+        }, renderRow);
+        declareAfterRow();
+    });
+}
+
+test "dropdown overlay anchored to a text id floats under it and shifts nothing" {
+    const y_plain = try frameY(declareTextAnchorOnly, "test-overlay-after");
+    const y_open = try frameY(declareTextAnchorFrame, "test-overlay-after");
+    try std.testing.expectEqual(y_plain, y_open);
+
+    const anchor = cl.getElementData(cl.getElementId("test-text-anchor")).bounding_box;
+    const card = cl.getElementData(cl.getElementId("test-text-float")).bounding_box;
+    try std.testing.expect(card.y >= anchor.y + anchor.height);
 }
 
 test "dropdown overlay floats without shifting following rows" {

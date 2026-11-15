@@ -443,8 +443,8 @@ fn rectColorForId(cmds: []cl.RenderCommand, id: u32) ?cl.Color {
     return null;
 }
 
-/// Row identity for item i (mirrors list()'s +1 IDI offset).
-fn rowId(base: []const u8, i: usize) cl.ElementId {
+/// Row identity for item i (mirrors list()'s +1 IDI offset), so a test or a gesture can address a row.
+pub fn rowId(base: []const u8, i: usize) cl.ElementId {
     return cl.ElementId.IDI(base, @as(u32, @intCast(i + 1)));
 }
 
