@@ -261,6 +261,50 @@ pub const Surface = struct {
             return;
         }
 
+        // A rounded box's interior is fully covered, so the SDF only has to run on the border band: a 1920x1000 box at r=8 is ~52k SDF pixels instead of 1.9M.
+        const half_min = @min(w, h) * 0.5;
+        const rmax: f32 = @min(@max(@max(radius[0], radius[1]), @max(radius[2], radius[3])), half_min);
+        const is_plain_fill = mode == 0 and border_w <= 0 and rmax > 0;
+        const inset: i64 = if (is_plain_fill) @as(i64, @intFromFloat(@ceil(rmax))) + 1 else 0;
+        const core_x0 = x0 + inset;
+        const core_x1 = x1 - inset;
+        const core_y0 = y0 + inset;
+        const core_y1 = y1 - inset;
+        const has_core = is_plain_fill and core_x0 <= core_x1 and core_y0 <= core_y1;
+
+        // The core is one flat colour at full coverage, so it is stores rather than a blend: identical bytes, a fraction of the work.
+        if (has_core) {
+            const cr8 = to8(rgb[0]);
+            const cg8 = to8(rgb[1]);
+            const cb8 = to8(rgb[2]);
+            const ca8 = to8(alpha);
+            var cx_lo = core_x0;
+            var cx_hi = core_x1;
+            var cy_lo = core_y0;
+            var cy_hi = core_y1;
+            if (self.scissor) |sc| {
+                cx_lo = @max(cx_lo, sc.x0);
+                cx_hi = @min(cx_hi, sc.x1 - 1);
+                cy_lo = @max(cy_lo, sc.y0);
+                cy_hi = @min(cy_hi, sc.y1 - 1);
+            }
+            var fy: i64 = cy_lo;
+            while (fy <= cy_hi and cx_lo <= cx_hi) : (fy += 1) {
+                var fx: i64 = cx_lo;
+                if (ca8 >= 255) {
+                    while (fx <= cx_hi) : (fx += 1) {
+                        const i = @as(usize, @intCast(fy)) * self.width * 4 + @as(usize, @intCast(fx)) * 4;
+                        self.pixels[i] = cr8;
+                        self.pixels[i + 1] = cg8;
+                        self.pixels[i + 2] = cb8;
+                        self.pixels[i + 3] = ca8;
+                    }
+                } else {
+                    while (fx <= cx_hi) : (fx += 1) self.blend(@intCast(fx), @intCast(fy), rgb, alpha);
+                }
+            }
+        }
+
         var py: i64 = y0;
         while (py <= y1) : (py += 1) {
             if (self.scissor) |s| {
@@ -271,6 +315,8 @@ pub const Surface = struct {
                 if (self.scissor) |s| {
                     if (ix < s.x0 or ix >= s.x1) continue;
                 }
+                // Fully covered and already written above, so the SDF has nothing to say about it.
+                if (has_core and ix >= core_x0 and ix <= core_x1 and py >= core_y0 and py <= core_y1) continue;
                 const vbx = (@as(f32, @floatFromInt(ix)) + 0.5) - x;
                 const vby = (@as(f32, @floatFromInt(py)) + 0.5) - y;
                 const a = fragRoundBox(vbx, vby, w, h, radius, mode, border_w);
