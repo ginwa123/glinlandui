@@ -953,10 +953,11 @@ floating window with the component tree: id, role and label per row, expandable 
 node's box, clip rectangle, z, actions and flags in the footer. `Escape` closes it, and the app underneath keeps
 running and staying clickable outside the window.
 
-The header's **pick** button arms a picker, like a browser's element inspector: whatever the pointer is over is
-outlined and labelled in place — the deepest node under it, so a key inside a row names the key — and the next click
-opens that node in the window. The outline also appears while the right-click menu is up, so you can see what you are
-about to inspect before you choose it.
+The outline is how the two halves stay connected, and it works in both directions. Click a row in the tree and that
+component is outlined and labelled in the app, so a name in the list is a place on the screen. The header's **pick**
+button arms the other direction, like a browser's element inspector: whatever the pointer is over is outlined — the
+deepest node under it, so a key inside a row names the key — and the next click opens that node in the window. The
+outline also appears while the right-click menu is up, so you see what you are about to inspect before you choose it.
 
 The tree holds every widget that registers semantics (`button`, `input`, `list`, `tree`, `scroll`, …), every container
 declared with `box`, and the parent of each. Text runs are not nodes: a Clay text element has no id, so it has no box a

@@ -167,11 +167,9 @@ pub const Inspector = struct {
             }
         }
         self.flatten();
-        // What the outline frames: the node the menu was summoned over, or the one under the picker's pointer.
-        const outlined: ?usize = if (self.picking) self.hover_index else self.picked;
-        if (self.menu != null or self.picking) {
-            if (outlined) |i| self.declareOutline(i);
-        }
+        // The outline: the picker's node, else the menu's, else the row that is selected — so a row click lights up its component in the app.
+        const outlined: ?usize = if (self.picking) self.hover_index else if (self.menu != null) self.picked else if (self.open) self.selected else null;
+        if (outlined) |i| self.declareOutline(i);
         if (self.menu) |m| self.declareMenu(m);
         if (self.open) self.declarePanel();
         if (self.picking) self.declarePickCatcher();
@@ -775,4 +773,32 @@ test "escape stands the picker down before it closes anything else" {
     try std.testing.expect(!h.insp.picking);
     // The app is not closed by the key, and the devtool has nothing else to close.
     try std.testing.expect(!h.host.isQuit());
+}
+
+test "clicking a tree row outlines the component that row names" {
+    var h = Harness{};
+    try h.init();
+    h.host.frame(480, 360);
+
+    // Right-click the button and open the window on it: the row for it is selected, so the outline is already on it.
+    h.rightClick(20, 20);
+    h.host.frame(480, 360);
+    const menu_item = centreOf(menuId());
+    h.click(menu_item.x, menu_item.y);
+    h.host.frame(480, 360);
+    const btn = cl.getElementData(cl.getElementId("dev.btn")).bounding_box;
+    try std.testing.expectApproxEqAbs(btn.x, cl.getElementData(outlineId()).bounding_box.x, 0.5);
+    try std.testing.expectApproxEqAbs(btn.width, cl.getElementData(outlineId()).bounding_box.width, 0.5);
+
+    // Click the ROOT's row: the outline moves to the container, which is what that row names.
+    const root = @as(usize, @intCast(h.insp.snapshot.roots[0]));
+    const row = centreOf(rowId(@intCast(root)));
+    h.click(row.x, row.y);
+    h.host.frame(480, 360);
+    try std.testing.expectEqualStrings("dev.root", h.insp.snapshot.items[h.insp.selected.?].tag);
+    const outlined = cl.getElementData(outlineId()).bounding_box;
+    try std.testing.expectApproxEqAbs(@as(f32, 0), outlined.x, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f32, 480), outlined.width, 0.5);
+    // The badge names the selected node too, not only the picker's.
+    try std.testing.expect(cl.getElementData(outlineBadgeId()).found);
 }
