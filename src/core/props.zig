@@ -80,11 +80,6 @@ pub const Len = struct {
         return @intFromFloat(@round(@max(self.px, 0)));
     }
 
-    // An integer length, for a consumer that rounds once at its own edge (a scrollbar, a virtualised row).
-    pub fn round(self: Len) f32 {
-        return @round(self.px);
-    }
-
     // This length times a factor — a hover lift, a scale factor, half of a box.
     pub fn scaled(self: Len, factor: f32) Len {
         return .{ .px = self.px * factor };
@@ -92,10 +87,6 @@ pub const Len = struct {
 
     pub fn add(a: Len, b: Len) Len {
         return .{ .px = a.px + b.px };
-    }
-
-    pub fn max(a: Len, b: Len) Len {
-        return .{ .px = @max(a.px, b.px) };
     }
 
     pub fn isNone(self: Len) bool {
@@ -177,16 +168,6 @@ pub const Pad = struct {
 
     pub fn sides(top: f32, right: f32, bottom: f32, left: f32) Pad {
         return .{ .top = Len.of(top), .right = Len.of(right), .bottom = Len.of(bottom), .left = Len.of(left) };
-    }
-
-    // The horizontal padding a consumer subtracts from a width, in points.
-    pub fn horizontal(self: Pad) Len {
-        return Len{ .px = self.left.px + self.right.px };
-    }
-
-    // The vertical padding a consumer subtracts from a height, in points.
-    pub fn vertical(self: Pad) Len {
-        return Len{ .px = self.top.px + self.bottom.px };
     }
 
     pub fn clay(self: Pad) cl.Padding {
@@ -288,7 +269,6 @@ test "a Len is points, and rounds to the whole points Clay's spacing takes" {
 
 test "a Len combines without a consumer reaching for its payload" {
     try std.testing.expectEqual(@as(f32, 12), Len.of(8).add(Len.of(4)).pts());
-    try std.testing.expectEqual(@as(f32, 16), Len.max(Len.of(8), Len.of(16)).pts());
     try std.testing.expectEqual(@as(f32, 5), Len.of(10).scaled(0.5).pts());
     try std.testing.expect(Len.none.isNone());
     try std.testing.expect(!Len.of(1).isNone());
@@ -327,9 +307,7 @@ test "Pad has one value per side, and the two shortcuts agree with it" {
     try std.testing.expectEqual(@as(f32, 6), b.left.pts());
     try std.testing.expectEqual(@as(f32, 6), b.right.pts());
     try std.testing.expectEqual(@as(f32, 0), (Pad{}).top.pts());
-    // The two sums a consumer subtracts from a box, and Clay's own four u16 sides.
-    try std.testing.expectEqual(@as(f32, 12), Pad.axes(2, 6).horizontal().pts());
-    try std.testing.expectEqual(@as(f32, 4), Pad.axes(2, 6).vertical().pts());
+    // Clay's own four u16 sides, rounded from the points the caller wrote.
     try std.testing.expectEqual(@as(u16, 6), Pad.axes(2, 6).clay().left);
     try std.testing.expectEqual(@as(u16, 2), Pad.axes(2, 6).clay().top);
 }
