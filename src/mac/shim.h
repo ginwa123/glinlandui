@@ -105,6 +105,12 @@ void glin_cocoa_window_run(GlinCocoaWindow *win, int max_frames);
 /// dimension, in which case the previous frame stays on screen.
 void glin_cocoa_present(GlinCocoaWindow *win, const unsigned char *bgra, int w, int h);
 
+/// The view the window draws into, so a Metal layer can be attached to it.
+void *glin_cocoa_view(GlinCocoaWindow *win);
+
+/// 1 once a Metal layer owns the view, so drawRect: stops painting the CPU bitmap over it.
+void glin_cocoa_set_metal(GlinCocoaWindow *win, int on);
+
 /// Start or stop the animation pump: a timer at the display's refresh rate that asks the view to redraw.
 ///
 /// AppKit only draws when something asks it to, so an app with its own animation (a scroll that moves every frame) has

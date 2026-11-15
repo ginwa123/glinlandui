@@ -85,6 +85,13 @@ pub fn build(b: *std.Build) void {
             // `-Werror` is load-bearing, not style.
             .flags = &.{"-Werror"},
         });
+        // The Metal renderer: one Objective-C TU plus the two frameworks it needs.
+        mod.addCSourceFile(.{
+            .file = b.path("src/mac/metal.m"),
+            .flags = &.{"-Werror"},
+        });
+        mod.linkFramework("Metal", .{});
+        mod.linkFramework("QuartzCore", .{});
         mod.linkFramework("AppKit", .{});
         mod.linkFramework("Foundation", .{});
         mod.linkFramework("CoreGraphics", .{});

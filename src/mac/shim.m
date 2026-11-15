@@ -85,6 +85,10 @@ struct GlinCocoaWindow {
     int ctrl_down;
     int alt_down;
     int cmd_down;
+
+    /// 1 once a Metal layer owns the view: the frame is already on screen, so
+    /// drawRect: must not composite the CPU bitmap over it.
+    int use_metal;
 };
 
 /// The characters AppKit composed for this event, or NULL when the key is not text.
@@ -290,6 +294,10 @@ enum {
     // the time we composite below.
     if (o->on_frame) o->on_frame(o->user);
 
+    // The GPU already presented this frame; drawing the CPU bitmap now would
+    // paint over it with stale pixels.
+    if (o->use_metal) return;
+
     NSGraphicsContext *nsctx = [NSGraphicsContext currentContext];
     if (!nsctx) return;
     CGContextRef cg = (CGContextRef)nsctx.CGContext;
@@ -472,6 +480,17 @@ void glin_cocoa_window_set_callbacks(GlinCocoaWindow *win,
     win->on_resize = on_resize;
     win->on_close = on_close;
     win->user = user;
+}
+
+void *glin_cocoa_view(GlinCocoaWindow *win) {
+    return (win != NULL) ? win->view : NULL;
+}
+
+void glin_cocoa_set_metal(GlinCocoaWindow *win, int on) {
+    if (win == NULL) {
+        return;
+    }
+    win->use_metal = on ? 1 : 0;
 }
 
 void glin_cocoa_present(GlinCocoaWindow *win, const unsigned char *bgra, int w, int h) {

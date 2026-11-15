@@ -144,6 +144,8 @@ pub const Surface = struct {
     // Set the color used by `clear` (0-255 RGBA; alpha forced opaque).
     pub fn setClearColor(self: *Surface, color: [4]f32) void {
         self.clear_rgb = color;
+        // A GPU backend has no Surface to read, so the frame's clear colour is mirrored here.
+        frame_clear_rgb = color;
     }
 
     pub fn putImage(self: *Surface, key: u64, img: Image) !void {
@@ -676,7 +678,19 @@ pub fn hasGlyphFont() bool {
     return text_face.font() != null;
 }
 
-// The device-pixel scale the surface is rendered at: 2.0 on a Retina display, 1.0 elsewhere.
+// The clear colour of the most recent frame, mirrored so a GPU backend clears to the same pixels.
+var frame_clear_rgb: [4]f32 = .{ 0, 0, 0, 255 };
+
+/// The colour a GPU backend should clear to, in the same 0-255 (or 0-1) range `setClearColor` accepts.
+pub fn currentClearColor() [4]f32 {
+    return normalizeColor(frame_clear_rgb);
+}
+
+/// Normalize a colour to 0..1 for a backend whose shader wants that range.
+pub fn normalizeColorPublic(color: [4]f32) [4]f32 {
+    return normalizeColor(color);
+}
+
 var render_scale: f32 = 1.0;
 
 // Set the device scale. Values at or below zero are ignored.

@@ -9,6 +9,7 @@ const adapter = @import("adapter.zig");
 const input_macos = @import("input.zig");
 const present = @import("present.zig");
 const soft = @import("../core/render_software.zig");
+const metal_render = @import("renderer.zig");
 const frame_mod = @import("../core/frame.zig");
 const text_editor = @import("../core/text_editor.zig");
 
@@ -111,6 +112,9 @@ pub const Window = struct {
         ) orelse return error.NoWindowServer;
         self.handle = handle;
         defer self.handle = null;
+
+        // Hand the renderer the view; it builds its Metal layer on the first frame and reports when the GPU is live.
+        metal_render.attachView(c.glin_cocoa_view(handle));
 
         c.glin_cocoa_window_set_callbacks(
             handle,
@@ -265,6 +269,11 @@ pub const Window = struct {
     // Copy the surface the delegate just drew into the shim's bitmap.
     fn presentFrame(self: *Window) void {
         const handle = self.handle orelse return;
+        // The GPU already presented this frame, and there is no CPU surface to blit.
+        if (metal_render.isActive()) {
+            c.glin_cocoa_set_metal(handle, 1);
+            return;
+        }
         const surface = soft.currentSurface() orelse return;
         if (!present.blitSizeValid(surface.width, surface.height)) return;
 
