@@ -918,8 +918,7 @@ test "every node names the component that declared it" {
 
     const snap = Snapshot.build(480, 360);
     const btn = snap.find(cl.getElementId("dev.btn").id).?;
-    // The path Zig reports for the module the component lives in, with the line that declared the node.
-    // The file Zig reports and the line it reports, whichever separator the host puts between them.
+    // The file and line Zig reports for the component, whichever separator the host puts between them.
     try std.testing.expect(std.mem.indexOf(u8, btn.source, "button.zig:") != null);
     const root = snap.find(cl.getElementId("dev.root").id).?;
     try std.testing.expect(std.mem.indexOf(u8, root.source, "box.zig:") != null);
