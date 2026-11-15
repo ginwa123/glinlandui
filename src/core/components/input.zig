@@ -319,7 +319,7 @@ pub fn handleKey(buf: []u8, len: *usize, st: *EditState, mods: Mods, evdev: u32,
         KEY_ENTER => return .confirm,
         else => {},
     }
-    // Ctrl held: only Ctrl+A selects; every other Ctrl combo inserts nothing (no clipboard in this environment — never garbage-type).
+    // Ctrl held: only Ctrl+A selects here, and every other combo inserts nothing. Copy/cut/paste live in `dispatchKey`, which owns the field's clipboard.
     if (mods.ctrl) {
         if (keyChar(evdev, false)) |c| {
             if (c == 'a') {
@@ -382,6 +382,8 @@ pub const Field = struct {
     on_focus: prop.Click = .{},
     // Measures a run with the font that draws the field. The engine's text backend is that font.
     measure: *const fn ([]const u8, u16) f32 = text_backend.runWidth,
+    // Copy, cut and paste: the system clipboard unless a caller (or a test) hands in its own.
+    clipboard: Clipboard = .{},
 
     // ---- the state it owns ----
     buf: [max_field_len]u8 = undefined,
@@ -494,6 +496,34 @@ pub const SubmitFn = ?*const fn (?*anyopaque, []const u8) bool;
 // How much draft a field owns. An app that needs more binds a bigger buffer with `bindTo`.
 pub const max_field_len: usize = 256;
 
+// The most a single paste can carry: the clipboard is read into one stack buffer, and a longer run is truncated.
+pub const paste_max: usize = 64 * 1024;
+
+// Where a field's copy, cut and paste go: the system clipboard by default, a scripted one in a test.
+pub const Clipboard = struct {
+    ctx: ?*anyopaque = null,
+    read_fn: *const fn (?*anyopaque, []u8) []const u8 = platformRead,
+    write_fn: *const fn (?*anyopaque, []const u8) void = platformWrite,
+
+    // The pasteboard's text, copied into `buf`; empty when it holds no text.
+    pub fn read(self: Clipboard, buf: []u8) []const u8 {
+        return self.read_fn(self.ctx, buf);
+    }
+
+    // Replace the pasteboard's text.
+    pub fn write(self: Clipboard, text: []const u8) void {
+        self.write_fn(self.ctx, text);
+    }
+};
+
+fn platformRead(_: ?*anyopaque, buf: []u8) []const u8 {
+    return @import("../select.zig").Clipboard.read(buf);
+}
+
+fn platformWrite(_: ?*anyopaque, text: []const u8) void {
+    @import("../select.zig").Clipboard.write(text);
+}
+
 // The field that owns the keyboard this frame: the engine types into it, so the app never routes a key.
 var active: ?*Field = null;
 
@@ -529,6 +559,15 @@ pub fn dispatchKey(mods: Mods, keycode: u32) bool {
         _ = field.submit();
         return true;
     }
+    // Copy, cut and paste are the field's: a person presses them, so an app should not have to wire them.
+    if (mods.shortcut()) {
+        switch (keycode) {
+            text_editor.KEY_C => return copyText(field),
+            text_editor.KEY_X => return cutText(field),
+            text_editor.KEY_V => return pasteText(field),
+            else => {},
+        }
+    }
     var before: [max_field_len]u8 = undefined;
     const before_len = field.editor.len;
     const n = @min(before_len, before.len);
@@ -542,6 +581,32 @@ pub fn dispatchKey(mods: Mods, keycode: u32) bool {
 fn changed(before: []const u8, before_len: usize, after: []const u8) bool {
     if (after.len != before_len) return true;
     return !std.mem.eql(u8, before, after[0..before.len]);
+}
+
+// Copy the selection: the pasteboard copies at once, so it is handed the draft's own bytes and nothing is allocated.
+fn copyText(field: *Field) bool {
+    const span = field.editor.caret.selection() orelse return false;
+    if (span.end <= span.start) return false;
+    field.clipboard.write(field.editor.buf[span.start..span.end]);
+    return true;
+}
+
+// Cut: copy, then delete, which the field reports like any other edit.
+fn cutText(field: *Field) bool {
+    if (!copyText(field)) return false;
+    if (!field.editor.deleteSelection()) return false;
+    field.report();
+    return true;
+}
+
+// Paste: one run from the clipboard, replacing a selection, reported as one edit.
+fn pasteText(field: *Field) bool {
+    var buf: [paste_max]u8 = undefined;
+    const text = field.clipboard.read(&buf);
+    if (text.len == 0) return false;
+    if (text_editor.handleText(&field.editor, text) == .ignored) return false;
+    field.report();
+    return true;
 }
 
 // Anchor the caret on the press, extend it while the button stays down, and release the drag when it comes up.
@@ -1010,6 +1075,97 @@ test "a click in a multiline field lands on the line and column under the pointe
     try std.testing.expectEqual(@as(usize, 8), field.caretOffsetAtPoint(0, line_h * 100));
     // Far right on the last line is its end.
     try std.testing.expectEqual(@as(usize, 13), field.caretOffsetAtPoint(500, line_h * 2.5));
+}
+
+// ---- clipboard: copy, cut and paste belong to the field, and a test supplies its own pasteboard ----
+
+var clip_buf: [max_field_len]u8 = undefined;
+var clip_len: usize = 0;
+
+fn fakeClipRead(_: ?*anyopaque, buf: []u8) []const u8 {
+    const n = @min(clip_len, buf.len);
+    @memcpy(buf[0..n], clip_buf[0..n]);
+    return buf[0..n];
+}
+
+fn fakeClipWrite(_: ?*anyopaque, text: []const u8) void {
+    clip_len = @min(text.len, clip_buf.len);
+    @memcpy(clip_buf[0..clip_len], text[0..clip_len]);
+}
+
+// A pasteboard that lives in this file, and starts empty.
+fn fakeClipboard() Clipboard {
+    clip_len = 0;
+    return .{ .read_fn = fakeClipRead, .write_fn = fakeClipWrite };
+}
+
+fn selectRange(field: *Field, start: usize, end: usize) void {
+    field.editor.caret = .{ .offset = end, .anchor = start };
+}
+
+test "Ctrl+C copies the selection, and Ctrl+V pastes it back as one edit" {
+    try startField("hello world");
+    test_field.clipboard = fakeClipboard();
+    selectRange(&test_field, 0, 5);
+    try std.testing.expect(dispatchKey(.{ .ctrl = true }, text_editor.KEY_C));
+    try std.testing.expectEqualStrings("hello", clip_buf[0..clip_len]);
+    // A copy leaves the draft exactly as it was.
+    try std.testing.expectEqualStrings("hello world", test_field.text());
+    try std.testing.expectEqual(@as(usize, 0), report_count);
+
+    test_field.editor.setCaret(test_field.editor.len, false);
+    try std.testing.expect(dispatchKey(.{ .ctrl = true }, text_editor.KEY_V));
+    try std.testing.expectEqualStrings("hello worldhello", test_field.text());
+    // One run, one report: not one per byte.
+    try std.testing.expectEqual(@as(usize, 1), report_count);
+    try std.testing.expectEqualStrings("hello worldhello", reported());
+}
+
+test "Ctrl+X moves the selection to the clipboard and out of the draft" {
+    try startField("hello world");
+    test_field.clipboard = fakeClipboard();
+    selectRange(&test_field, 6, 11);
+    try std.testing.expect(dispatchKey(.{ .ctrl = true }, text_editor.KEY_X));
+    try std.testing.expectEqualStrings("world", clip_buf[0..clip_len]);
+    try std.testing.expectEqualStrings("hello ", test_field.text());
+    try std.testing.expectEqualStrings("hello ", reported());
+}
+
+test "Cmd+V pastes too, and replaces the selection it lands on" {
+    try startField("abcdef");
+    test_field.clipboard = fakeClipboard();
+    // Seed the pasteboard the way a copy from another app would.
+    fakeClipWrite(null, "XY");
+    selectRange(&test_field, 2, 4);
+    try std.testing.expect(dispatchKey(.{ .super = true }, text_editor.KEY_V));
+    try std.testing.expectEqualStrings("abXYef", test_field.text());
+}
+
+test "a copy with nothing selected leaves the pasteboard alone" {
+    try startField("abc");
+    test_field.clipboard = fakeClipboard();
+    fakeClipWrite(null, "kept");
+    try std.testing.expect(!dispatchKey(.{ .ctrl = true }, text_editor.KEY_C));
+    try std.testing.expectEqualStrings("kept", clip_buf[0..clip_len]);
+    // Paste of an empty pasteboard is refused rather than inserting nothing.
+    clip_len = 0;
+    try std.testing.expect(!dispatchKey(.{ .ctrl = true }, text_editor.KEY_V));
+    try std.testing.expectEqualStrings("abc", test_field.text());
+}
+
+test "a paste with newlines lands as lines, and copying across lines keeps them" {
+    frame_mod.setTime(0, 0);
+    try startField("");
+    test_field.multiline = true;
+    test_field.clipboard = fakeClipboard();
+    fakeClipWrite(null, "one\ntwo");
+    try std.testing.expect(dispatchKey(.{ .ctrl = true }, text_editor.KEY_V));
+    try std.testing.expectEqualStrings("one\ntwo", test_field.text());
+    try std.testing.expectEqual(@as(usize, 2), test_field.editor.lineCount());
+
+    selectRange(&test_field, 0, 7);
+    try std.testing.expect(dispatchKey(.{ .ctrl = true }, text_editor.KEY_C));
+    try std.testing.expectEqualStrings("one\ntwo", clip_buf[0..clip_len]);
 }
 
 test "a value the caller changed replaces the draft, an unchanged one leaves it alone" {

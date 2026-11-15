@@ -242,7 +242,9 @@ row's target before its box, so a button inside the row wins the hit test).
 
 `Field.multiline = true` makes the same field a text area: Enter types a new line (the caret moves onto it, per
 line, with its selection drawn per line), Ctrl/Cmd+Enter raises `on_submit`, and a click picks a line before a
-column — so an app that needs a body editor, a query pane or a notes box no longer hand-rolls one.
+column — so an app that needs a body editor, a query pane or a notes box no longer hand-rolls one. The field also
+owns the clipboard: Ctrl/Cmd+C, +X and +V copy, cut and paste its selection through the system pasteboard
+(`Field.clipboard` is the seam a test replaces, so a headless suite needs no pasteboard).
 `components.box` takes `on_click` for the same reason: a clickable container registers its own hit target and
 cursor, and a clickable child still wins a click over the box that contains it.
 
