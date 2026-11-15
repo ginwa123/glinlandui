@@ -141,6 +141,8 @@ pub const Host = struct {
             self,
             &effective,
         );
+        // Every box is real now, so a component that asked to stay in view is scrolled before the next frame draws.
+        scroll_mod.applyReveals();
         // The tree is resolved now, so a waiting client can be answered from this frame rather than the last one.
         if (self.service) |svc| svc.end(svc.ptr, self, w, h);
         return shape;

@@ -669,9 +669,13 @@ pub fn textField(field: *Field) void {
     input.tickBlink(frame_mod.delta_s);
     const fg: Color = if (field.disabled) field.disabled_fg else field.fg;
     // Solid for half a second after the caret moves, then blinking: a caret that blinks while you type is a caret you cannot find.
-    const blink_on = text_editor.caretVisible(input);
+    const blink_on = text_editor.caretVisible(input) and caretLineOnScreen(field);
     // A hint belongs to an empty single-line field nobody is typing in, so it never competes with a draft or a caret.
     const hint = field.placeholder.len > 0 and draft.len == 0 and !input.focused and !field.disabled;
+    // The caret's row is revealed after the layout: mid-declare its box does not exist yet.
+    if (field.multiline and input.focused and field.scroll_id != null) {
+        scroll_mod.revealAfterLayout(field.scroll_id.?, lineBoxId(name, field.caretLine()));
+    }
 
     cl.UI()(.{
         .id = field.id.clay(),
@@ -693,9 +697,6 @@ pub fn textField(field: *Field) void {
         }
     });
 
-    // A multiline field in a scroll keeps its caret on screen, so typing a line never happens off the bottom edge.
-    if (field.multiline and input.focused) keepCaretVisible(field);
-
     // Semantics: an editable field declares `set_text`, so a test can type into it by name and a reader can find it.
     if (!field.disabled and name.len > 0) {
         semantics.registerAt(@src(), .{
@@ -714,16 +715,18 @@ pub fn textField(field: *Field) void {
 // How many lines of a multiline field are drawn: a buffer is bounded by its own length, but a frame's command stream is not free.
 pub const max_lines: usize = 512;
 
+// A caret is a floating bar, so an enclosing scroll's clip does not cut it: draw it only while its own line is visible.
+pub fn caretLineOnScreen(field: *const Field) bool {
+    const scroll_id = field.scroll_id orelse return true;
+    const v = scroll_mod.view(scroll_id);
+    if (!v.found or v.content_height <= v.height) return true;
+    const top = @as(f32, @floatFromInt(field.caretLine())) * field.lineHeight();
+    return top + field.lineHeight() > v.y and top < v.y + v.height;
+}
+
 // The Clay id of a line's row: what an enclosing scroll looks up to keep the caret's line in view.
 pub fn lineBoxId(name: []const u8, line: usize) cl.ElementId {
     return .IDI(name, lineBoxIndex(line));
-}
-
-// Scroll the field's container the least amount that shows the caret's line; the line's box is the previous frame's, like every geometry read.
-fn keepCaretVisible(field: *const Field) void {
-    const scroll_id = field.scroll_id orelse return;
-    const row = frame_mod.bounds(lineBoxId(field.name(), field.caretLine())) orelse return;
-    scroll_mod.ensureVisible(scroll_id, row.y, row.height);
 }
 
 // The Clay ids a multiline field's per-line boxes live under: one space each for the line, its selection and its caret.
@@ -1610,6 +1613,9 @@ var scroll_field: Field = .{
 };
 
 fn declareScrollField(_: void) void {
+    // Tall enough for its own lines, the way an app sizes a body editor; a fixed height would clip the content.
+    const lines: f32 = @floatFromInt(scroll_field.editor.lineCount());
+    scroll_field.h = .{ .fixed = @max(200, lines * scroll_field.lineHeight() + 12) };
     textField(&scroll_field);
 }
 
@@ -1631,13 +1637,59 @@ test "a multiline field in a scroll keeps the caret's line in view" {
     headless.begin(.{ .x = 99999, .y = 99999 }, false);
     frame_mod.setFocus("test-scroll-field");
 
-    // Two frames: the first lays the line rows out, the second is what the scroll measures against.
+    // Frames driven the way the Host drives one: declare, lay out, then apply the reveals the declare asked for.
     var pass: usize = 0;
     while (pass < 2) : (pass += 1) {
         cl.beginLayout();
         declareScrollBox();
         _ = cl.endLayout();
+        scroll_mod.applyReveals();
     }
     try std.testing.expect(scroll_mod.view("test-scroll-box").y > 0);
     try std.testing.expectEqual(@as(usize, 9), scroll_field.caretLine());
+}
+
+test "a caret outside the viewport is not drawn: the clip of a scroll cannot cut a floating bar" {
+    scroll_field.bind();
+    scroll_field.setText("0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19");
+    scroll_field.editor.setCaret(0, false);
+    frame_mod.ptr_down = false;
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    frame_mod.setFocus("test-scroll-field");
+
+    var pass: usize = 0;
+    while (pass < 2) : (pass += 1) _ = layoutScrollBox();
+
+    // Scrolled to the bottom by hand: line 0 is far above the viewport.
+    scroll_mod.scrollBy("test-scroll-box", 0, 10_000);
+    const scrolled = layoutScrollBox();
+    try std.testing.expect(!hasCaret(scrolled, 0));
+
+    // The caret moves to the last line; the reveal brings it back, and then it is drawn again.
+    scroll_field.editor.setCaret(scroll_field.editor.len, false);
+    _ = layoutScrollBox();
+    _ = layoutScrollBox();
+    try std.testing.expect(caretLineOnScreen(&scroll_field));
+
+    // A field with no scroll has nothing off screen, so its caret is always drawn.
+    try std.testing.expect(caretLineOnScreen(&blink_off_field));
+}
+
+// A field with no scroll: nothing can ever be off screen, so the caret is always drawn.
+var blink_off_field: Field = .{ .id = .{ .text = "test-nos-croll-field" }, .multiline = true };
+
+fn layoutScrollBox() []cl.RenderCommand {
+    cl.beginLayout();
+    declareScrollBox();
+    const cmds = cl.endLayout();
+    scroll_mod.applyReveals();
+    return cmds;
+}
+
+fn hasCaret(cmds: []const cl.RenderCommand, line: usize) bool {
+    const id = lineCaretId("test-scroll-field", line).id;
+    for (cmds) |c| {
+        if (c.command_type == .rectangle and c.id == id) return true;
+    }
+    return false;
 }

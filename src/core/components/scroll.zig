@@ -126,6 +126,33 @@ pub fn ensureVisible(id: []const u8, y: f32, h: f32) void {
     if (over > 0) scrollBy(id, 0, over);
 }
 
+// ---- deferred reveals: a component cannot read a box it declared in the same frame, so it asks for one after the layout ----
+
+const Reveal = struct {
+    scroll_id: []const u8,
+    target: cl.ElementId,
+};
+
+var reveals: [16]Reveal = undefined;
+var reveal_n: usize = 0;
+
+/// Ask for `target` to be scrolled into `scroll_id` once this frame's layout is done: mid-declare, no box exists yet.
+pub fn revealAfterLayout(scroll_id: []const u8, target: cl.ElementId) void {
+    if (reveal_n >= reveals.len) return;
+    reveals[reveal_n] = .{ .scroll_id = scroll_id, .target = target };
+    reveal_n += 1;
+}
+
+/// Apply the queued reveals. The Host calls this the moment the layout closes, which is the first moment boxes are real.
+pub fn applyReveals() void {
+    for (reveals[0..reveal_n]) |r| {
+        const el = cl.getElementData(r.target);
+        if (!el.found) continue;
+        ensureVisible(r.scroll_id, el.bounding_box.y, el.bounding_box.height);
+    }
+    reveal_n = 0;
+}
+
 /// Programmatic scroll: nudge the container's scroll position directly (positive dy scrolls down, matching Wayland axis coords — negated internally for.
 pub fn scrollBy(id: []const u8, dx: f32, dy: f32) void {
     nudgeClamped(id, .both, dx, dy);
