@@ -1,5 +1,6 @@
 // Portable software rasterizer — the reference renderer for glinlandui.
 const std = @import("std");
+const builtin = @import("builtin");
 const scale = @import("scale.zig");
 const stbi = @cImport({
     @cInclude("stb/stb_image.h");
@@ -10,6 +11,8 @@ const glyphs = @import("glyphs.zig");
 const text_face = @import("text_face.zig");
 const common = @import("render_common.zig");
 const Color = @import("color.zig").Color;
+// The disk half of image decoding is native-only: a browser has no filesystem, and `std.fs.max_path_bytes` cannot even be analysed for freestanding.
+const has_fs = !builtin.cpu.arch.isWasm();
 
 pub const ImageFit = common.ImageFit;
 pub const ImageRef = common.ImageRef;
@@ -593,6 +596,12 @@ pub const Surface = struct {
 
     // Read a file off disk, downscale it to `max_dim` and hand back RGBA8 the caller owns.
     fn decodeImage(self: *Surface, path: []const u8, max_dim: u16) ?Image {
+        // A browser has no filesystem — and `std.fs.max_path_bytes` does not even ANALYSE there, so the disk half must be pruned, not guarded.
+        if (comptime has_fs) return self.decodeImageFromDisk(path, max_dim);
+        return null;
+    }
+
+    fn decodeImageFromDisk(self: *Surface, path: []const u8, max_dim: u16) ?Image {
         if (path.len == 0 or path.len + 1 > std.fs.max_path_bytes) return null;
         var cbuf: [std.fs.max_path_bytes]u8 = undefined;
         @memcpy(cbuf[0..path.len], path);
