@@ -80,6 +80,8 @@ pub const Renderer = struct {
     // Frame-time accumulator for GLIN_FPS: the number the window's smoothness actually follows.
     fps_frames: u32 = 0,
     fps_ns: i96 = 0,
+    /// True once the first Metal frame has been described, so the log line appears exactly once.
+    reported_first_frame: bool = false,
 
     pub fn init(alloc: std.mem.Allocator) !Renderer {
         return .{ .alloc = alloc };
@@ -180,8 +182,14 @@ pub const Renderer = struct {
             self.atlas_dirty = false;
         }
         const t0: i96 = if (std.c.getenv("GLIN_FPS") != null) fpsNowNs() else 0;
-        _ = c.glin_metal_draw(h, self.verts.items.ptr, self.segs.items.ptr, @intCast(self.segs.items.len), clear[0], clear[1], clear[2], clear[3]);
+        const presented = c.glin_metal_draw(h, self.verts.items.ptr, self.segs.items.ptr, @intCast(self.segs.items.len), clear[0], clear[1], clear[2], clear[3]) != 0;
         if (t0 != 0) self.recordFrame(fpsNowNs() - t0);
+        // One line per run, so a scripted Metal run is not silent: the CPU path reports painted pixels and a blit checksum, and the GPU has no such bytes — but "did the layer hand us a drawable" is the question a headless runner answers "no".
+        if (self.reported_first_frame) return;
+        self.reported_first_frame = true;
+        std.log.info("macOS first frame: {d}x{d}, metal, {d} commands, {d} vertices, presented={}", .{
+            win_w, win_h, commands.len, self.verts.items.len, presented,
+        });
     }
 
     /// Build a device and pipeline with no layer, for the offscreen parity test. False when the machine has no Metal device.

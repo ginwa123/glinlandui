@@ -161,13 +161,17 @@ jobs:
 
           test -x zig-out/bin/glinlandui
 
-          # Bounded, because it is not self-capping any more: with the Metal path
-          # the app can keep waiting for a drawable that never arrives (a runner
-          # has no WindowServer session), and a bare `$(...)` then sits on the pipe
-          # until the job's 10-minute timeout with NOTHING printed. 90 s plus the
-          # app's own log turns that into a readable failure.
+          # Bounded anyway: a cap that fails to fire must cost 90 s and a readable
+          # failure, not the job's whole timeout with nothing printed. The cap
+          # itself now counts DRAWN frames (mac/shim.m, `glin_frame_drawn`), so it
+          # fires whichever presenter ran — before that, a Metal run never reached
+          # it and simply never exited.
+          # GLIN_NO_METAL pins this leg to the CPU rasterizer ON PURPOSE: the job's whole subject is the
+          # CoreGraphics hand-off (the bytes written are the bytes displayed), and the GPU path has no
+          # CPU bytes to checksum at all. Metal gets its own gate in this same job, "Metal renderer draws
+          # the CPU reference's pixels".
           log="$(mktemp)"
-          env QS_SETTINGS_TEST_FRAMES=1 ./zig-out/bin/glinlandui >"$log" 2>&1 &
+          env GLIN_NO_METAL=1 QS_SETTINGS_TEST_FRAMES=1 ./zig-out/bin/glinlandui >"$log" 2>&1 &
           pid=$!
           for _ in $(seq 1 90); do
             kill -0 "$pid" 2>/dev/null || break
@@ -443,7 +447,8 @@ jobs:
           # here, because macOS blocks screen capture of an app's own window
           # without Screen Recording permission, so `screencapture` yields a
           # desktop-only image on a stock CI runner.
-          out="$(env QS_SETTINGS_TEST_FRAMES=1 WAYLAND_DISPLAY= ./zig-out/bin/glinlandui-calculator 2>&1)"
+          # GLIN_NO_METAL: this leg asserts the CPU rasterizer's own composited bytes (see the job comment).
+          out="$(env GLIN_NO_METAL=1 QS_SETTINGS_TEST_FRAMES=1 WAYLAND_DISPLAY= ./zig-out/bin/glinlandui-calculator 2>&1)"
           echo "$out"
 
           painted=0

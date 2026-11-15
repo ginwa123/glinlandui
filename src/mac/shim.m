@@ -285,6 +285,24 @@ enum {
     if (o && o->on_key) o->on_key(o->user, (int)event.keyCode, 0, NULL);
 }
 
+/// Count one DRAWN frame and honour `QS_SETTINGS_TEST_FRAMES`, whichever presenter ran.
+///
+/// This used to live in `glin_cocoa_present`, i.e. in the CPU blit: with the Metal path the host
+/// never uploads a bitmap, so the counter never moved, the cap never fired, and a capped run sat
+/// in `[NSApp run]` forever instead of exiting. Counting here makes the cap a property of the
+/// window, not of one backend.
+static void glin_frame_drawn(GlinCocoaWindow *win) {
+    win->frames_drawn += 1;
+    if (win->max_frames <= 0) return;
+    if (win->frames_drawn >= win->max_frames) {
+        [NSApp terminate:nil];
+        return;
+    }
+    // A cap above 1 has to re-arm the display: AppKit only redraws when something marks the view
+    // dirty, and a static window goes quiet after the first composite.
+    [(GlinView *)win->view setNeedsDisplay:YES];
+}
+
 - (void)drawRect:(NSRect)dirtyRect {
     GlinCocoaWindow *o = _owner;
     if (!o) return;
@@ -296,7 +314,10 @@ enum {
 
     // The GPU already presented this frame; drawing the CPU bitmap now would
     // paint over it with stale pixels.
-    if (o->use_metal) return;
+    if (o->use_metal) {
+        glin_frame_drawn(o);
+        return;
+    }
 
     NSGraphicsContext *nsctx = [NSGraphicsContext currentContext];
     if (!nsctx) return;
@@ -319,6 +340,7 @@ enum {
             CGImageRelease(img);
         }
     }
+    glin_frame_drawn(o);
 }
 
 @end
@@ -500,17 +522,6 @@ void glin_cocoa_present(GlinCocoaWindow *win, const unsigned char *bgra, int w, 
         // The host already converted channel order and row order; all this
         // does is copy the finished bytes into the bitmap.
         memcpy(win->pixels, bgra, (size_t)w * (size_t)h * 4);
-        win->frames_drawn += 1;
-        if (win->max_frames > 0 && win->frames_drawn >= win->max_frames) {
-            [NSApp terminate:nil];
-        } else if (win->max_frames > 0) {
-            // A capped run must actually produce `max_frames` frames, but
-            // AppKit only redraws when something marks the view dirty, and a
-            // static window goes quiet after the first composite. Without
-            // re-arming the display here, any cap above 1 is unreachable and
-            // the run hangs until the CI job timeout instead of exiting.
-            [(GlinView *)win->view setNeedsDisplay:YES];
-        }
     }
 }
 
