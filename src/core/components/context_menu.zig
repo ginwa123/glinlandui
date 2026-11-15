@@ -285,11 +285,15 @@ test "a right click opens the menu at the pointer, and a row runs the app's hand
     // Just past the pointer, so the first row is under the cursor rather than on it.
     try testing.expectEqual(bb.x + 10 + pointer_inset, at.x);
 
-    // The card is drawn on the next frame: every row has a box.
+    // The card is drawn on the next frame: every row has a box, and the card sits where the click was.
     draw(menu, true);
     for (0..items.len) |i| {
         try testing.expect(cl.getElementData(rowId(i)).found);
     }
+    const card = cl.getElementData(cl.getElementId(menu_id)).bounding_box;
+    try testing.expectApproxEqAbs(bb.x + 10 + pointer_inset, card.x, 1.5);
+    try testing.expectApproxEqAbs(bb.y + 10 + pointer_inset, card.y, 1.5);
+    try testing.expect(card.width > 0 and card.height > 0);
     const row1 = cl.getElementData(rowId(1)).bounding_box;
     try testing.expect(registry.dispatchClick(row1.x + row1.width * 0.5, row1.y + row1.height * 0.5));
     try testing.expectEqual(@as(usize, 1), pick_ctx.calls);
