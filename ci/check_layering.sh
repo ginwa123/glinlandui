@@ -153,10 +153,11 @@ fi
 # proves the macOS translations are right without a Mac — and, equally, that a
 # typo in the Linux event translation fails on both platforms rather than only in
 # CI's Linux leg. Backends that legitimately cImport are kept OUT of the suite:
-# linux/window.zig, linux/present.zig, mac/window.zig, windows/window.zig.
+# linux/window.zig, linux/present.zig, mac/window.zig, mac/renderer.zig (Metal),
+# windows/window.zig.
 # ---------------------------------------------------------------------------
 for f in src/mac/present.zig src/mac/keymap.zig src/mac/adapter.zig src/mac/input.zig \
-         src/mac/renderer.zig src/mac/text.zig src/mac/file_dialog_model.zig \
+         src/mac/text.zig src/mac/file_dialog_model.zig \
          src/linux/keymap.zig src/linux/input.zig src/linux/adapter.zig \
          src/linux/dbus.zig src/linux/portal.zig \
          src/windows/keymap.zig src/windows/input.zig src/windows/adapter.zig \

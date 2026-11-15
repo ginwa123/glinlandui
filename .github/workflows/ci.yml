@@ -120,6 +120,12 @@ jobs:
       - name: Cross-platform parity test suite (count checked against tests.lock)
         run: ./ci/check_test_parity.sh
 
+      # Metal needs a device, so the Metal-vs-CPU-reference comparison cannot be
+      # part of the count-locked parity suite: it is this leg's own step, and
+      # `tests.lock` holds the shared file set (the same number Linux reports).
+      - name: Metal renderer draws the CPU reference's pixels
+        run: zig build test-macos-gpu --summary all
+
       - name: Build the CPU-rasterizer executable (ReleaseSafe)
         run: zig build -Doptimize=ReleaseSafe
 

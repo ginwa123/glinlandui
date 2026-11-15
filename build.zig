@@ -481,8 +481,35 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
-    // `native-test` runs the Linux-only Wayland/EGL/GLES3/Pango tests.
-    const native_test_step = b.step("native-test", "Run the Linux-only native (Wayland/EGL/GLES3/Pango) tests");
+    // The Metal-vs-CPU comparison needs a Metal device, so it is a macOS step of its own and NOT part of `test` — the parity suite's count has to match on every OS.
+    const mac_gpu_test_step = b.step("test-macos-gpu", "Run the macOS-only Metal renderer tests (Metal draws the CPU reference's pixels)");
+    if (is_macos) {
+        const m = b.createModule(.{ .root_source_file = b.path("src/mac/metal_parity_test.zig"), .target = target });
+        m.addImport("zclay", zclay_mod);
+        m.addIncludePath(b.path("src/mac"));
+        addVendoredStbInclude(b, m);
+        m.addCSourceFile(.{ .file = b.path("src/core/stb_truetype_impl.c"), .flags = stbFlags(false) });
+        m.addCSourceFile(.{ .file = b.path("src/core/stb_image_impl.c"), .flags = stbFlags(false) });
+        // The same two Objective-C TUs and frameworks the library gets, so a test that links here links in the app.
+        m.addCSourceFile(.{ .file = b.path("src/mac/shim.m"), .flags = &.{"-Werror"} });
+        m.addCSourceFile(.{ .file = b.path("src/mac/metal.m"), .flags = &.{"-Werror"} });
+        m.linkFramework("Metal", .{});
+        m.linkFramework("QuartzCore", .{});
+        m.linkFramework("AppKit", .{});
+        m.linkFramework("Foundation", .{});
+        m.linkFramework("CoreGraphics", .{});
+        m.linkFramework("UniformTypeIdentifiers", .{});
+        m.linkLibrary(clay_lib);
+        const t = b.addTest(.{ .root_module = m });
+        t.root_module.linkSystemLibrary("c", .{});
+        mac_gpu_test_step.dependOn(&b.addRunArtifact(t).step);
+    } else {
+        const skip = b.addSystemCommand(&.{ "echo", "test-macos-gpu: skipped (no Metal on this host)" });
+        mac_gpu_test_step.dependOn(&skip.step);
+    }
+
+    // `native-test` runs the Linux-only Wayland/EGL/GLES3 tests.
+    const native_test_step = b.step("native-test", "Run the Linux-only native (Wayland/EGL/GLES3) tests");
     if (native_protocols) |protocols| {
         native_test_step.dependOn(makeNativeTestStep(b, target, zclay_mod, protocols));
     }
