@@ -222,14 +222,8 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
     })({
         // Clip ancestry for the semantics layer: every node registered inside this container records it, so resolve() can compute what is actually visible and.
         semantics.pushAncestor(props.id.clay(), true);
-        // A target inside a scroll container answers only inside it: a row scrolled under the footer must not swallow the footer's click.
-        const viewport = cl.getElementData(props.id.clay());
-        click_registry.pushClip(if (viewport.found) .{
-            .x = viewport.bounding_box.x,
-            .y = viewport.bounding_box.y,
-            .w = viewport.bounding_box.width,
-            .h = viewport.bounding_box.height,
-        } else null);
+        // A target inside a scroll container answers only inside it (a row scrolled under the footer must not swallow the footer's click); by ID, resolved in the frame the click lands in, because this box is not known until its own layout closes.
+        click_registry.pushClip(props.id.clay());
         children(ctx);
         click_registry.popClip();
         semantics.popAncestor();

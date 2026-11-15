@@ -293,6 +293,12 @@ pub const Window = struct {
     // Apply a coalesced resize.
     fn onResized(_: *Window) void {}
 
+    /// `GLIN_POINTER_TRACE=1` turns the pointer trace on; read per event so a run does not need a rebuild.
+    fn pointerTrace() bool {
+        const v = std.c.getenv("GLIN_POINTER_TRACE") orelse return false;
+        return v[0] != 0 and v[0] != '0';
+    }
+
     fn onPointer(
         p: ?*anyopaque,
         kind: c_int,
@@ -323,6 +329,13 @@ pub const Window = struct {
         }, self.left_held);
         if (t.pressed and kind == input_macos.DOWN) self.left_held = true;
         if (!t.pressed and kind == input_macos.UP) self.left_held = false;
+
+        // `GLIN_POINTER_TRACE=1`: the raw AppKit point, the space it is flipped in, and the toolkit point that comes out — a y that disagrees with the pixels is the whole class of "I clicked it and nothing happened".
+        if (pointerTrace()) {
+            std.debug.print("[pointer] kind={d} appkit=({d:.1},{d:.1}) space={d}x{d} -> toolkit=({d:.1},{d:.1}) layout_w/h={d}x{d} win_w/h={d}x{d}\n", .{
+                kind, x, y, w, h, t.x, t.y, self.layout_w, self.layout_h, self.state.win_w, self.state.win_h,
+            });
+        }
 
         self.state.needs_draw = true;
         d.on_pointer(d.ptr, t.x, t.y, t.pressed, t.button);

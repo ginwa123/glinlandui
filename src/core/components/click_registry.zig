@@ -18,13 +18,26 @@ pub const RowClick = struct {
     ctx: ?*anyopaque,
 };
 
-/// The viewport a target is clipped to: a target inside a scroll container only answers inside it.
-pub const Clip = struct { x: f32, y: f32, w: f32, h: f32 };
+/// The viewports a target is clipped to, as ELEMENT IDS resolved at hit-test time, never as rects captured while declaring: a container's box is only known when its own layout closes, so such a rect is always the previous frame's, and the frame after a pane grows is the one the next click lands in.
+pub const Clip = struct {
+    ids: [clip_depth_max]cl.ElementId = undefined,
+    n: u8 = 0,
+};
 
-/// True when the point falls inside the clip (an absent clip clips nothing).
+/// Deepest scroll nesting a hit target remembers; a target four containers deep is already a design smell.
+pub const clip_depth_max: usize = 8;
+
+/// True when the point falls inside EVERY viewport in the chain; an absent chain, or a viewport this frame has no box for, clips nothing.
 pub fn insideClip(c: ?Clip, x: f32, y: f32) bool {
-    const r = c orelse return true;
-    return x >= r.x and x < r.x + r.w and y >= r.y and y < r.y + r.h;
+    const chain = c orelse return true;
+    for (chain.ids[0..chain.n]) |id| {
+        const data = cl.getElementData(id);
+        if (!data.found) continue;
+        const bb = data.bounding_box;
+        if (bb.width <= 0 or bb.height <= 0) continue;
+        if (x < bb.x or x >= bb.x + bb.width or y < bb.y or y >= bb.y + bb.height) return false;
+    }
+    return true;
 }
 
 const Entry = struct {
@@ -46,9 +59,9 @@ const Entry = struct {
 var entries: [cap]Entry = undefined;
 var count: usize = 0;
 
-/// Viewport in force while declaring; `pushClip` nests by intersecting.
+/// Viewport chain in force while declaring; `pushClip` appends to it and `popClip` unwinds it.
 var clip: ?Clip = null;
-var clip_stack: [8]?Clip = undefined;
+var clip_stack: [clip_depth_max]?Clip = undefined;
 var clip_depth: usize = 0;
 
 /// Clear the registry for a new frame.
@@ -58,20 +71,19 @@ pub fn beginFrame() void {
     clip_depth = 0;
 }
 
-/// Enter a scroll container's viewport: targets declared until `popClip` are clipped to it. A null rect (first frame, box unknown) clips nothing.
-pub fn pushClip(rect: ?Clip) void {
+/// Enter a scroll container's viewport: targets declared until `popClip` answer only inside it.
+pub fn pushClip(id: cl.ElementId) void {
     if (clip_depth < clip_stack.len) {
         clip_stack[clip_depth] = clip;
         clip_depth += 1;
     }
-    if (rect) |r| {
-        clip = if (clip) |c| .{
-            .x = @max(c.x, r.x),
-            .y = @max(c.y, r.y),
-            .w = @max(0, @min(c.x + c.w, r.x + r.w) - @max(c.x, r.x)),
-            .h = @max(0, @min(c.y + c.h, r.y + r.h) - @max(c.y, r.y)),
-        } else r;
+    var next = clip orelse Clip{};
+    // A chain this deep is already off the map; the innermost viewports still bound the target.
+    if (next.n < clip_depth_max) {
+        next.ids[next.n] = id;
+        next.n += 1;
     }
+    clip = next;
 }
 
 /// Leave the innermost scroll container.
@@ -152,8 +164,41 @@ pub fn topmostAt(x: f32, y: f32) ?Entry {
     return best;
 }
 
+/// `GLIN_CLICK_TRACE=1`: every dispatched click, the target it found and that target's box, or what was near the point when nothing answered.
+fn traceEnabled() bool {
+    const v = std.c.getenv("GLIN_CLICK_TRACE") orelse return false;
+    return v[0] != 0 and v[0] != '0';
+}
+
+pub fn describeAt(x: f32, y: f32) void {
+    if (topmostAt(x, y)) |hit| {
+        const data = cl.getElementData(hit.id);
+        std.debug.print("[click] ({d:.1},{d:.1}) -> id {d}/{d} z={d} box {d:.1},{d:.1} {d:.1}x{d:.1}\n", .{
+            x,                   y,                   hit.id.id,               hit.id.offset,            hit.z,
+            data.bounding_box.x, data.bounding_box.y, data.bounding_box.width, data.bounding_box.height,
+        });
+        return;
+    }
+    std.debug.print("[click] ({d:.1},{d:.1}) -> NOTHING ({d} entries)\n", .{ x, y, count });
+    // The boxes that contain the x but not the y, which is what a vertical offset looks like.
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const e = entries[i];
+        if (e.cb_row == null and e.cb_click == null) continue;
+        const data = cl.getElementData(e.id);
+        if (!data.found) continue;
+        const bb = data.bounding_box;
+        if (bb.width <= 0 or bb.height <= 0) continue;
+        if (x < bb.x or x >= bb.x + bb.width) continue;
+        std.debug.print("[click]   near: y {d:.1}..{d:.1} (point y {d:.1}, off by {d:.1}) z={d} clipped={}\n", .{
+            bb.y, bb.y + bb.height, y, y - bb.y, e.z, !insideClip(e.clip, x, y),
+        });
+    }
+}
+
 /// Dispatch a click point: the highest-z containing match fires once (ties keep last-registered-first).
 pub fn dispatchClick(x: f32, y: f32) bool {
+    if (traceEnabled()) describeAt(x, y);
     const hit = topmostAt(x, y) orelse return false;
     if (hit.cb_row) |cb| {
         cb(hit.ctx, hit.index);
@@ -400,4 +445,118 @@ test "legacy registerClick wrapper still stores default cursor" {
     try std.testing.expectEqual(Cursor.default, hoverCursorAt(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
     try std.testing.expect(dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
     try std.testing.expectEqual(@as(usize, 1), c.calls);
+}
+
+// ---- Clip chain (by element id) ---- A target inside a scroll container answers only inside it, and the container is named by ID: its box is not known while it is still being declared.
+
+const ClipRec = struct {
+    calls: usize = 0,
+    last: ?usize = null,
+};
+
+/// A click-shaped recorder (no index), for the targets the clip tests register.
+const ClipClick = struct {
+    calls: usize = 0,
+};
+
+fn onClipClick(ctx: ?*anyopaque) void {
+    const r: *ClipClick = @ptrCast(@alignCast(ctx.?));
+    r.calls += 1;
+}
+
+fn onClipRow(ctx: ?*anyopaque, i: usize) void {
+    const r: *ClipRec = @ptrCast(@alignCast(ctx.?));
+    r.calls += 1;
+    r.last = i;
+}
+
+fn clipRowId(i: usize) cl.ElementId {
+    return cl.ElementId.IDI("cr-inner", @as(u32, @intCast(i + 1)));
+}
+
+/// A `viewport_h` scroll container of `rows` 20pt rows, each registering its click target while the clip is pushed (the only place a component can register).
+fn declareScrolled(rows: usize, viewport_h: f32, rec: *ClipRec) void {
+    cl.UI()(.{
+        .id = .ID("cr-scroll"),
+        .layout = .{ .sizing = .{ .w = .fixed(200), .h = .fixed(viewport_h) } },
+    })({
+        pushClip(cl.ElementId.ID("cr-scroll"));
+        cl.UI()(.{
+            .id = .ID("cr-inner"),
+            .layout = .{ .direction = .top_to_bottom, .sizing = .{ .w = .grow, .h = .fit } },
+        })({
+            for (0..rows) |i| {
+                cl.UI()(.{
+                    .id = .IDI("cr-inner", @as(u32, @intCast(i + 1))),
+                    .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(20) } },
+                })({});
+                registerZCursor(clipRowId(i), onClipRow, rec, i, 0, .pointer);
+            }
+        });
+        popClip();
+    });
+}
+
+fn layoutScrolled(rows: usize, viewport_h: f32, rec: *ClipRec) void {
+    beginFrame();
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.beginLayout();
+    declareScrolled(rows, viewport_h, rec);
+    _ = cl.endLayout();
+}
+
+fn rowCentre(i: usize) cl.Vector2 {
+    const bb = cl.getElementData(clipRowId(i)).bounding_box;
+    return .{ .x = bb.x + bb.width * 0.5, .y = bb.y + bb.height * 0.5 };
+}
+
+test "a scroll container answers inside itself and nowhere else" {
+    var rec = ClipRec{};
+    layoutScrolled(8, 40, &rec);
+
+    const inside = rowCentre(0);
+    try std.testing.expect(dispatchClick(inside.x, inside.y));
+    try std.testing.expectEqual(@as(?usize, 0), rec.last);
+
+    // Row 5 sits below the 40pt viewport: it must answer nothing, or it would swallow the click on whatever is under it.
+    const outside = rowCentre(5);
+    try std.testing.expect(!dispatchClick(outside.x, outside.y));
+    try std.testing.expectEqual(@as(usize, 1), rec.calls);
+}
+
+test "a row revealed when the pane grows answers at once (the clip follows the layout, not the last frame)" {
+    // THE regression: the viewport is 40pt, then the pane grows to 160pt in one frame (what a resize leaves behind). While the clip was a rect read during declaration, that frame clipped its rows to the OLD box, so rows in the revealed strip sat on screen and refused clicks.
+    var rec = ClipRec{};
+    layoutScrolled(8, 40, &rec);
+    layoutScrolled(8, 160, &rec);
+
+    const row = rowCentre(6);
+    try std.testing.expect(row.y > 40);
+    try std.testing.expect(dispatchClick(row.x, row.y));
+    try std.testing.expectEqual(@as(?usize, 6), rec.last);
+}
+
+test "nested scroll containers both clip, and the chain unwinds for a sibling" {
+    var rec = ClipClick{};
+    beginFrame();
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.beginLayout();
+    cl.UI()(.{ .id = .ID("cr-outer"), .layout = .{ .sizing = .{ .w = .fixed(200), .h = .fixed(100) } } })({
+        cl.UI()(.{ .id = .ID("cr-inner-scroll"), .layout = .{ .sizing = .{ .w = .fixed(100), .h = .fixed(40) } } })({
+            pushClip(cl.ElementId.ID("cr-inner-scroll"));
+            cl.UI()(.{ .id = .ID("cr-leaf"), .layout = .{ .sizing = .{ .w = .grow, .h = .grow } } })({});
+            registerClick(.ID("cr-leaf"), onClipClick, &rec);
+            popClip();
+        });
+        // A sibling declared after the pop: it is not inside the inner viewport, so only its own ancestry bounds it.
+        cl.UI()(.{ .id = .ID("cr-sibling"), .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(40) } } })({});
+        registerClick(.ID("cr-sibling"), onClipClick, &rec);
+    });
+    _ = cl.endLayout();
+
+    const leaf = cl.getElementData(cl.ElementId.ID("cr-leaf")).bounding_box;
+    try std.testing.expect(dispatchClick(leaf.x + leaf.width * 0.5, leaf.y + leaf.height * 0.5));
+    const sib = cl.getElementData(cl.ElementId.ID("cr-sibling")).bounding_box;
+    try std.testing.expect(dispatchClick(sib.x + sib.width * 0.5, sib.y + sib.height * 0.5));
+    try std.testing.expectEqual(@as(usize, 2), rec.calls);
 }
