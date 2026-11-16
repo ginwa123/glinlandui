@@ -157,6 +157,7 @@ pub const Surface = struct {
         const words = std.mem.bytesAsSlice(u32, self.pixels);
         @memset(words, pattern);
         self.scissor = null;
+        self.scissor_depth = 0;
     }
 
     // Set the color used by `clear` (0-255 RGBA; alpha forced opaque).
@@ -503,7 +504,7 @@ pub const Surface = struct {
     }
 
     // The overlap of two clips: empty (x1 <= x0 or y1 <= y0) means nothing can be painted, which the per-pixel tests already understand.
-    pub fn intersect(a: Scissor, b: Scissor) Scissor {
+    fn intersect(a: Scissor, b: Scissor) Scissor {
         return .{
             .x0 = @max(a.x0, b.x0),
             .y0 = @max(a.y0, b.y0),
