@@ -4,20 +4,11 @@
 # users see on a HiDPI screen. Deleting a line is the proof the fix landed;
 # the gate fails while a line is here but the backend is wired.
 #
-# mac is deliberately absent: it renders at `backing_scale` (2x on Retina).
+# The list is EMPTY: mac renders at `backing_scale` (2x on Retina), windows and
+# web size their surfaces from the scale, and linux now binds `wl_output`, takes
+# the largest scale among the outputs the surface has entered (plus
+# `wl_surface.preferred_buffer_scale`), sets `set_buffer_scale`, sizes the EGL
+# window in device pixels, and rasterises text at `fs * scale`.
 #
-# linux: the backend has no way to LEARN the density — there is no `wl_output`
-# binding anywhere in src/linux/window.zig, so no surface.enter event is
-# delivered and `wl_output.scale` is never read. The fix is bounded:
-#   1. bind wl_output from the registry (wl_registry_bind, interface wl_output,
-#      version 2) and keep the outputs alive;
-#   2. add a wl_output_listener with `scale` (and `geometry`) handlers, taking
-#      the MAX scale of the outputs the surface has entered;
-#   3. on enter/scale, call `render_software.setRenderScale(scale)`;
-#   4. size the EGL window with `scale.pixelSize(logical_w, logical_h, scale)`
-#      instead of the logical size (wl_egl_window_create / _resize), and make
-#      linux/renderer.zig's glViewport use that pixel size;
-#   5. delete the `linux` line below.
-# Step 5 is the acceptance criterion: the gate will not pass while a backend is
-# wired but still listed.
-linux
+# An entry belongs here only while a backend is genuinely unwired; the format is
+# one backend name per line (`mac`, `windows`, `linux`, `web`).

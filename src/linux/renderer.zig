@@ -6,6 +6,9 @@ const text = @import("text.zig");
 const render_common = @import("../core/render_common.zig");
 const Color = @import("../core/color.zig").Color;
 const cl = @import("zclay");
+// The density the window adopted from the compositor, and the one definition of a logical-to-device pixel size.
+const ui_scale = @import("ui_scale.zig");
+const scale = @import("../core/scale.zig");
 
 const egl = @cImport({
     @cInclude("EGL/egl.h");
@@ -256,6 +259,7 @@ const rect_frag_src: [:0]const u8 =
     \\uniform vec4 u_radius;
     \\uniform int u_mode;
     \\uniform float u_border;
+    \\uniform float u_scale;
     \\uniform vec2 u_size;
     \\in vec2 v_box;
     \\out vec4 o_color;
@@ -269,7 +273,7 @@ const rect_frag_src: [:0]const u8 =
     \\// A 2px smoothstep band blurred 1px borders across two pixels and
     \\// eroded convex corners (radius looked wrong); 1px clamp is crisp.
     \\float cov(float d) {
-    \\  return clamp(0.5 - d, 0.0, 1.0);
+    \\  return clamp(0.5 - d * u_scale, 0.0, 1.0);
     \\}
     \\void main() {
     \\  vec2 c = u_size * 0.5;
@@ -385,6 +389,7 @@ pub const Renderer = struct {
     loc_rect_rad: c_int = -1,
     loc_rect_mode: c_int = -1,
     loc_rect_border: c_int = -1,
+    loc_rect_scale: c_int = -1,
     loc_image_res: c_int = -1,
     loc_image_pos: c_int = -1,
     loc_image_size: c_int = -1,
@@ -439,6 +444,9 @@ pub const Renderer = struct {
         self.loc_rect_rad = gl.glGetUniformLocation(self.prog_rect, "u_radius");
         self.loc_rect_mode = gl.glGetUniformLocation(self.prog_rect, "u_mode");
         self.loc_rect_border = gl.glGetUniformLocation(self.prog_rect, "u_border");
+        self.loc_rect_scale = gl.glGetUniformLocation(self.prog_rect, "u_scale");
+        // An unset float uniform reads 0, which would make every `cov` return 0.5, so it starts at 1x.
+        if (self.loc_rect_scale >= 0) gl.glUniform1f(self.loc_rect_scale, 1.0);
         self.loc_image_res = gl.glGetUniformLocation(self.prog_image, "u_res");
         self.loc_image_pos = gl.glGetUniformLocation(self.prog_image, "u_pos");
         self.loc_image_size = gl.glGetUniformLocation(self.prog_image, "u_size");
@@ -619,25 +627,31 @@ pub const Renderer = struct {
         if (comptime builtin.is_test) return;
         if (text_bytes.len == 0 or text_bytes.len > text_max_bytes) return;
         const fs: u16 = if (font_size == 0) 16 else font_size;
-        const box_h: i32 = @intFromFloat(@round(bbox_h));
-        // The bitmap is blitted on whole pixels and its glyphs snap from the same fractional origin, so it goes here.
-        const grid_x = @floor(bbox_x);
-        const grid_y = @floor(bbox_y);
+        // A glyph texture is the one thing that cannot scale for free: rasterise it at the display density and place it back in points.
+        const s = ui_scale.current();
+        const fs_dev: u16 = @intFromFloat(@round(@as(f32, @floatFromInt(fs)) * s));
+        const ds = @as(f32, @floatFromInt(fs_dev)) / @as(f32, @floatFromInt(fs));
+        const box_h: i32 = @intFromFloat(@round(bbox_h * ds));
+        const dev_x = bbox_x * ds;
+        const dev_y = bbox_y * ds;
+        // The bitmap is blitted on whole device pixels and its glyphs snap from the same fractional origin, so it goes here.
+        const grid_x = @floor(dev_x);
+        const grid_y = @floor(dev_y);
 
-        // A run's coverage does not depend on its colour, so a hover repaint finds it by (run, size, box, sub-pixel origin).
-        const key = hashTextKey(text_bytes, fs, box_h, bbox_x, bbox_y);
+        // A run's coverage does not depend on its colour, so a hover repaint finds it by (run, size, box, sub-pixel origin) — all in device pixels.
+        const key = hashTextKey(text_bytes, fs_dev, box_h, dev_x, dev_y);
         self.text_cache_clock += 1;
         for (&self.text_cache) |*e| {
             if (e.valid and e.hash == key and e.tex != 0) {
                 e.last_used = self.text_cache_clock;
                 self.text_cache_hits += 1;
-                self.drawCoverageQuad(e.tex, win_w, win_h, grid_x, grid_y, @floatFromInt(e.w), @floatFromInt(e.h), clay_color);
+                self.drawCoverageQuad(e.tex, win_w, win_h, grid_x / ds, grid_y / ds, @as(f32, @floatFromInt(e.w)) / ds, @as(f32, @floatFromInt(e.h)) / ds, clay_color);
                 return;
             }
         }
         self.text_cache_misses += 1;
 
-        const bmp = text.rasterizeRun(self.alloc, text_bytes, fs, bbox_x, bbox_y, bbox_h) orelse {
+        const bmp = text.rasterizeRun(self.alloc, text_bytes, fs_dev, dev_x, dev_y, @floatFromInt(box_h)) orelse {
             self.drawTextFallback(win_w, win_h, bbox_x, bbox_y, text_bytes, font_size, clay_color);
             return;
         };
@@ -673,7 +687,7 @@ pub const Renderer = struct {
             gl.glDeleteTextures(1, @ptrCast(&old));
         }
         ev.* = .{ .hash = key, .tex = tex, .w = @intCast(bmp.width), .h = @intCast(bmp.height), .valid = true, .last_used = self.text_cache_clock };
-        self.drawCoverageQuad(tex, win_w, win_h, grid_x, grid_y, @floatFromInt(bmp.width), @floatFromInt(bmp.height), clay_color);
+        self.drawCoverageQuad(tex, win_w, win_h, grid_x / ds, grid_y / ds, @as(f32, @floatFromInt(bmp.width)) / ds, @as(f32, @floatFromInt(bmp.height)) / ds, clay_color);
     }
 
     /// Blit an 8-bit coverage texture with the text program: the coverage is the alpha, `clay_color` the ink.
@@ -850,7 +864,15 @@ pub const Renderer = struct {
 
     /// Draw a full Clay render-command list.
     pub fn drawCommands(self: *Renderer, commands: []cl.RenderCommand, win_w: i32, win_h: i32) void {
-        gl.glViewport(0, 0, win_w, win_h);
+        // The commands are in points; the viewport is the device pixel buffer they are painted into, so a 2x display gets 2x the pixels.
+        const s = ui_scale.current();
+        const px = scale.pixelSize(@intCast(@max(win_w, 1)), @intCast(@max(win_h, 1)), s);
+        gl.glViewport(0, 0, @intCast(px.w), @intCast(px.h));
+        // The rounded-box AA band is one DEVICE pixel: at 2x a logical-unit band would leave every edge a quarter-transparent column.
+        if (self.loc_rect_scale >= 0) {
+            gl.glUseProgram(self.prog_rect);
+            gl.glUniform1f(self.loc_rect_scale, s);
+        }
         gl.glDisable(gl.GL_SCISSOR_TEST);
         gl.glEnable(gl.GL_BLEND);
         // Separate alpha factors: the window is opaque (glClear alpha 1.0), so keep the destination alpha saturated.
@@ -871,12 +893,13 @@ pub const Renderer = struct {
                 .scissor_start => {
                     const bb = cmd.bounding_box;
                     gl.glEnable(gl.GL_SCISSOR_TEST);
-                    const sx: c_int = @intFromFloat(@max(bb.x, 0));
-                    const sw: c_int = @intFromFloat(@max(bb.width, 0));
+                    // glScissor is in device pixels, so the point-space box is scaled with everything else.
+                    const sx: c_int = @intFromFloat(@round(@max(bb.x, 0) * s));
+                    const sw: c_int = @intFromFloat(@round(@max(bb.width, 0) * s));
                     // GL origin is bottom-left; Clay is top-left.
-                    const top: f32 = bb.y + bb.height;
-                    const sy: c_int = @intFromFloat(@max(@as(f32, @floatFromInt(win_h)) - top, 0));
-                    const sh: c_int = @intFromFloat(@max(bb.height, 0));
+                    const top: f32 = (bb.y + bb.height) * s;
+                    const sy: c_int = @intFromFloat(@max(@as(f32, @floatFromInt(px.h)) - top, 0));
+                    const sh: c_int = @intFromFloat(@round(@max(bb.height, 0) * s));
                     gl.glScissor(sx, sy, sw, sh);
                 },
                 .scissor_end => {

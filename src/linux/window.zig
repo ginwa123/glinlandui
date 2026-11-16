@@ -10,6 +10,11 @@ const adapter = @import("adapter.zig");
 const input = @import("input.zig");
 const keymap = @import("keymap.zig");
 const present = @import("present.zig");
+// Display density: the outputs this window is on, and the scale they resolve to.
+const ui_scale = @import("ui_scale.zig");
+const scale = @import("../core/scale.zig");
+// The one place a logical window becomes device pixels, shared with the CPU backends so a 2x window means the same thing everywhere.
+const soft = @import("../core/render_software.zig");
 
 // Wayland client bootstrap + xdg-toplevel/EGL window (Task A, tiled).
 const c = @cImport({
@@ -118,11 +123,19 @@ const Globals = struct {
     cursor_shape_manager: bool = false,
 };
 
+/// A `wl_output` global: its registry name, and the version the compositor offers (never bound above 2 — `scale` is the only event this backend reads).
+const OutputGlobal = struct {
+    name: u32 = 0,
+    version: u32 = 0,
+};
+
 const RegistryState = struct {
     compositor_name: u32 = 0,
     xdg_wm_base_name: u32 = 0,
     seat_name: u32 = 0,
     cursor_shape_manager_name: u32 = 0,
+    outputs: [ui_scale.max_outputs]OutputGlobal = [_]OutputGlobal{.{}} ** ui_scale.max_outputs,
+    output_count: usize = 0,
     found: Globals = .{},
 };
 
@@ -157,7 +170,6 @@ fn registryGlobalWithNames(
     version: u32,
 ) callconv(.c) void {
     _ = registry;
-    _ = version;
     const state: *RegistryState = @ptrCast(@alignCast(data orelse return));
     const iface = std.mem.span(interface orelse return);
     if (std.mem.eql(u8, iface, "wl_compositor")) {
@@ -176,6 +188,12 @@ fn registryGlobalWithNames(
     if (std.mem.eql(u8, iface, "wp_cursor_shape_manager_v1")) {
         state.found.cursor_shape_manager = true;
         if (state.cursor_shape_manager_name == 0) state.cursor_shape_manager_name = name;
+    }
+    if (std.mem.eql(u8, iface, "wl_output")) {
+        if (state.output_count < state.outputs.len) {
+            state.outputs[state.output_count] = .{ .name = name, .version = version };
+            state.output_count += 1;
+        }
     }
 }
 
@@ -562,6 +580,84 @@ fn xdgToplevelListener() c.struct_xdg_toplevel_listener {
     };
 }
 
+/// `wl_output`: only `scale` matters here, but every slot is wired so a header that adds one cannot leave a null handler behind.
+fn outputListener() c.struct_wl_output_listener {
+    var full = c.struct_wl_output_listener{
+        .geometry = outputGeometry,
+        .mode = outputMode,
+        .done = outputDone,
+        .scale = outputScale,
+    };
+    // `name`/`description` are wl_output v4 (Wayland 1.15); we bind v2, so they exist only on a new enough header.
+    if (comptime @hasField(c.struct_wl_output_listener, "name")) full.name = outputName;
+    if (comptime @hasField(c.struct_wl_output_listener, "description")) full.description = outputDescription;
+    return full;
+}
+
+/// `wl_surface`: `enter`/`leave` say which outputs hold this window, and `preferred_buffer_scale` is the compositor's own density answer.
+fn surfaceListener() c.struct_wl_surface_listener {
+    var full = c.struct_wl_surface_listener{
+        .enter = surfaceEnter,
+        .leave = surfaceLeave,
+    };
+    if (comptime @hasField(c.struct_wl_surface_listener, "preferred_buffer_scale")) full.preferred_buffer_scale = surfacePreferredScale;
+    if (comptime @hasField(c.struct_wl_surface_listener, "preferred_buffer_transform")) full.preferred_buffer_transform = surfacePreferredTransform;
+    return full;
+}
+
+// ---- wl_output + wl_surface handlers: display density ----
+
+fn outputGeometry(data: ?*anyopaque, output: ?*c.struct_wl_output, x: i32, y: i32, physical_width: i32, physical_height: i32, subpixel: i32, make: ?[*:0]const u8, model: ?[*:0]const u8, transform: i32) callconv(.c) void {
+    _ = .{ data, output, x, y, physical_width, physical_height, subpixel, make, model, transform };
+}
+
+fn outputMode(data: ?*anyopaque, output: ?*c.struct_wl_output, flags: u32, width: i32, height: i32, refresh: i32) callconv(.c) void {
+    _ = .{ data, output, flags, width, height, refresh };
+}
+
+fn outputDone(data: ?*anyopaque, output: ?*c.struct_wl_output) callconv(.c) void {
+    _ = .{ data, output };
+}
+
+fn outputName(data: ?*anyopaque, output: ?*c.struct_wl_output, name: ?[*:0]const u8) callconv(.c) void {
+    _ = .{ data, output, name };
+}
+
+fn outputDescription(data: ?*anyopaque, output: ?*c.struct_wl_output, description: ?[*:0]const u8) callconv(.c) void {
+    _ = .{ data, output, description };
+}
+
+fn outputScale(data: ?*anyopaque, output: ?*c.struct_wl_output, factor: i32) callconv(.c) void {
+    const win: *Window = @ptrCast(@alignCast(data orelse return));
+    win.watch.setScale(@ptrCast(output), factor);
+    win.applyUiScale();
+}
+
+fn surfaceEnter(data: ?*anyopaque, surface: ?*c.struct_wl_surface, output: ?*c.struct_wl_output) callconv(.c) void {
+    _ = surface;
+    const win: *Window = @ptrCast(@alignCast(data orelse return));
+    win.watch.enter(@ptrCast(output));
+    win.applyUiScale();
+}
+
+fn surfaceLeave(data: ?*anyopaque, surface: ?*c.struct_wl_surface, output: ?*c.struct_wl_output) callconv(.c) void {
+    _ = surface;
+    const win: *Window = @ptrCast(@alignCast(data orelse return));
+    win.watch.leave(@ptrCast(output));
+    win.applyUiScale();
+}
+
+fn surfacePreferredScale(data: ?*anyopaque, surface: ?*c.struct_wl_surface, factor: i32) callconv(.c) void {
+    _ = surface;
+    const win: *Window = @ptrCast(@alignCast(data orelse return));
+    win.watch.setPreferred(factor);
+    win.applyUiScale();
+}
+
+fn surfacePreferredTransform(data: ?*anyopaque, surface: ?*c.struct_wl_surface, transform: u32) callconv(.c) void {
+    _ = .{ data, surface, transform };
+}
+
 // ---- Task B: wl_seat listener ----
 
 fn seatCapabilities(data: ?*anyopaque, seat: ?*c.struct_wl_seat, capabilities: u32) callconv(.c) void {
@@ -625,6 +721,14 @@ pub const Window = struct {
     frame_pending: bool = false,
     /// An extra fd to poll beside the display: the devtool service's wake pipe, so a request wakes an idle window. Null when no service is up.
     wake_fd: ?std.posix.fd_t = null,
+    /// The outputs this window is on and the scale they resolve to; `applied_scale` is the density already in force.
+    watch: ui_scale.Watch = .{},
+    applied_scale: f32 = 0,
+    /// The bound `wl_output` proxies, so a scale arrives only from outputs this window actually knows.
+    output_objs: [ui_scale.max_outputs]?*c.struct_wl_output = [_]?*c.struct_wl_output{null} ** ui_scale.max_outputs,
+    output_objs_len: usize = 0,
+    /// The EGL window, so a scale change can resize the buffers without waiting for a configure.
+    egl_window: ?*c.struct_wl_egl_window = null,
 
     // ---- Listener storage (MUST outlive the proxy) ---- wl_proxy_add_listener does NOT copy the listener struct - it keeps the caller's pointer.
     pointer_listener: c.struct_wl_pointer_listener = pointerListener(),
@@ -635,6 +739,8 @@ pub const Window = struct {
     wm_listener: c.struct_xdg_wm_base_listener = xdgWmBaseListener(),
     xdg_surface_listener: c.struct_xdg_surface_listener = xdgSurfaceListener(),
     toplevel_listener: c.struct_xdg_toplevel_listener = xdgToplevelListener(),
+    surface_listener: c.struct_wl_surface_listener = surfaceListener(),
+    output_listener: c.struct_wl_output_listener = outputListener(),
 
     pub fn init(alloc: std.mem.Allocator, config: WindowConfig) Window {
         // The allocator is accepted for signature parity with the web backend, which genuinely needs it (`wasm_allocator` is the only allocator that grows a.
@@ -651,6 +757,31 @@ pub const Window = struct {
         const cw = if (w == 0) self.config.width else @max(w, self.config.min_width);
         const ch = if (h == 0) self.config.height else @max(h, self.config.min_height);
         return .{ .w = cw, .h = ch };
+    }
+
+    /// The device pixels this window covers: the logical size the compositor handed us, at the density it announced.
+    fn deviceSize(self: *const Window) @TypeOf(scale.pixelSize(0, 0, 1)) {
+        return scale.pixelSize(self.win_w, self.win_h, self.watch.effective());
+    }
+
+    /// Adopt the display density: one value for every surface in this process, one for the compositor's bookkeeping, and a redraw at the new size.
+    fn applyUiScale(self: *Window) void {
+        const s = self.watch.effective();
+        if (s == self.applied_scale) return;
+        self.applied_scale = s;
+        ui_scale.setApplied(s);
+        soft.setRenderScale(s);
+        // A buffer `s` times the surface size is only shown at the surface size when the scale says so; without this the window would grow `s` times.
+        if (self.surface) |surface| {
+            const rounded: i32 = @intFromFloat(@round(s));
+            c.wl_surface_set_buffer_scale(surface, if (rounded < 1) 1 else rounded);
+        }
+        if (self.egl_window) |w| {
+            const px = self.deviceSize();
+            c.wl_egl_window_resize(w, @intCast(px.w), @intCast(px.h), 0, 0);
+            c.glViewport(0, 0, @intCast(px.w), @intCast(px.h));
+        }
+        self.needs_draw = true;
     }
 
     /// Close intent (delegate on_close / on_key true) returns cleanly through the deferred disconnect below.
@@ -741,6 +872,29 @@ pub const Window = struct {
             }
         }
 
+        // ---- display density: which outputs hold this window, and how dense they are ----
+        _ = c.wl_surface_add_listener(surface, &self.surface_listener, self);
+        for (reg.outputs[0..reg.output_count]) |og| {
+            if (self.output_objs_len >= self.output_objs.len) break;
+            const ver: u32 = @min(og.version, 2);
+            const out_ptr = c.wl_registry_bind(registry, og.name, &c.wl_output_interface, ver) orelse continue;
+            const out: *c.struct_wl_output = @ptrCast(@alignCast(out_ptr));
+            self.output_objs[self.output_objs_len] = out;
+            self.output_objs_len += 1;
+            _ = self.watch.announce(og.name);
+            self.watch.attach(og.name, @ptrCast(out));
+            _ = c.wl_output_add_listener(out, &self.output_listener, self);
+        }
+        defer {
+            for (self.output_objs[0..self.output_objs_len]) |maybe| {
+                if (maybe) |o| c.wl_output_destroy(o);
+            }
+            self.output_objs_len = 0;
+        }
+        // One roundtrip carries the `scale` and `enter` events those listeners just subscribed to, so the first buffer is already the right size.
+        if (c.wl_display_roundtrip(display) < 0) return error.RoundtripFailed;
+        self.applyUiScale();
+
         // ---- EGL bootstrap (initial size from config) ----
         const egl_display = c.eglGetDisplay(@ptrCast(display));
         if (egl_display == c.EGL_NO_DISPLAY) return error.EglNoDisplay;
@@ -759,8 +913,10 @@ pub const Window = struct {
         if (egl_ctx == c.EGL_NO_CONTEXT) return error.EglContextFailed;
         defer _ = c.eglDestroyContext(egl_display, egl_ctx);
 
-        const egl_window = c.wl_egl_window_create(surface, @intCast(self.config.width), @intCast(self.config.height)) orelse
+        const px = self.deviceSize();
+        const egl_window = c.wl_egl_window_create(surface, @intCast(px.w), @intCast(px.h)) orelse
             return error.EglWindowFailed;
+        self.egl_window = egl_window;
         defer c.wl_egl_window_destroy(egl_window);
         const egl_surface = c.eglCreateWindowSurface(egl_display, egl_config, @ptrCast(egl_window), null);
         if (egl_surface == c.EGL_NO_SURFACE) return error.EglSurfaceFailed;
@@ -831,8 +987,9 @@ pub const Window = struct {
                         self.win_h = self.pending_h;
                         self.pending_w = 0;
                         self.pending_h = 0;
-                        c.wl_egl_window_resize(egl_window, @intCast(self.win_w), @intCast(self.win_h), 0, 0);
-                        c.glViewport(0, 0, @intCast(self.win_w), @intCast(self.win_h));
+                        const dev = self.deviceSize();
+                        c.wl_egl_window_resize(egl_window, @intCast(dev.w), @intCast(dev.h), 0, 0);
+                        c.glViewport(0, 0, @intCast(dev.w), @intCast(dev.h));
                         if (self.delegate) |d| d.on_resize(d.ptr, self.win_w, self.win_h);
                     }
                     c.glClear(c.GL_COLOR_BUFFER_BIT);
@@ -1167,6 +1324,8 @@ test "RED every wayland listener has a non-null handler in EVERY slot" {
     try assertListenerComplete(c.struct_xdg_wm_base_listener, xdgWmBaseListener());
     try assertListenerComplete(c.struct_xdg_surface_listener, xdgSurfaceListener());
     try assertListenerComplete(c.struct_xdg_toplevel_listener, xdgToplevelListener());
+    try assertListenerComplete(c.struct_wl_surface_listener, surfaceListener());
+    try assertListenerComplete(c.struct_wl_output_listener, outputListener());
 }
 
 test "RED listener structs are owned by Window so they outlive their proxy" {
@@ -1181,6 +1340,8 @@ test "RED listener structs are owned by Window so they outlive their proxy" {
         .{ "wm_base", c.struct_xdg_wm_base_listener, win.wm_listener },
         .{ "xdg_surface", c.struct_xdg_surface_listener, win.xdg_surface_listener },
         .{ "xdg_toplevel", c.struct_xdg_toplevel_listener, win.toplevel_listener },
+        .{ "surface", c.struct_wl_surface_listener, win.surface_listener },
+        .{ "output", c.struct_wl_output_listener, win.output_listener },
     }) |entry| {
         _ = entry[0];
         try assertListenerComplete(@TypeOf(entry[2]), entry[2]);

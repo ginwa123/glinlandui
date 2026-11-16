@@ -150,7 +150,11 @@ commit that changes the pixels.
 **`ci/render_scale.expected` is a ratchet.** It lists the backends that are known NOT to honour the
 display scale. The gate fails both when an unlisted backend stops honouring it (a regression) and
 when a listed backend starts honouring it (a stale entry). So the list can only shrink, and deleting
-a line is the proof a fix landed.
+a line is the proof a fix landed. **The list is empty today:** macOS divides `glin_cocoa_backing_scale`
+in, Windows and the browser size their surface from the scale, and Linux binds `wl_output`, takes the
+largest scale among the outputs the surface has entered (plus `wl_surface.preferred_buffer_scale`),
+calls `set_buffer_scale`, sizes the EGL window in device pixels, and rasterises text at `fs * scale`
+so the glyphs are drawn at device resolution rather than upscaled.
 
 ## Scrolling and repaint
 
