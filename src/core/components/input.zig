@@ -820,6 +820,8 @@ pub fn textField(field: *Field) void {
     // Drag-select first, so the caret and the selection this frame draws are the ones the pointer just asked for.
     dragSelect(field);
     const draft = input.text();
+    // A model edit can write a shorter run in place, and the caret it left behind must not slice past the new end.
+    input.caret.clamp(draft.len);
     // The clip's own width is last frame's, because a box read mid-declare has not been laid out yet.
     if (frame_mod.bounds(textClipId(name))) |b| field.inner_w = b.width;
     // A caret that would land outside the field slides the text left instead: that IS the horizontal scroll.
@@ -2645,4 +2647,27 @@ test "a scrolled single-line caret slides with the text, and the scroll is count
     const caret = frame_mod.bounds(.IDI("test-scrolled-field", 2)) orelse return error.CaretMissing;
     const advance = scrolled_field.measure(long_value, scrolled_field.font_size.whole());
     try std.testing.expectApproxEqAbs(box.x + scrolled_field.pad.left.pts() + advance - scrolled_field.h_scroll, caret.x, 1.5);
+}
+
+var shrink_field: Field = .{ .id = .{ .text = "test-shrink-field" }, .w = .{ .fixed = 200 } };
+
+fn declareShrinkField() void {
+    textField(&shrink_field);
+}
+
+test "a draft the model shortens in place cannot leave the caret past its end" {
+    shrink_field.bind();
+    shrink_field.setText("sssss");
+    shrink_field.editor.setCaret(5, false);
+    // A selection that reached the end, then a shorter run written into the same buffer.
+    shrink_field.editor.caret.anchor = 1;
+    shrink_field.editor.len = 2;
+    frame_mod.ptr_down = false;
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    frame_mod.setFocus("test-shrink-field");
+    cl.beginLayout();
+    declareShrinkField();
+    _ = cl.endLayout();
+    try std.testing.expect(shrink_field.editor.caret.offset <= shrink_field.editor.len);
+    try std.testing.expect((shrink_field.editor.caret.anchor orelse 0) <= shrink_field.editor.len);
 }
