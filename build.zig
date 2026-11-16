@@ -568,6 +568,29 @@ pub fn build(b: *std.Build) void {
         mac_gpu_test_step.dependOn(&skip.step);
     }
 
+    // The D3D11-vs-CPU comparison needs a device, so it is a Windows step of its own and NOT part of `test` — the parity suite's count has to match on every OS.
+    const win_gpu_test_step = b.step("test-windows-gpu", "Run the Windows-only D3D11 renderer tests (D3D11 draws the CPU reference's pixels)");
+    if (target.result.os.tag == .windows) {
+        const m = b.createModule(.{ // A root at src/, not src/windows/: the test imports ../core/*, which is outside the
+            // package path when the root lives in src/windows/.
+            .root_source_file = b.path("src/windows_gpu_test.zig"),
+            .target = target,
+        });
+        m.addImport("zclay", zclay_mod);
+        addVendoredStbInclude(b, m);
+        m.addCSourceFile(.{ .file = b.path("src/core/stb_truetype_impl.c"), .flags = stbFlags(false) });
+        m.addCSourceFile(.{ .file = b.path("src/core/stb_image_impl.c"), .flags = stbFlags(false) });
+        // The same shim TU and import libraries the library gets, so a test that links here links in the app.
+        addWindowsShim(b, m);
+        m.linkLibrary(clay_lib);
+        const t = b.addTest(.{ .root_module = m });
+        t.root_module.linkSystemLibrary("c", .{});
+        win_gpu_test_step.dependOn(&b.addRunArtifact(t).step);
+    } else {
+        const skip = b.addSystemCommand(&.{ "echo", "test-windows-gpu: skipped (no D3D11 on this host)" });
+        win_gpu_test_step.dependOn(&skip.step);
+    }
+
     // `native-test` runs the Linux-only Wayland/EGL/GLES3 tests.
     const native_test_step = b.step("native-test", "Run the Linux-only native (Wayland/EGL/GLES3) tests");
     if (native_protocols) |protocols| {
