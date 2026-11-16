@@ -12,7 +12,8 @@ const common = @import("../core/render_common.zig");
 pub const Surface = soft.Surface;
 
 const on_windows = builtin.os.tag == .windows;
-const gpu = if (on_windows) @import("d3d11.zig") else struct {};
+// Always imported, on every host: the module stubs itself out where there is no shim, so a gpu.c reference type-checks everywhere instead of relying on "this branch is dead, so it is not analysed".
+const gpu = @import("d3d11.zig");
 
 const atlas_w: u32 = 1024;
 const atlas_h: u32 = 1024;
