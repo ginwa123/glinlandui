@@ -9,6 +9,8 @@ const cl = @import("zclay");
 // The density the window adopted from the compositor, and the one definition of a logical-to-device pixel size.
 const ui_scale = @import("ui_scale.zig");
 const scale = @import("../core/scale.zig");
+// The one clip depth every renderer shares, so a nested clip cannot out-run any backend's stack.
+const max_clip_depth = @import("../core/render_software.zig").max_clip_depth;
 
 const egl = @cImport({
     @cInclude("EGL/egl.h");
@@ -411,6 +413,11 @@ pub const Renderer = struct {
     img_cache_misses: u64 = 0,
     /// Decodes performed this frame (budget: at most img_decode_budget misses decode per frame so opening a full gallery never stalls; the rest keep their.
     img_decodes_this_frame: u32 = 0,
+    /// The clip in force, in DEVICE pixels and GL orientation (x, y, w, h): already intersected with every scissor above it.
+    clip_rect: ?[4]i32 = null,
+    /// The clips each `scissor_start` interrupted, so `scissor_end` restores its parent instead of clearing the clip.
+    clip_stack: [max_clip_depth]?[4]i32 = @splat(null),
+    clip_depth: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) !Renderer {
         if (comptime builtin.is_test) return error.NoDisplay;
@@ -862,6 +869,47 @@ pub const Renderer = struct {
         }
     }
 
+    // Open a clip: it narrows whatever was already clipping, so a field's horizontal clip (as tall as its content) cannot widen the scroll box around it.
+    fn pushScissor(self: *Renderer, next: [4]i32) void {
+        if (self.clip_depth < self.clip_stack.len) {
+            self.clip_stack[self.clip_depth] = self.clip_rect;
+            self.clip_depth += 1;
+        }
+        self.clip_rect = intersectClip(self.clip_rect, next);
+        self.applyClip();
+    }
+
+    fn popScissor(self: *Renderer) void {
+        if (self.clip_depth == 0) {
+            self.clip_rect = null;
+            gl.glDisable(gl.GL_SCISSOR_TEST);
+            return;
+        }
+        self.clip_depth -= 1;
+        self.clip_rect = self.clip_stack[self.clip_depth];
+        self.applyClip();
+    }
+
+    fn applyClip(self: *Renderer) void {
+        const r = self.clip_rect orelse {
+            gl.glDisable(gl.GL_SCISSOR_TEST);
+            return;
+        };
+        // glScissor is in device pixels, bottom-left origin, and a zero-size box clips everything.
+        gl.glEnable(gl.GL_SCISSOR_TEST);
+        gl.glScissor(r[0], r[1], @max(r[2], 0), @max(r[3], 0));
+    }
+
+    // The overlap of two device-pixel clips; a zero size means nothing of the run is visible.
+    fn intersectClip(cur: ?[4]i32, next: [4]i32) [4]i32 {
+        const prev = cur orelse return next;
+        const x0 = @max(prev[0], next[0]);
+        const y0 = @max(prev[1], next[1]);
+        const x1 = @min(prev[0] + prev[2], next[0] + next[2]);
+        const y1 = @min(prev[1] + prev[3], next[1] + next[3]);
+        return .{ x0, y0, @max(x1 - x0, 0), @max(y1 - y0, 0) };
+    }
+
     /// Draw a full Clay render-command list.
     pub fn drawCommands(self: *Renderer, commands: []cl.RenderCommand, win_w: i32, win_h: i32) void {
         // The commands are in points; the viewport is the device pixel buffer they are painted into, so a 2x display gets 2x the pixels.
@@ -874,6 +922,8 @@ pub const Renderer = struct {
             gl.glUniform1f(self.loc_rect_scale, s);
         }
         gl.glDisable(gl.GL_SCISSOR_TEST);
+        self.clip_rect = null;
+        self.clip_depth = 0;
         gl.glEnable(gl.GL_BLEND);
         // Separate alpha factors: the window is opaque (glClear alpha 1.0), so keep the destination alpha saturated.
         gl.glBlendFuncSeparate(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA, gl.GL_ONE, gl.GL_ONE_MINUS_SRC_ALPHA);
@@ -892,7 +942,6 @@ pub const Renderer = struct {
                 },
                 .scissor_start => {
                     const bb = cmd.bounding_box;
-                    gl.glEnable(gl.GL_SCISSOR_TEST);
                     // glScissor is in device pixels, so the point-space box is scaled with everything else.
                     const sx: c_int = @intFromFloat(@round(@max(bb.x, 0) * s));
                     const sw: c_int = @intFromFloat(@round(@max(bb.width, 0) * s));
@@ -900,11 +949,9 @@ pub const Renderer = struct {
                     const top: f32 = (bb.y + bb.height) * s;
                     const sy: c_int = @intFromFloat(@max(@as(f32, @floatFromInt(px.h)) - top, 0));
                     const sh: c_int = @intFromFloat(@round(@max(bb.height, 0) * s));
-                    gl.glScissor(sx, sy, sw, sh);
+                    self.pushScissor(.{ sx, sy, sw, sh });
                 },
-                .scissor_end => {
-                    gl.glDisable(gl.GL_SCISSOR_TEST);
-                },
+                .scissor_end => self.popScissor(),
                 .border => {
                     const bb = cmd.bounding_box;
                     self.drawBorderCmd(win_w, win_h, bb.x, bb.y, bb.width, bb.height, cmd.render_data.border);

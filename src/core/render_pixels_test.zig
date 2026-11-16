@@ -256,18 +256,63 @@ test "pixel: scissor_start clips drawing to its region" {
     try expectPx(s, 10, 7, .{ 0, 0, 0, 255 });
 }
 
-test "pixel: a second scissor_start replaces (does not intersect) the region" {
+test "pixel: a nested scissor_start narrows the region it is inside" {
     var s = try surface(32, 32);
     defer s.deinit();
     var cmds = [_]cl.RenderCommand{
-        scissorCmd(0, 0, 16, 32, true),
-        scissorCmd(16, 0, 16, 32, true), // replaces the first
+        scissorCmd(0, 0, 32, 32, true),
+        scissorCmd(8, 0, 24, 32, true), // inside the first, and narrower
         rectCmd(0, 0, 32, 32, .{ 255, 0, 0, 255 }),
+        scissorCmd(0, 0, 0, 0, false),
+        scissorCmd(0, 0, 0, 0, false),
     };
     s.renderCommands(&cmds);
-    // Only the right half is painted.
-    try expectPx(s, 20, 10, .{ 255, 0, 0, 255 });
+    // The inner clip keeps its parent's left edge: the parent still cuts at x = 0.
+    try expectPx(s, 10, 10, .{ 255, 0, 0, 255 });
     try expectPx(s, 5, 10, .{ 0, 0, 0, 255 });
+    try expectPx(s, 20, 30, .{ 255, 0, 0, 255 });
+}
+
+test "pixel: after scissor_end the parent clip is back, not gone" {
+    var s = try surface(32, 32);
+    defer s.deinit();
+    var cmds = [_]cl.RenderCommand{
+        scissorCmd(0, 0, 16, 16, true),
+        scissorCmd(0, 0, 8, 8, true),
+        rectCmd(0, 0, 8, 8, .{ 255, 0, 0, 255 }),
+        scissorCmd(0, 0, 0, 0, false),
+        rectCmd(8, 0, 24, 32, .{ 0, 255, 0, 255 }),
+        scissorCmd(0, 0, 0, 0, false),
+        rectCmd(16, 16, 16, 16, .{ 255, 0, 255, 255 }),
+    };
+    s.renderCommands(&cmds);
+    // The red run is inside both clips.
+    try expectPx(s, 4, 4, .{ 255, 0, 0, 255 });
+    // The green run is inside the OUTER clip only: the inner clip is closed, the outer one still cuts it.
+    try expectPx(s, 12, 8, .{ 0, 255, 0, 255 });
+    try expectPx(s, 12, 20, .{ 0, 0, 0, 255 });
+    try expectPx(s, 20, 8, .{ 0, 0, 0, 255 });
+    // The magenta run is after every clip is closed, so nothing cuts it.
+    try expectPx(s, 20, 20, .{ 255, 0, 255, 255 });
+}
+
+// The Kurir shape: a field's own clip is as wide as its content and as tall as every line, so a renderer that REPLACES the clip instead of intersecting lets a body paint over the sidebar.
+test "pixel: a WIDER nested scissor cannot widen the clip it sits inside" {
+    var s = try surface(32, 32);
+    defer s.deinit();
+    var cmds = [_]cl.RenderCommand{
+        scissorCmd(0, 0, 16, 16, true),
+        scissorCmd(0, 0, 32, 32, true), // a clip larger than its parent, like a field inside a scroll box
+        rectCmd(0, 0, 32, 32, .{ 255, 0, 0, 255 }),
+        scissorCmd(0, 0, 0, 0, false),
+        scissorCmd(0, 0, 0, 0, false),
+    };
+    s.renderCommands(&cmds);
+    try expectPx(s, 5, 5, .{ 255, 0, 0, 255 });
+    try expectPx(s, 15, 15, .{ 255, 0, 0, 255 });
+    try expectPx(s, 20, 5, .{ 0, 0, 0, 255 });
+    try expectPx(s, 5, 20, .{ 0, 0, 0, 255 });
+    try expectPx(s, 20, 20, .{ 0, 0, 0, 255 });
 }
 
 // ---- text ---- `drawTextRun` draws REAL glyphs when the host has a font it can parse, and falls back to one box per byte when it does not.

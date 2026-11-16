@@ -4122,8 +4122,19 @@ void Clay_UpdateScrollContainers(bool enableDragScrolling, Clay_Vector2 scrollDe
 
         for (int32_t j = 0; j < context->pointerOverIds.length; ++j) { // TODO n & m are small here but this being n*m gives me the creeps
             if (scrollData->layoutElement->id == Clay_ElementIdArray_Get(&context->pointerOverIds, j)->id) {
-                highestPriorityElementIndex = j;
-                highestPriorityScrollData = scrollData;
+                // A container may only take the wheel when it can actually move on one of the axes the delta
+                // asks for. A text field's own horizontal clip is registered as a scroll container too, so
+                // picking it blindly would swallow every vertical wheel meant for the scroll box around it.
+                Clay_ClipElementConfig *candidateClip = Clay__FindElementConfigWithType(scrollData->layoutElement, CLAY__ELEMENT_CONFIG_TYPE_CLIP).clipElementConfig;
+                bool consumesX = scrollDelta.x != 0 && candidateClip->horizontal && scrollData->contentSize.width > scrollData->layoutElement->dimensions.width;
+                bool consumesY = scrollDelta.y != 0 && candidateClip->vertical && scrollData->contentSize.height > scrollData->layoutElement->dimensions.height;
+                bool anyDelta = scrollDelta.x != 0 || scrollDelta.y != 0;
+                // A wheel with no delta (drag scrolling) leaves the choice to depth alone. The deepest usable
+                // container wins, so an inner scroll moves before the scroll box it lives in does.
+                if ((!anyDelta || consumesX || consumesY) && j > highestPriorityElementIndex) {
+                    highestPriorityElementIndex = j;
+                    highestPriorityScrollData = scrollData;
+                }
             }
         }
     }

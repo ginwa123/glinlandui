@@ -99,13 +99,20 @@ pub const Image = struct {
 // The scissor region, top-down, half-open on the max edges.
 const Scissor = struct { x0: i64, y0: i64, x1: i64, y1: i64 };
 
-// An RGBA8 software framebuffer plus a scissor stack of depth 1.
+// How deep nested clips may go: Clay emits one scissor per clip element, and every scroll inside a scroll inside a field nests.
+pub const max_clip_depth: usize = 32;
+
+// An RGBA8 software framebuffer plus a scissor STACK: a nested clip narrows its ancestors, it never widens them.
 pub const Surface = struct {
     alloc: std.mem.Allocator,
     width: u32,
     height: u32,
     pixels: []u8, // RGBA8, len == width*height*4
+    // The clip in force: the intersection of every scissor opened so far.
     scissor: ?Scissor = null,
+    // The clips each `scissor_start` interrupted, so `scissor_end` restores its parent instead of clearing the clip.
+    scissor_stack: [max_clip_depth]?Scissor = @splat(null),
+    scissor_depth: usize = 0,
     clear_rgb: [4]f32 = .{ 0, 0, 0, 255 },
     images: std.AutoHashMapUnmanaged(u64, Image) = .empty,
     // Pixel buffers this surface decoded itself, so deinit frees only what it owns.
@@ -466,14 +473,43 @@ pub const Surface = struct {
                     const sw: i64 = @intFromFloat(@max(bb.width, 0));
                     const sy: i64 = @intFromFloat(@max(bb.y, 0));
                     const sh: i64 = @intFromFloat(@max(bb.height, 0));
-                    self.scissor = .{ .x0 = sx, .y0 = sy, .x1 = sx + sw, .y1 = sy + sh };
+                    self.pushScissor(.{ .x0 = sx, .y0 = sy, .x1 = sx + sw, .y1 = sy + sh });
                 },
-                .scissor_end => self.scissor = null,
+                .scissor_end => self.popScissor(),
                 .none, .custom => {},
             }
         }
         // A leaked scissor must never affect the next frame.
         self.scissor = null;
+        self.scissor_depth = 0;
+    }
+
+    // Open a clip: it narrows whatever was already clipping, so a wide inner clip (a field's, as tall as its content) can never paint over its ancestors.
+    fn pushScissor(self: *Surface, next: Scissor) void {
+        if (self.scissor_depth < self.scissor_stack.len) {
+            self.scissor_stack[self.scissor_depth] = self.scissor;
+            self.scissor_depth += 1;
+        }
+        self.scissor = if (self.scissor) |cur| intersect(cur, next) else next;
+    }
+
+    fn popScissor(self: *Surface) void {
+        if (self.scissor_depth == 0) {
+            self.scissor = null;
+            return;
+        }
+        self.scissor_depth -= 1;
+        self.scissor = self.scissor_stack[self.scissor_depth];
+    }
+
+    // The overlap of two clips: empty (x1 <= x0 or y1 <= y0) means nothing can be painted, which the per-pixel tests already understand.
+    pub fn intersect(a: Scissor, b: Scissor) Scissor {
+        return .{
+            .x0 = @max(a.x0, b.x0),
+            .y0 = @max(a.y0, b.y0),
+            .x1 = @min(a.x1, b.x1),
+            .y1 = @min(a.y1, b.y1),
+        };
     }
 
     fn drawBorder(self: *Surface, bd: cl.BorderRenderData, bb: cl.BoundingBox) void {

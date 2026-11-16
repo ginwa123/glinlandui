@@ -2,6 +2,7 @@
 const std = @import("std");
 const cl = @import("zclay");
 const headless = @import("../testing/headless.zig");
+const soft = @import("../render_software.zig");
 const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
@@ -1203,6 +1204,121 @@ fn layoutFrame(declare_fn: *const fn () void) ![]cl.RenderCommand {
     cl.beginLayout();
     declare_fn();
     return cl.endLayout();
+}
+
+// Clay registers EVERY clip element as a scroll container, so a wheel over a field's own horizontal clip must still reach the box around it.
+var wheel_field: Field = .{ .id = .{ .text = "test-wheel-field" } };
+
+fn declareWheelFieldScroll() void {
+    scroll_mod.scroll(.{
+        .id = .{ .text = "test-wheel-scroll" },
+        .w = .{ .fixed = 200 },
+        .h = .{ .fixed = 100 },
+    }, {}, wheelScrollChildren);
+}
+
+fn wheelScrollChildren(_: void) void {
+    textField(&wheel_field);
+    var i: usize = 0;
+    while (i < 9) : (i += 1) {
+        cl.UI()(.{
+            .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(40) } },
+            .background_color = .{ 80, 80, 80, 255 },
+        })({});
+    }
+}
+
+// A multiline field taller than the box it lives in: the field is 300 pt of lines inside a 100 pt scroll box.
+var bleed_field: Field = .{ .id = .{ .text = "test-bleed-field" } };
+
+fn declareBleedScroll() void {
+    scroll_mod.scroll(.{
+        .id = .{ .text = "test-bleed-scroll" },
+        .w = .{ .fixed = 200 },
+        .h = .{ .fixed = 100 },
+    }, {}, bleedScrollChildren);
+}
+
+fn bleedScrollChildren(_: void) void {
+    textField(&bleed_field);
+}
+
+test "a multiline field taller than its scroll box paints nothing outside the box" {
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.ptr_down = false;
+    beginFrame();
+    bleed_field = .{
+        .id = .{ .text = "test-bleed-field" },
+        .multiline = true,
+        .value = "line\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n",
+        .w = .{ .fixed = 160 },
+        .h = .{ .fixed = 300 },
+    };
+    bleed_field.bind();
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    _ = try layoutFrame(declareBleedScroll);
+    const cmds = try layoutFrame(declareBleedScroll);
+    const box = cl.getElementData(cl.getElementId("test-bleed-scroll")).bounding_box;
+    try std.testing.expectApproxEqAbs(@as(f32, 200), box.width, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), box.height, 0.5);
+
+    var surface = try soft.Surface.init(std.testing.allocator, 260, 200);
+    defer surface.deinit();
+    surface.setClearColor(.{ 0, 0, 0, 255 });
+    surface.clear();
+    surface.renderCommands(cmds);
+
+    // Something was painted inside the box, so the sweep below is not vacuous.
+    var inked: usize = 0;
+    var y: i64 = 0;
+    while (y < 100) : (y += 1) {
+        var x: i64 = 0;
+        while (x < 200) : (x += 1) {
+            if (surface.px(x, y)[0] != 0 or surface.px(x, y)[1] != 0 or surface.px(x, y)[2] != 0) inked += 1;
+        }
+    }
+    try std.testing.expect(inked > 0);
+
+    // And NOTHING outside it: the field is three times the box's height, so its own clip alone would leak.
+    y = 0;
+    while (y < 200) : (y += 1) {
+        var x: i64 = 0;
+        while (x < 260) : (x += 1) {
+            if (x < 200 and y < 100) continue;
+            const px = surface.px(x, y);
+            try std.testing.expectEqualDeep([4]u8{ 0, 0, 0, 255 }, px);
+        }
+    }
+}
+
+test "a wheel over a text field scrolls the box around it, not the field's own clip" {
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.ptr_down = false;
+    beginFrame();
+    wheel_field = .{
+        .id = .{ .text = "test-wheel-field" },
+        .value = long_value,
+        .w = .{ .fixed = 160 },
+        .h = .{ .fixed = 30 },
+    };
+    wheel_field.bind();
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    _ = try layoutFrame(declareWheelFieldScroll);
+    const field_box = cl.getElementData(cl.getElementId("test-wheel-field")).bounding_box;
+    const scroll_box = cl.getElementData(cl.getElementId("test-wheel-scroll")).bounding_box;
+    try std.testing.expect(scroll_box.height <= 100.5);
+    // Hover the TEXT itself: that point is under the field's own horizontal clip as well as the box around it.
+    cl.setPointerState(.{ .x = field_box.x + 10, .y = field_box.y + 10 }, false);
+    scroll_mod.updateScroll(0, -5, 1.0 / 60.0);
+    _ = try layoutFrame(declareWheelFieldScroll);
+    const data = cl.getScrollContainerData(cl.getElementId("test-wheel-scroll"));
+    try std.testing.expect(data.found);
+    try std.testing.expectApproxEqAbs(@as(f32, -5), data.scroll_position.y, 0.5);
+    // The field's own clip did not move: it only ever scrolls sideways.
+    const own = cl.getScrollContainerData(cl.getElementId("test-wheel-field"));
+    try std.testing.expect(own.found == false or own.scroll_position.x == 0);
 }
 
 test "a clip element dragged off the screen still emits a balanced scissor pair" {

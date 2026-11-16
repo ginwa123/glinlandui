@@ -64,7 +64,11 @@ pub const Renderer = struct {
     segs: std.ArrayList(c.GlinSegment) = .empty,
     seg_start: usize = 0,
     seg_scissor: ?[4]i32 = null,
+    // The clip in force for the vertices being accumulated: already intersected with every scissor opened above it.
     seg_open_scissor: ?[4]i32 = null,
+    // The clips each `scissor_start` interrupted, so `scissor_end` restores its parent instead of clearing the clip.
+    scissor_stack: [soft.max_clip_depth]?[4]i32 = @splat(null),
+    scissor_depth: usize = 0,
     seg_texture: u32 = 0,
 
     atlas: []u8 = &.{},
@@ -138,6 +142,7 @@ pub const Renderer = struct {
         self.segs.clearRetainingCapacity();
         self.seg_start = 0;
         self.seg_open_scissor = null;
+        self.scissor_depth = 0;
 
         // The frame's clear colour comes from the same place the CPU path reads it, so a themed background is identical.
         const clear = soft.currentClearColor();
@@ -163,8 +168,8 @@ pub const Renderer = struct {
                     const bytes = td.string_contents.chars[0..@intCast(td.string_contents.length)];
                     self.pushText(bb.x * k, bb.y * k, bb.height * k, bytes, @intFromFloat(@round(@as(f32, @floatFromInt(td.font_size)) * k)), td.text_color);
                 },
-                .scissor_start => self.setScissor(bb.x * k, bb.y * k, bb.width * k, bb.height * k),
-                .scissor_end => self.setScissor(0, 0, 0, 0),
+                .scissor_start => self.pushScissor(bb.x * k, bb.y * k, bb.width * k, bb.height * k),
+                .scissor_end => self.popScissor(),
                 .image => {
                     const im = cmd.render_data.image;
                     if (im.image_data) |ptr| {
@@ -207,6 +212,7 @@ pub const Renderer = struct {
         self.segs.clearRetainingCapacity();
         self.seg_start = 0;
         self.seg_open_scissor = null;
+        self.scissor_depth = 0;
         const clear = soft.currentClearColor();
         const k = soft.renderScale();
         for (commands) |*cmd| {
@@ -229,8 +235,8 @@ pub const Renderer = struct {
                     const bytes = td.string_contents.chars[0..@intCast(td.string_contents.length)];
                     self.pushText(bb.x * k, bb.y * k, bb.height * k, bytes, @intFromFloat(@round(@as(f32, @floatFromInt(td.font_size)) * k)), td.text_color);
                 },
-                .scissor_start => self.setScissor(bb.x * k, bb.y * k, bb.width * k, bb.height * k),
-                .scissor_end => self.setScissor(0, 0, 0, 0),
+                .scissor_start => self.pushScissor(bb.x * k, bb.y * k, bb.width * k, bb.height * k),
+                .scissor_end => self.popScissor(),
                 .image => {
                     const im = cmd.render_data.image;
                     if (im.image_data) |ptr| {
@@ -265,20 +271,53 @@ pub const Renderer = struct {
         }
     }
 
-    fn setScissor(self: *Renderer, x: f32, y: f32, w: f32, h: f32) void {
+    // Open a clip. It INTERSECTS the one in force, so an inner clip (a field's, as tall as its content) never widens the scroll box around it.
+    fn pushScissor(self: *Renderer, x: f32, y: f32, w: f32, h: f32) void {
         self.closeSegment();
-        self.seg_open_scissor = if (w > 0 and h > 0) .{
+        const next: [4]i32 = .{
             @intFromFloat(@max(x, 0)),
             @intFromFloat(@max(y, 0)),
             @intFromFloat(@max(w, 0)),
             @intFromFloat(@max(h, 0)),
-        } else null;
+        };
+        if (self.scissor_depth < self.scissor_stack.len) {
+            self.scissor_stack[self.scissor_depth] = self.seg_open_scissor;
+            self.scissor_depth += 1;
+        }
+        self.seg_open_scissor = intersectScissor(self.seg_open_scissor, next);
+    }
+
+    fn popScissor(self: *Renderer) void {
+        self.closeSegment();
+        if (self.scissor_depth == 0) {
+            self.seg_open_scissor = null;
+            return;
+        }
+        self.scissor_depth -= 1;
+        self.seg_open_scissor = self.scissor_stack[self.scissor_depth];
+    }
+
+    // The overlap of two clips, or an empty (zero-size) rect when they do not touch: a scissor of nothing clips everything.
+    fn intersectScissor(cur: ?[4]i32, next: [4]i32) [4]i32 {
+        const prev = cur orelse return next;
+        const x0 = @max(prev[0], next[0]);
+        const y0 = @max(prev[1], next[1]);
+        const x1 = @min(prev[0] + prev[2], next[0] + next[2]);
+        const y1 = @min(prev[1] + prev[3], next[1] + next[3]);
+        return .{ x0, y0, @max(x1 - x0, 0), @max(y1 - y0, 0) };
     }
 
     fn closeSegment(self: *Renderer) void {
         const end = self.verts.items.len;
         if (end > self.seg_start) {
             const sc = self.seg_open_scissor;
+            // An empty clip (two clips that do not overlap) hides the whole run, so the run is dropped, not drawn unscissored.
+            if (sc) |v| {
+                if (v[2] <= 0 or v[3] <= 0) {
+                    self.seg_start = end;
+                    return;
+                }
+            }
             self.segs.append(self.alloc, .{
                 .start = @intCast(self.seg_start),
                 .count = @intCast(end - self.seg_start),
