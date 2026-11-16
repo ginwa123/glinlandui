@@ -126,6 +126,26 @@ static const char *const kGlinPS =
 // check here; see the use sites in wndProc.
 #define GLIN_WHEEL_DELTA 120
 
+// The toolkit scrolls in points and every other backend forwards the platform's
+// own delta, so one notch has to be worth what the OS says a notch is worth:
+// SPI_GETWHEELSCROLLLINES lines of text, at the line height a body run uses.
+#define GLIN_WHEEL_LINE_POINTS 20.0
+
+static double glinWheelNotchPoints(void) {
+    UINT lines = 0;
+    if (!SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &lines, 0)) {
+        return 3.0 * GLIN_WHEEL_LINE_POINTS;
+    }
+    // WHEEL_PAGESCROLL: the user asked for a page per notch, which the host clamps per event.
+    if (lines == WHEEL_PAGESCROLL) {
+        return 10.0 * GLIN_WHEEL_LINE_POINTS;
+    }
+    if (lines == 0) {
+        return GLIN_WHEEL_LINE_POINTS;
+    }
+    return (double)lines * GLIN_WHEEL_LINE_POINTS;
+}
+
 static const wchar_t *const kGlinWindowClass = L"GlinlanduiWindow";
 static const wchar_t *const kGlinWindowTitle = L"glinlandui";
 
@@ -841,7 +861,8 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // 16 bits. Positive is "rotated away from the user", i.e. scroll UP,
         // which is the opposite of the toolkit's convention — so the sign is
         // flipped here and the host only has to clamp.
-        double dy = -(double)(short)HIWORD(wp) / (double)GLIN_WHEEL_DELTA;
+        double notches = -(double)(short)HIWORD(wp) / (double)GLIN_WHEEL_DELTA;
+        double dy = notches * glinWheelNotchPoints();
         if (w->on_scroll != NULL) {
             w->on_scroll(w->user, 0.0, dy);
         }
@@ -849,7 +870,8 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_MOUSEHWHEEL: {
-        double dx = (double)(short)HIWORD(wp) / (double)GLIN_WHEEL_DELTA;
+        double notches = (double)(short)HIWORD(wp) / (double)GLIN_WHEEL_DELTA;
+        double dx = notches * glinWheelNotchPoints();
         if (w->on_scroll != NULL) {
             w->on_scroll(w->user, dx, 0.0);
         }
