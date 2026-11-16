@@ -460,6 +460,14 @@ static int createDeviceForWindow(GlinWinWindow *w) {
 }
 
 static int ensureBackBufferView(GlinWinWindow *w) {
+    // One view per swap chain, not one per call: a second CreateRenderTargetView
+    // would overwrite the first and leak its reference, and an outstanding
+    // reference to a back buffer is exactly what makes ResizeBuffers fail with
+    // DXGI_ERROR_INVALID_CALL — which is how a maximised window ends up
+    // stretching a stale buffer instead of resizing it.
+    if (w->back_rtv != NULL) {
+        return 1;
+    }
     ID3D11Texture2D *back = NULL;
     // The IID constants are `extern const IID` in C, not address constants,
     // so they need their address taken.
@@ -471,6 +479,20 @@ static int ensureBackBufferView(GlinWinWindow *w) {
         ID3D11Device_CreateRenderTargetView(w->device, GLIN_RES(back), NULL, &w->back_rtv);
     ID3D11Texture2D_Release(back);
     return SUCCEEDED(hr);
+}
+
+/// Drop the view of the current back buffer, unbinding it first: ResizeBuffers
+/// refuses to run while anything still references the buffer it is about to
+/// replace.
+static void resetBackBufferView(GlinWinWindow *w) {
+    if (w->back_rtv == NULL) {
+        return;
+    }
+    if (w->context != NULL) {
+        ID3D11DeviceContext_OMSetRenderTargets(w->context, 0, NULL, NULL);
+    }
+    ID3D11RenderTargetView_Release(w->back_rtv);
+    w->back_rtv = NULL;
 }
 
 static void releaseD3D(GlinWinWindow *w) {
@@ -686,6 +708,11 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SIZE: {
         int width = (int)(short)LOWORD(lp);
         int height = (int)(short)HIWORD(lp);
+        if (getenv("GLIN_DEBUG_SIZE") != NULL) {
+            fprintf(stderr, "dbg WM_SIZE device %dx%d ratiowp %d logical %dx%d scale %.4f\n",
+                    width, height, (int)wp, glin_win_logical(w, width),
+                    glin_win_logical(w, height), glin_win_scale(w));
+        }
         if (w->on_resize != NULL) {
             // A minimised window reports 0x0. The host ignores that, and so
             // must the swap chain, or ResizeBuffers below gets a degenerate
@@ -693,14 +720,28 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             // The swap chain below stays in device pixels; the toolkit lays out in logical units.
             w->on_resize(w->user, glin_win_logical(w, width), glin_win_logical(w, height));
         }
-        if (w->back_rtv != NULL) {
-            ID3D11DeviceContext_OMSetRenderTargets(w->context, 0, NULL, NULL);
-            ID3D11RenderTargetView_Release(w->back_rtv);
-            w->back_rtv = NULL;
-        }
+        resetBackBufferView(w);
         if (w->swap_chain != NULL && width > 0 && height > 0) {
-            IDXGISwapChain_ResizeBuffers(w->swap_chain, 0, (UINT)width, (UINT)height,
-                                         DXGI_FORMAT_UNKNOWN, 0);
+            HRESULT hr = IDXGISwapChain_ResizeBuffers(w->swap_chain, 0, (UINT)width, (UINT)height,
+                                                     DXGI_FORMAT_UNKNOWN, 0);
+            if (getenv("GLIN_DEBUG_SIZE") != NULL) {
+                DXGI_SWAP_CHAIN_DESC dd;
+                memset(&dd, 0, sizeof(dd));
+                IDXGISwapChain_GetDesc(w->swap_chain, &dd);
+                fprintf(stderr, "dbg ResizeBuffers(%dx%d) hr=0x%08lx now buffer %ux%u\n",
+                        width, height, (unsigned long)hr, dd.BufferDesc.Width,
+                        dd.BufferDesc.Height);
+            }
+            if (FAILED(hr)) {
+                // The buffer could not follow the window, and presenting it anyway
+                // would stretch the old frame over the new client area. GDI blits
+                // the CPU surface at its true size, so it is the honest fallback.
+                char why[160];
+                snprintf(why, sizeof(why),
+                         "D3D11 ResizeBuffers refused %dx%d (hr=0x%08lx)", width, height,
+                         (unsigned long)hr);
+                degradeToGdi(w, why);
+            }
         }
         glin_win_invalidate(w);
         return 0;
@@ -1049,12 +1090,18 @@ void glin_win_window_run(GlinWinWindow *win, int max_frames) {
         return;
     }
     win->max_frames = max_frames;
+    int max_after = -1;
+    int resize_after = -1;
+    {
+        const char *raw = getenv("GLIN_WIN_MAXIMIZE_AFTER");
+        if (raw != NULL) max_after = atoi(raw);
+        raw = getenv("GLIN_WIN_RESIZE_AFTER");
+        if (raw != NULL) resize_after = atoi(raw);
+    }
+    int maximized = 0;
+    int resized = 0;
     MSG msg;
     if (max_frames > 0) {
-        // A capped run drives its own frames. A toolkit window repaints only
-        // when something invalidates it, so after the first WM_PAINT a loop
-        // that waits in GetMessage has nothing to wake it and never reaches
-        // the cap — `QS_SETTINGS_TEST_FRAMES=3` hung forever that way.
         while (!win->quit && win->frames < max_frames) {
             while (!win->quit && PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE) != 0) {
                 if (msg.message == WM_QUIT) {
@@ -1066,7 +1113,14 @@ void glin_win_window_run(GlinWinWindow *win, int max_frames) {
             if (win->quit || win->frames >= max_frames) {
                 break;
             }
-            // UpdateWindow inside makes this one frame happen synchronously.
+            if (max_after >= 0 && !maximized && win->frames >= max_after) {
+                maximized = 1;
+                ShowWindow(win->hwnd, SW_MAXIMIZE);
+            }
+            if (resize_after >= 0 && !resized && win->frames >= resize_after) {
+                resized = 1;
+                SetWindowPos(win->hwnd, NULL, 0, 0, 1200, 950, SWP_NOMOVE | SWP_NOZORDER);
+            }
             glin_win_invalidate(win);
         }
         return;
@@ -1074,6 +1128,14 @@ void glin_win_window_run(GlinWinWindow *win, int max_frames) {
     while (!win->quit && GetMessageW(&msg, NULL, 0, 0) > 0) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
+        if (max_after >= 0 && !maximized && win->frames >= max_after) {
+            maximized = 1;
+            ShowWindow(win->hwnd, SW_MAXIMIZE);
+        }
+        if (resize_after >= 0 && !resized && win->frames >= resize_after) {
+            resized = 1;
+            SetWindowPos(win->hwnd, NULL, 0, 0, 1200, 950, SWP_NOMOVE | SWP_NOZORDER);
+        }
     }
 }
 
@@ -2265,6 +2327,13 @@ int glin_win_gpu_draw(GlinWinGpu *g, const GlinVertex *verts, int vertex_count,
     // logical, so the target size is the window's own device client rect, not the logical one.
     const UINT tw = (UINT)((double)cw * glin_win_scale(win) + 0.5);
     const UINT th = (UINT)((double)ch * glin_win_scale(win) + 0.5);
+    if (getenv("GLIN_DEBUG_SIZE") != NULL) {
+        DXGI_SWAP_CHAIN_DESC dd;
+        memset(&dd, 0, sizeof(dd));
+        IDXGISwapChain_GetDesc(win->swap_chain, &dd);
+        fprintf(stderr, "dbg gpu draw content %dx%d scale %.4f target %ux%u buffer %ux%u\n",
+                cw, ch, glin_win_scale(win), tw, th, dd.BufferDesc.Width, dd.BufferDesc.Height);
+    }
     const float clear[4] = { r, gr, b, a };
     if (!gpuDrawFrame(g, win->back_rtv, tw, th, verts, vertex_count, segs, seg_count, clear)) {
         return 0;
