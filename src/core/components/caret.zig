@@ -23,6 +23,8 @@ pub const Props = struct {
     id: cl.ElementId,
     // Distance from the parent's left edge to the bar. Snapped to the device grid for you.
     x: prop.Len,
+    // The parent's own x, when the caller knows it: the bar then snaps where it LANDS, not the offset it is given.
+    parent_x: ?f32 = null,
     // Bar height; a caret is usually a little taller than the font.
     height: prop.Len,
     color: Color = Color.rgb(0xd8, 0xd8, 0xdc),
@@ -37,13 +39,16 @@ pub fn declare(props: Props) void {
         .center => .left_center,
         .top => .left_top,
     };
+    // A parent between two device pixels cannot be fixed by snapping an offset inside it, so snap where the bar LANDS.
+    const x = props.x.pts();
+    const offset_x = if (props.parent_x) |px| frame_mod.snapX(px + x) - px else frame_mod.snapX(x);
     cl.UI()(.{
         .id = props.id,
         .layout = .{ .sizing = .{ .w = .fixed(frame_mod.hairline()), .h = .fixed(props.height.pts()) } },
         .floating = .{
             // A decoration must not be hit-testable: capturing the pointer would change the pointer-over set on every blink.
             .pointer_capture_mode = .passthrough,
-            .offset = .{ .x = frame_mod.snapX(props.x.pts()), .y = props.y.pts() },
+            .offset = .{ .x = offset_x, .y = props.y.pts() },
             .attach_to = .to_parent,
             .attach_points = .{ .element = attach, .parent = attach },
             .z_index = 2,

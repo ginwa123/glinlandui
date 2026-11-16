@@ -11,6 +11,7 @@ const frame_mod = @import("../frame.zig");
 const text_editor = @import("../text_editor.zig");
 const text_backend = @import("../text_backend.zig");
 const semantics = @import("../semantics.zig");
+const audit = @import("../audit.zig");
 
 // Raw evdev keycode → printable ASCII under the US layout.
 pub fn keyChar(evdev: u32, shift: bool) ?u8 {
@@ -407,6 +408,10 @@ pub const Field = struct {
     pad_lr: prop.Len = .{ .px = 8 },
     // True while this field owns a drag in flight; the field ticks it, so the app never has to.
     dragging: bool = false,
+    // How far the text has slid left inside the field, so the caret stays in view: the clip applies it.
+    h_scroll: f32 = 0,
+    // The clip's width in the previous frame: the room the caret has before the text has to slide.
+    inner_w: f32 = 0,
     bound: bool = false,
     // The value the caller declared last frame: a change there is the model editing, and it wins over the draft.
     declared: [max_field_len]u8 = undefined,
@@ -432,6 +437,8 @@ pub const Field = struct {
         if (!self.bound or self.editor.buf.ptr != bytes.ptr or self.editor.buf.len != bytes.len) {
             self.editor = text_editor.Editor.init(bytes);
             self.bound = true;
+            // A different run starts at its own beginning, so the reason to be scrolled left is gone.
+            self.h_scroll = 0;
         }
         self.editor.len = bytes.len;
         self.editor.caret.clamp(bytes.len);
@@ -460,14 +467,17 @@ pub const Field = struct {
         const total = lineTotal(self);
         const last = if (total > 0) total - 1 else 0;
         const line = @min(@as(usize, @intFromFloat(raw)), last);
-        const start = lineStartOf(self, line);
-        const end = lineEndOf(self, line);
+        const start = @min(lineStartOf(self, line), ed.len);
+        // An app's line index can be a frame behind its text, so a line never ends before it starts.
+        const end = @min(@max(lineEndOf(self, line), start), ed.len);
         return start + text_editor.offsetAtX(ed.buf[start..end], x, self.font_size.whole(), self.measure);
     }
 
     // Adopt a value from the model: it does NOT report, because the model is where it came from.
     pub fn setText(self: *Field, value: []const u8) void {
         self.editor.setText(value);
+        // The caret is back at the front of a new value, so the text has no reason to be slid left.
+        self.h_scroll = 0;
     }
 
     // Empty the draft without reporting it.
@@ -671,7 +681,7 @@ fn dragSelect(field: *Field) void {
         frame_mod.ptr_press_y >= bb.y and frame_mod.ptr_press_y <= bb.y + bb.height;
     if (!field.dragging and !began_here) return;
     // `extend` is false on the anchoring frame (place the caret) and true after it (grow the selection from that anchor).
-    const x = frame_mod.ptr_x - bb.x - field.pad_lr.pts();
+    const x = frame_mod.ptr_x - bb.x - field.pad_lr.pts() + field.h_scroll;
     const y = frame_mod.ptr_y - bb.y - field.pad.top.pts();
     field.editor.setCaret(field.caretOffsetAtPoint(x, y), field.dragging);
     if (!field.dragging) {
@@ -698,6 +708,10 @@ pub fn textField(field: *Field) void {
     // Drag-select first, so the caret and the selection this frame draws are the ones the pointer just asked for.
     dragSelect(field);
     const draft = input.text();
+    // The clip's own width is last frame's, because a box read mid-declare has not been laid out yet.
+    if (frame_mod.bounds(textClipId(name))) |b| field.inner_w = b.width;
+    // A caret that would land outside the field slides the text left instead: that IS the horizontal scroll.
+    syncScroll(field, draft);
     // Once a click has claimed the keyboard, the toolkit decides who owns it: clicking another component blurs this field.
     if (frame_mod.focusKnown()) input.focused = frame_mod.isFocused(name);
     // The engine types into the focused field, so an app declares a field and never routes a key.
@@ -727,11 +741,23 @@ pub fn textField(field: *Field) void {
         .corner_radius = field.radius.clay(),
         .border = field.border.clay(),
     })({
-        if (field.multiline) {
-            drawLines(field, draft, blink_on, fg, name);
-        } else {
-            drawSingleLine(field, draft, blink_on, fg, name, hint);
-        }
+        // The value rides inside ONE horizontal clip, so it slides under the field's right edge instead of over a neighbour.
+        cl.UI()(.{
+            .id = textClipId(name),
+            .layout = .{
+                .direction = if (field.multiline) .top_to_bottom else .left_to_right,
+                .sizing = .{ .w = .grow, .h = .grow },
+                .child_alignment = .{ .x = .left, .y = if (field.multiline) .top else .center },
+                .child_gap = 0,
+            },
+            .clip = .{ .horizontal = true, .child_offset = .{ .x = -field.h_scroll, .y = 0 } },
+        })({
+            if (field.multiline) {
+                drawLines(field, draft, blink_on, fg, name);
+            } else {
+                drawSingleLine(field, draft, blink_on, fg, name, hint);
+            }
+        });
     });
 
     // Semantics: an editable field declares `set_text`, so a test can type into it by name and a reader can find it.
@@ -759,6 +785,28 @@ pub fn caretLineOnScreen(field: *const Field) bool {
     if (!v.found or v.content_height <= v.height) return true;
     const top = @as(f32, @floatFromInt(field.caretLine())) * field.lineHeight();
     return top + field.lineHeight() > v.y and top < v.y + v.height;
+}
+
+// How far into its own line the caret sits, in the field's own font: the x that has to stay on screen.
+fn caretX(field: *const Field, draft: []const u8) f32 {
+    const at = @min(field.editor.caret.offset, draft.len);
+    if (!field.multiline) return field.measure(draft[0..at], field.font_size.whole());
+    const line = lineIndexAt(field, at);
+    const start = @min(lineStartOf(field, line), at);
+    return field.measure(draft[start..at], field.font_size.whole());
+}
+
+// Slide the text left until the caret is back inside the clip, and no further: this is the whole of the horizontal scroll.
+fn syncScroll(field: *Field, draft: []const u8) void {
+    const width = field.inner_w;
+    // A field that has not been laid out yet has no room to keep a caret in, so the text stays where it is.
+    if (width <= 0) return;
+    // Two points of air past the caret, so a glyph typed at the edge is not painted half outside the field.
+    const room = width - 2;
+    const x = caretX(field, draft);
+    if (x - field.h_scroll > room) field.h_scroll = x - room;
+    if (x - field.h_scroll < 0) field.h_scroll = x;
+    field.h_scroll = @max(field.h_scroll, 0);
 }
 
 // The Clay id of a line's row: what an enclosing scroll looks up to keep the caret's line in view.
@@ -853,6 +901,14 @@ pub fn caretId(name: []const u8) cl.ElementId {
     return .IDI(name, 2);
 }
 
+// The clip's index under the field: 1 is the selection run, 2 the caret, so the clip takes 3.
+const text_clip_index: u32 = 3;
+
+// The clip's Clay id, which is also the box whose width is the room the text has before it has to slide.
+pub fn textClipId(name: []const u8) cl.ElementId {
+    return .IDI(name, text_clip_index);
+}
+
 // The single-line body of a field: the selection as three runs, or the draft as one with the caret floated after it.
 fn drawSingleLine(field: *Field, draft: []const u8, blink_on: bool, fg: Color, name: []const u8, hint: bool) void {
     const input = &field.editor;
@@ -863,10 +919,8 @@ fn drawSingleLine(field: *Field, draft: []const u8, blink_on: bool, fg: Color, n
         if (s > 0) cl.text(draft[0..s], .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
         cl.UI()(.{
             .id = .IDI(name, 1),
-            .layout = .{
-                .sizing = .{ .w = .fit, .h = .grow },
-                .padding = .{ .top = 1, .bottom = 1 },
-            },
+            // Fit and unpadded: a taller highlight lifts every glyph on the line the moment a selection appears.
+            .layout = .{ .sizing = .{ .w = .fit, .h = .fit } },
             .background_color = field.sel_bg.toClay(),
         })({
             cl.text(draft[s..e], .{ .font_size = field.font_size.whole(), .color = field.sel_fg.toClay() });
@@ -905,9 +959,10 @@ fn drawLines(field: *Field, draft: []const u8, blink_on: bool, fg: Color, name: 
     var i: usize = window.first;
     const last = window.first + window.count;
     while (i < last) : (i += 1) {
-        const start = lineStartOf(field, i);
-        const end = lineEndOf(field, i);
-        const line = draft[@min(start, draft.len)..@min(end, draft.len)];
+        const start = @min(lineStartOf(field, i), draft.len);
+        // An app's line index can be a frame behind its text, so a line never ends before it starts.
+        const end = @min(@max(lineEndOf(field, i), start), draft.len);
+        const line = draft[start..end];
         cl.UI()(.{
             .id = .IDI(name, lineBoxIndex(i)),
             .layout = .{
@@ -966,10 +1021,8 @@ fn drawLine(field: *Field, line: []const u8, line_start: usize, sel: ?text_edito
     if (a > 0) cl.text(line[0..a], .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
     cl.UI()(.{
         .id = .IDI(name, lineSelIndex(index)),
-        .layout = .{
-            .sizing = .{ .w = .fit, .h = .grow },
-            .padding = .{ .top = 1, .bottom = 1 },
-        },
+        // Fit and unpadded, like the single-line highlight: a taller box would resize the line it sits on.
+        .layout = .{ .sizing = .{ .w = .fit, .h = .fit } },
         .background_color = field.sel_bg.toClay(),
     })({
         cl.text(line[a..b], .{ .font_size = field.font_size.whole(), .color = field.sel_fg.toClay() });
@@ -983,6 +1036,8 @@ fn caretBarInLine(field: *Field, name: []const u8, index: usize, line: []const u
     caret_mod.declare(.{
         .id = .IDI(name, lineCaretIndex(index)),
         .x = .{ .px = field.measure(line[0..clamped], field.font_size.whole()) },
+        // The row's own x is what the bar lands on, and a row between two pixels is what makes a caret look smeared.
+        .parent_x = if (frame_mod.bounds(lineBoxId(name, index))) |b| b.x else null,
         .height = .{ .px = field.font_size.pts() + 4 },
         .color = field.caret_fg orelse Color.rgb(0xd8, 0xd8, 0xd8),
         .anchor = .center,
@@ -994,7 +1049,8 @@ fn onFieldDoubleClick(ctx: ?*anyopaque) void {
     const field: *Field = @ptrCast(@alignCast(ctx.?));
     const data = cl.getElementData(cl.getElementId(field.name()));
     if (!data.found) return;
-    const x = frame_mod.ptr_x - data.bounding_box.x - field.pad_lr.pts();
+    // The clip slid the text left by `h_scroll`, so the point is measured from where the text now starts.
+    const x = frame_mod.ptr_x - data.bounding_box.x - field.pad_lr.pts() + field.h_scroll;
     const y = frame_mod.ptr_y - data.bounding_box.y - field.pad.top.pts();
     text_editor.selectWordAt(&field.editor, field.caretOffsetAtPoint(x, y));
     field.editor.idle = 0;
@@ -1008,7 +1064,10 @@ fn caretBar(field: *Field, text: []const u8) void {
     caret_mod.declare(.{
         // The padding is part of the parent box, so the offset starts from the border box, not the text.
         .id = .IDI(field.name(), 2),
-        .x = .{ .px = field.pad.left.pts() + field.measure(text[0..at], field.font_size.whole()) },
+        // The clip slides the text left, so the bar slides with it, and never past the field's own padding.
+        .x = .{ .px = field.pad.left.pts() + @max(field.measure(text[0..at], field.font_size.whole()) - field.h_scroll, 0) },
+        // The field's own x is what the bar lands on, and a field between two pixels is what makes a caret look smeared.
+        .parent_x = if (frame_mod.bounds(field.id.clay())) |b| b.x else null,
         .height = .{ .px = field.font_size.pts() + 4 },
         .color = field.caret_fg orelse Color.rgb(0xd8, 0xd8, 0xdc),
         .anchor = .center,
@@ -1020,7 +1079,8 @@ fn onFieldClick(ctx: ?*anyopaque) void {
     const field: *Field = @ptrCast(@alignCast(ctx.?));
     const data = cl.getElementData(cl.getElementId(field.name()));
     if (!data.found) return;
-    const x = frame_mod.ptr_x - data.bounding_box.x - field.pad_lr.pts();
+    // The clip slid the text left by `h_scroll`, so the point is measured from where the text now starts.
+    const x = frame_mod.ptr_x - data.bounding_box.x - field.pad_lr.pts() + field.h_scroll;
     const y = frame_mod.ptr_y - data.bounding_box.y - field.pad.top.pts();
     field.editor.setCaret(field.caretOffsetAtPoint(x, y), false);
     field.editor.idle = 0;
@@ -1070,6 +1130,98 @@ fn layoutCommands(declare_fn: *const fn () void) ![]cl.RenderCommand {
     cl.beginLayout();
     declare_fn();
     return cl.endLayout();
+}
+
+// A value far wider than any field a test declares, so the clip and the scroll both have something to do.
+const long_value = "{\"sub\":\"7748bcb7-ea24-46e6-acd2-965e1f67910f\",\"access_satellite\":true,\"pool_id\":\"CK\"}";
+
+var clip_field: Field = .{ .id = .{ .text = "test-clip-field" } };
+
+fn declareClipField() void {
+    textField(&clip_field);
+}
+
+test "a long value is clipped to its own field, and never widens it" {
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.ptr_down = false;
+    beginFrame();
+    clip_field = .{
+        .id = .{ .text = "test-clip-field" },
+        .value = long_value,
+        .w = .{ .fixed = 120 },
+        .h = .{ .fixed = 30 },
+    };
+    clip_field.bind();
+    const cmds = try layoutCommands(declareClipField);
+    // A clip element hands its parent no minimum width, so the field keeps the width it was declared with.
+    const bb = cl.getElementData(cl.getElementId("test-clip-field")).bounding_box;
+    try std.testing.expectApproxEqAbs(@as(f32, 120), bb.width, 0.5);
+    // The value is still drawn in full -- it is clipped, not shortened -- and the run is wider than the field.
+    var widest: f32 = 0;
+    var clip_box: ?cl.BoundingBox = null;
+    for (cmds) |c| {
+        if (c.command_type == .text) widest = @max(widest, c.bounding_box.width);
+        if (c.command_type == .scissor_start and c.id == textClipId("test-clip-field").id) clip_box = c.bounding_box;
+    }
+    try std.testing.expect(widest > bb.width);
+    const clip = clip_box orelse return error.NoClip;
+    try std.testing.expect(clip.width <= bb.width);
+    // And the clip is a balanced pair, which is what the frame audit demands of every scissor.
+    try std.testing.expectEqual(@as(usize, 0), audit.checkCommands(cmds, 1));
+}
+
+test "the caret scrolls the text right, and back to the left when it returns" {
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.ptr_down = false;
+    beginFrame();
+    clip_field = .{
+        .id = .{ .text = "test-scroll-field" },
+        .value = long_value,
+        .w = .{ .fixed = 120 },
+        .h = .{ .fixed = 30 },
+    };
+    clip_field.bind();
+    // Clay keeps every element's box between frames, so this test initialises ONCE and lays out three times.
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    // First frame: nothing measured yet, so there is no room to scroll against.
+    _ = try layoutFrame(declareClipField);
+    try std.testing.expectEqual(@as(f32, 0), clip_field.h_scroll);
+    // The caret at the end of a value wider than the field slides the text left, so the caret stays in view.
+    clip_field.editor.setCaret(clip_field.editor.len, false);
+    _ = try layoutFrame(declareClipField);
+    try std.testing.expect(clip_field.h_scroll > 0);
+    // Back at the front (Home, or an arrow left the whole way), the text returns to its own start.
+    clip_field.editor.setCaret(0, false);
+    _ = try layoutFrame(declareClipField);
+    try std.testing.expectEqual(@as(f32, 0), clip_field.h_scroll);
+}
+
+// One more frame on the same Clay context, so a box measured by the frame before it can be read.
+fn layoutFrame(declare_fn: *const fn () void) ![]cl.RenderCommand {
+    cl.beginLayout();
+    declare_fn();
+    return cl.endLayout();
+}
+
+test "a clip element dragged off the screen still emits a balanced scissor pair" {
+    headless.begin(.{ .x = 120, .y = 80 }, false);
+    cl.beginLayout();
+    cl.UI()(.{
+        .layout = .{ .direction = .left_to_right, .sizing = .{ .w = .fixed(120), .h = .fixed(80) } },
+    })({
+        // 200 pt of empty space pushes the clip past the right edge of the layout, so Clay culls its commands.
+        cl.UI()(.{ .layout = .{ .sizing = .{ .w = .fixed(200), .h = .fixed(20) } } })({});
+        cl.UI()(.{
+            .id = .ID("test-offscreen-clip"),
+            .layout = .{ .sizing = .{ .w = .fixed(40), .h = .fixed(20) } },
+            .clip = .{ .horizontal = true },
+        })({});
+    });
+    const cmds = cl.endLayout();
+    // A culled clip must drop both of its commands: a lone SCISSOR_END closes the enclosing clip early.
+    try std.testing.expectEqual(@as(usize, 0), audit.checkCommands(cmds, 1));
 }
 
 test "handleText inserts a composed run and Backspace removes a whole codepoint" {
@@ -1943,4 +2095,78 @@ fn hasCaret(cmds: []const cl.RenderCommand, line: usize) bool {
         if (c.command_type == .rectangle and c.id == id) return true;
     }
     return false;
+}
+
+// A selection is a highlight, not a resize: it must not move the glyphs it covers or grow the line they sit on.
+var sel_field: Field = .{ .id = .{ .text = "test-sel-field" } };
+
+fn declareSelField() void {
+    textField(&sel_field);
+}
+
+fn firstTextRun(cmds: []const cl.RenderCommand) struct { y: f32, h: f32 } {
+    for (cmds) |c| {
+        if (c.command_type == .text) return .{ .y = c.bounding_box.y, .h = c.bounding_box.height };
+    }
+    return .{ .y = 0, .h = 0 };
+}
+
+fn hasRect(cmds: []const cl.RenderCommand, id: u32) bool {
+    for (cmds) |c| {
+        if (c.command_type == .rectangle and c.id == id) return true;
+    }
+    return false;
+}
+
+test "a selection highlights the text without moving it or resizing the field" {
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.ptr_down = false;
+    beginFrame();
+    sel_field = .{ .id = .{ .text = "test-sel-field" }, .value = "hello world", .w = .{ .fixed = 200 }, .h = .{ .fixed = 30 } };
+    sel_field.bind();
+
+    const plain = try layoutCommands(declareSelField);
+    const field_a = cl.getElementData(cl.getElementId("test-sel-field")).bounding_box;
+    const text_a = firstTextRun(plain);
+
+    sel_field.editor.setCaret(0, false);
+    sel_field.editor.setCaret(5, true);
+    const marked = try layoutCommands(declareSelField);
+    const field_b = cl.getElementData(cl.getElementId("test-sel-field")).bounding_box;
+    const text_b = firstTextRun(marked);
+
+    // The highlight is drawn, and the run under it sits exactly where it sat before the selection.
+    try std.testing.expect(hasRect(marked, cl.ElementId.IDI("test-sel-field", 1).id));
+    try std.testing.expectApproxEqAbs(text_a.y, text_b.y, 0.01);
+    try std.testing.expectApproxEqAbs(text_a.h, text_b.h, 0.01);
+    try std.testing.expectApproxEqAbs(field_a.height, field_b.height, 0.01);
+}
+
+test "a selection in a multiline field leaves every line row where it was" {
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.ptr_down = false;
+    beginFrame();
+    sel_field = .{
+        .id = .{ .text = "test-sel-multi" },
+        .value = "one\ntwo\nthree",
+        .multiline = true,
+        .w = .{ .fixed = 200 },
+        .h = .{ .fixed = 90 },
+    };
+    sel_field.bind();
+
+    _ = try layoutCommands(declareSelField);
+    const row_a = cl.getElementData(lineBoxId("test-sel-multi", 0)).bounding_box;
+
+    // The first line and the newline after it: the span runs into the second line.
+    sel_field.editor.setCaret(0, false);
+    sel_field.editor.setCaret(4, true);
+    const marked = try layoutCommands(declareSelField);
+    const row_b = cl.getElementData(lineBoxId("test-sel-multi", 0)).bounding_box;
+
+    try std.testing.expect(hasRect(marked, cl.ElementId.IDI("test-sel-multi", lineSelIndex(0)).id));
+    try std.testing.expectApproxEqAbs(row_a.y, row_b.y, 0.01);
+    try std.testing.expectApproxEqAbs(row_a.height, row_b.height, 0.01);
 }

@@ -2193,7 +2193,9 @@ void Clay__InitializePersistentMemory(Clay_Context* context) {
     int32_t maxMeasureTextCacheWordCount = context->maxMeasureTextCacheWordCount;
     Clay_Arena *arena = &context->internalArena;
 
-    context->scrollContainerDatas = Clay__ScrollContainerDataInternalArray_Allocate_Arena(10, arena);
+    // A scroll container is any clipped element, and every text field is one now, so 10 (Clay's default) is a frame a
+    // real app runs out of. The array is allocated from this size, so Clay_MinMemorySize grows with it.
+    context->scrollContainerDatas = Clay__ScrollContainerDataInternalArray_Allocate_Arena(64, arena);
     context->layoutElementsHashMapInternal = Clay__LayoutElementHashMapItemArray_Allocate_Arena(maxElementCount, arena);
     context->layoutElementsHashMap = Clay__int32_tArray_Allocate_Arena(maxElementCount, arena);
     context->measureTextHashMapInternal = Clay__MeasureTextCacheItemArray_Allocate_Arena(maxElementCount, arena);
@@ -2806,6 +2808,11 @@ void Clay__CalculateFinalLayout(void) {
                             break;
                         }
                         case CLAY__ELEMENT_CONFIG_TYPE_CLIP: {
+                            // A clip is a PAIR of commands, so it is never culled on its own: dropping the START for an
+                            // element outside the screen left the matching END in the stream, which closed the enclosing
+                            // clip early (a client's frame audit reports that as an unbalanced scissor). Clipping to a
+                            // rectangle nobody can see draws nothing, so emitting both costs two commands and nothing else.
+                            shouldRender = true;
                             renderCommand.commandType = CLAY_RENDER_COMMAND_TYPE_SCISSOR_START;
                             renderCommand.renderData = CLAY__INIT(Clay_RenderData) {
                                 .clip = {
