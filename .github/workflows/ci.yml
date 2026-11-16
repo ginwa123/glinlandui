@@ -307,7 +307,7 @@ jobs:
 
           test -f zig-out/bin/glinlandui.exe
 
-          out="$(env QS_SETTINGS_TEST_FRAMES=1 ./zig-out/bin/glinlandui.exe 2>&1)"
+          out="$(env GLIN_NO_D3D11=1 QS_SETTINGS_TEST_FRAMES=1 ./zig-out/bin/glinlandui.exe 2>&1)"
           echo "$out"
 
           echo "$out" | grep -q 'Windows window:'
@@ -469,7 +469,7 @@ jobs:
           # without Screen Recording permission, so `screencapture` yields a
           # desktop-only image on a stock CI runner.
           # GLIN_NO_METAL: this leg asserts the CPU rasterizer's own composited bytes (see the job comment).
-          out="$(env GLIN_NO_METAL=1 QS_SETTINGS_TEST_FRAMES=1 WAYLAND_DISPLAY= ./zig-out/bin/glinlandui-calculator 2>&1)"
+          out="$(env GLIN_NO_METAL=1 GLIN_NO_D3D11=1 QS_SETTINGS_TEST_FRAMES=1 WAYLAND_DISPLAY= ./zig-out/bin/glinlandui-calculator 2>&1)"
           echo "$out"
 
           painted=0
