@@ -1187,10 +1187,9 @@ fn onFieldDoubleClick(ctx: ?*anyopaque) void {
 fn caretBar(field: *Field, text: []const u8) void {
     const at = @min(field.editor.caret.offset, text.len);
     caret_mod.declare(.{
-        // The padding is part of the parent box, so the offset starts from the border box, not the text.
         .id = .IDI(field.name(), 2),
-        // The clip slides the text left, so the bar slides with it, and never past the field's own padding.
-        .x = .{ .px = field.pad.left.pts() + @max(field.measure(text[0..at], field.font_size.whole()) - field.h_scroll, 0) },
+        // The parent is the text's own clip, which already sits past the field's padding and border: adding the pad again leaves a gap after the last glyph.
+        .x = .{ .px = @max(field.measure(text[0..at], field.font_size.whole()) - field.h_scroll, 0) },
         // The field's own x is what the bar lands on, and a field between two pixels is what makes a caret look smeared.
         .parent_x = if (frame_mod.bounds(field.id.clay())) |b| b.x else null,
         .height = .{ .px = field.font_size.pts() + 4 },
@@ -2586,4 +2585,64 @@ test "a read-only field still offers all four rows, and the two that would edit 
     try std.testing.expect(registry.dispatchClick(paste.x + 4, paste.y + 4));
     try std.testing.expectEqualStrings("abc", test_field.text());
     try std.testing.expect(!context_menu.isOpen());
+}
+
+var caret_field: Field = .{ .id = .{ .text = "test-caret-field" }, .w = .{ .fixed = 320 } };
+
+fn declareCaretField() void {
+    textField(&caret_field);
+}
+
+test "a single-line caret sits on the glyph boundary, with the field's padding counted once" {
+    caret_field.bind();
+    caret_field.setText("sss");
+    caret_field.editor.setCaret(3, false);
+    frame_mod.ptr_down = false;
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    frame_mod.setFocus("test-caret-field");
+    cl.beginLayout();
+    declareCaretField();
+    _ = cl.endLayout();
+
+    const box = frame_mod.bounds(caret_field.id.clay()) orelse return error.FieldMissing;
+    const caret = frame_mod.bounds(.IDI("test-caret-field", 2)) orelse return error.CaretMissing;
+    const advance = caret_field.measure("sss", caret_field.font_size.whole());
+    // The text starts at the field's padding, and the caret at the end of the run: the gap after "sss" is nothing.
+    try std.testing.expectApproxEqAbs(box.x + caret_field.pad.left.pts() + advance, caret.x, 1.5);
+
+    // One more glyph moves the bar by exactly one advance, so the gap cannot grow with the text.
+    caret_field.setText("ssss");
+    caret_field.editor.setCaret(4, false);
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    frame_mod.setFocus("test-caret-field");
+    cl.beginLayout();
+    declareCaretField();
+    _ = cl.endLayout();
+    const longer = frame_mod.bounds(.IDI("test-caret-field", 2)) orelse return error.CaretMissing;
+    try std.testing.expectApproxEqAbs(caret_field.measure("s", caret_field.font_size.whole()), longer.x - caret.x, 1.5);
+}
+
+var scrolled_field: Field = .{ .id = .{ .text = "test-scrolled-field" }, .w = .{ .fixed = 120 } };
+
+fn declareScrolledField() void {
+    textField(&scrolled_field);
+}
+
+test "a scrolled single-line caret slides with the text, and the scroll is counted once" {
+    scrolled_field.bind();
+    scrolled_field.setText(long_value);
+    scrolled_field.editor.setCaret(scrolled_field.editor.len, false);
+    // The scroll the field would settle on for a caret at the end of a run wider than it is.
+    scrolled_field.h_scroll = 100;
+    frame_mod.ptr_down = false;
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    frame_mod.setFocus("test-scrolled-field");
+    cl.beginLayout();
+    declareScrolledField();
+    _ = cl.endLayout();
+
+    const box = frame_mod.bounds(scrolled_field.id.clay()) orelse return error.FieldMissing;
+    const caret = frame_mod.bounds(.IDI("test-scrolled-field", 2)) orelse return error.CaretMissing;
+    const advance = scrolled_field.measure(long_value, scrolled_field.font_size.whole());
+    try std.testing.expectApproxEqAbs(box.x + scrolled_field.pad.left.pts() + advance - scrolled_field.h_scroll, caret.x, 1.5);
 }
