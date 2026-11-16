@@ -810,9 +810,13 @@ pub fn textField(field: *Field) void {
     // A hint belongs to an empty single-line field nobody is typing in, so it never competes with a draft or a caret.
     const hint = field.placeholder.len > 0 and draft.len == 0 and !input.focused and !field.disabled;
     // The caret's row is revealed after the layout, mid-declare its box does not exist yet, and only when it MOVED: a reveal every frame pulled the box back to the caret, so a wheel scroll could not stay down.
+    var reveal_pending = false;
     if (field.multiline and input.focused and field.scroll_id != null) {
         const caret_now = @min(input.caret.offset, input.len);
-        if (field.revealed_caret != caret_now) scroll_mod.revealAfterLayout(field.scroll_id.?, lineBoxId(name, field.caretLine()));
+        if (field.revealed_caret != caret_now) {
+            scroll_mod.revealAfterLayout(field.scroll_id.?, lineBoxId(name, field.caretLine()));
+            reveal_pending = true;
+        }
         field.revealed_caret = caret_now;
     } else {
         field.revealed_caret = null;
@@ -843,7 +847,7 @@ pub fn textField(field: *Field) void {
             .clip = .{ .horizontal = true, .child_offset = .{ .x = -field.h_scroll, .y = 0 } },
         })({
             if (field.multiline) {
-                drawLines(field, draft, blink_on, fg, name);
+                drawLines(field, draft, blink_on, fg, name, reveal_pending);
             } else {
                 drawSingleLine(field, draft, blink_on, fg, name, hint);
             }
@@ -1030,7 +1034,7 @@ fn drawSingleLine(field: *Field, draft: []const u8, blink_on: bool, fg: Color, n
 }
 
 // A multiline field: one row per line, and the caret floated on the line the caret is actually on.
-fn drawLines(field: *Field, draft: []const u8, blink_on: bool, fg: Color, name: []const u8) void {
+fn drawLines(field: *Field, draft: []const u8, blink_on: bool, fg: Color, name: []const u8, keep_caret: bool) void {
     const ed = &field.editor;
     const sel = ed.caret.selection();
     const line_h = field.lineHeight();
@@ -1038,8 +1042,8 @@ fn drawLines(field: *Field, draft: []const u8, blink_on: bool, fg: Color, name: 
     const caret_line = lineIndexAt(field, caret_offset);
     const total = lineTotal(field);
     var window = windowForField(field, total);
-    // The caret's line is drawn even when it sits outside the viewport: the scroll reveal looks its box up after layout.
-    if (ed.focused and total > window.count) {
+    // The caret's line joins the window ONLY when a reveal is pending: applyReveals needs its box, and the next frame draws the real window.
+    if (keep_caret and total > window.count) {
         if (caret_line < window.first) {
             window.first = caret_line;
         } else if (caret_line >= window.first + window.count) {
@@ -2257,6 +2261,28 @@ test "a multiline field in a scroll keeps the caret's line in view" {
     }
     try std.testing.expect(scroll_mod.view("test-scroll-box").y > 0);
     try std.testing.expectEqual(@as(usize, 9), scroll_field.caretLine());
+}
+
+test "a scrolled-away caret does not empty the window: the visible lines are still drawn" {
+    scroll_field.bind();
+    scroll_field.setText("0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19");
+    // The caret stays at the top while the hand scrolls to the bottom: the rows that cover the viewport must still be declared.
+    scroll_field.editor.setCaret(0, false);
+    frame_mod.ptr_down = false;
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    frame_mod.setFocus("test-scroll-field");
+    _ = layoutScrollBox();
+    _ = layoutScrollBox();
+    scroll_mod.scrollBy("test-scroll-box", 0, 10_000);
+    const cmds = layoutScrollBox();
+    const box = cl.getElementData(cl.getElementId("test-scroll-box")).bounding_box;
+    var inside: usize = 0;
+    for (cmds) |c| {
+        if (c.command_type != .text) continue;
+        const b = c.bounding_box;
+        if (b.y + b.height > box.y and b.y < box.y + box.height) inside += 1;
+    }
+    try std.testing.expect(inside > 0);
 }
 
 test "a wheel scroll is not undone by the caret's reveal every frame" {
