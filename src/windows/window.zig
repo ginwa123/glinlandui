@@ -76,6 +76,10 @@ pub const Window = struct {
     /// The size the last completed layout used; the pointer is translated in THIS space, never a pending one.
     layout_w: u32 = 0,
     layout_h: u32 = 0,
+    /// The last motion point, in the space the pointer is translated into: a repeat inside one logical pixel is not a new frame.
+    last_ptr_x: f32 = 0,
+    last_ptr_y: f32 = 0,
+    have_ptr: bool = false,
     /// Is the primary button currently held?
     left_held: bool = false,
     /// Frames composited so far.
@@ -253,6 +257,12 @@ pub const Window = struct {
         }, self.left_held);
         if (t.pressed and kind_u8 == input_win.DOWN) self.left_held = true;
         if (!t.pressed and kind_u8 == input_win.UP) self.left_held = false;
+
+        // A move that has not crossed a logical pixel cannot change what is under the pointer: Win32 sends one WM_MOUSEMOVE per DEVICE pixel, and a high-polling mouse several per pixel, so this is where a full repaint per pixel was going.
+        if (kind_u8 == input_win.MOTION and self.have_ptr and !contract.pointerPosChanged(self.last_ptr_x, self.last_ptr_y, t.x, t.y)) return;
+        self.last_ptr_x = t.x;
+        self.last_ptr_y = t.y;
+        self.have_ptr = true;
 
         self.state.needs_draw = true;
         d.on_pointer(d.ptr, t.x, t.y, t.pressed, t.button);
