@@ -69,6 +69,14 @@ pub fn button(p: ButtonProps) void {
     }
 }
 
+/// Declare a button whose click is a TYPED pair — `click(.{ .label = .{ .text = "Send" } }, self, App.onSend)` — checked here.
+pub fn click(look: ButtonProps, model: anytype, comptime handler: anytype) void {
+    const Model = erased.pointeeOf(@TypeOf(model));
+    var p = look;
+    p.on_click = .{ .f = erased.call0(Model, handler), .ctx = Ctx.from(model) };
+    button(p);
+}
+
 fn rectColorForId(cmds: []cl.RenderCommand, id: u32) ?cl.Color {
     for (cmds) |c| {
         if (c.command_type == .rectangle and c.id == id) return c.render_data.rectangle.background_color;
@@ -221,6 +229,29 @@ test "button without on_click registers nothing; dispatchClick returns false" {
     _ = try headless.frameCommands(declareNoClickButton);
     const bb = cl.getElementData(cl.getElementId("test-noclick-button")).bounding_box;
     try std.testing.expect(!registry.dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
+}
+
+const TypedModel = struct {
+    calls: usize = 0,
+};
+
+fn onTypedClick(model: *TypedModel) void {
+    model.calls += 1;
+}
+
+var typed_rec = TypedModel{};
+
+fn declareTypedButton() void {
+    click(.{ .id = .{ .text = "test-typed-button" }, .label = .{ .text = "OK" } }, &typed_rec, onTypedClick);
+}
+
+test "click pairs the model and the handler with no cast; a click reaches THAT model" {
+    typed_rec = .{};
+    registry.beginFrame();
+    _ = try headless.frameCommands(declareTypedButton);
+    const bb = cl.getElementData(cl.getElementId("test-typed-button")).bounding_box;
+    try std.testing.expect(registry.dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
+    try std.testing.expectEqual(@as(usize, 1), typed_rec.calls);
 }
 
 test "button self-registers on_click; dispatchClick at center fires once" {

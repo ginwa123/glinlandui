@@ -393,6 +393,7 @@ pub const Field = struct {
     on_change: prop.Change = .{},
     // Called on Enter with the draft. True means the intent took it, and then the field clears itself.
     on_submit: prop.Submit = .{},
+
     // Called after a click places the caret, so the app can take focus.
     on_focus: prop.Click = .{},
     // Dispatch priority for the field's own hit target: an overlay that swallows clicks passes a z above its own, so the field still answers.
@@ -430,6 +431,25 @@ pub const Field = struct {
     declared_known: bool = false,
 
     // Point the editor at this field's own buffer, once, after the Field is where it will stay.
+
+    /// Bind the edit intent as a TYPED pair: the model and the handler that names it, checked at the call site.
+    pub fn onChange(self: *Field, model: anytype, comptime handler: anytype) void {
+        const Model = erased.pointeeOf(@TypeOf(model));
+        self.on_change = .{ .f = erased.call1(Model, []const u8, handler), .ctx = Ctx.from(model) };
+    }
+
+    /// Bind Enter the same way: `true` means the model took the draft and the field clears itself.
+    pub fn onSubmit(self: *Field, model: anytype, comptime handler: anytype) void {
+        const Model = erased.pointeeOf(@TypeOf(model));
+        self.on_submit = .{ .f = erased.call1Ret(Model, []const u8, bool, handler), .ctx = Ctx.from(model) };
+    }
+
+    /// Bind the focus intent the same way: a click into the field tells the model it got the keyboard.
+    pub fn onFocus(self: *Field, model: anytype, comptime handler: anytype) void {
+        const Model = erased.pointeeOf(@TypeOf(model));
+        self.on_focus = .{ .f = erased.call0(Model, handler), .ctx = Ctx.from(model) };
+    }
+
     pub fn bind(self: *Field) void {
         self.bindTo(&self.buf);
     }
@@ -2588,4 +2608,31 @@ test "a read-only field still offers all four rows, and the two that would edit 
     try std.testing.expect(registry.dispatchClick(paste.x + 4, paste.y + 4));
     try std.testing.expectEqualStrings("abc", test_field.text());
     try std.testing.expect(!context_menu.isOpen());
+}
+
+const TypedModel = struct {
+    last: [16]u8 = [_]u8{0} ** 16,
+    len: usize = 0,
+    taken: bool = false,
+};
+
+fn onTypedChange(model: *TypedModel, text: []const u8) void {
+    const n = @min(text.len, model.last.len);
+    @memcpy(model.last[0..n], text[0..n]);
+    model.len = n;
+}
+
+fn onTypedSubmit(model: *TypedModel, _: []const u8) bool {
+    return model.taken;
+}
+
+test "onChange/onSubmit bind the model and the handler as one typed pair" {
+    var model = TypedModel{};
+    var field = Field{ .id = .{ .text = "typed.binders" } };
+    field.onChange(&model, onTypedChange);
+    field.onSubmit(&model, onTypedSubmit);
+    field.on_change.f.?(field.on_change.ctx, "hi");
+    try std.testing.expectEqualStrings("hi", model.last[0..model.len]);
+    model.taken = true;
+    try std.testing.expect(field.on_submit.f.?(field.on_submit.ctx, "x"));
 }
