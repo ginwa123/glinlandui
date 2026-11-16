@@ -62,6 +62,7 @@ has to compute with the number and a growing axis gives it none.
 | `tree.zig` | hierarchical rows: depth indent, caret, expansion state, selection, right-aligned meta |
 | `tabs.zig` | a tab bar: active state, optional accent dot, optional close button |
 | `badge.zig` | a short label in a rounded pill — a type, a count, a state |
+| `modal.zig` | a scrim over the window and a centred card with a title, a sentence and action rows |
 | `scroll.zig` | a scroll container with a scrollbar, plus `scrollBy` |
 | `dropdown.zig` | an overlay menu that floats above in-flow content |
 | `checkbox.zig`, `radio.zig`, `toggle.zig`, `slider.zig` | the form controls |

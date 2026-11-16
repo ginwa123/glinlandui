@@ -53,6 +53,9 @@ pub const Host = struct {
     scroll_dx: f32 = 0,
     scroll_dy: f32 = 0,
     quit_requested: bool = false,
+    /// An app that must ask before the window closes (unsaved work): return true to HANDLE the close yourself.
+    close_hook: ?*const fn (?*anyopaque) bool = null,
+    close_ctx: ?*anyopaque = null,
     views: dispatch.Views = .{},
     keys: dispatch.KeyChain = .{},
     root_ctx: ?*anyopaque = null,
@@ -241,6 +244,15 @@ pub const Host = struct {
     }
 
     pub fn onCloseEvent(self: *Host) void {
+        // An app with unsaved work holds the window open and asks its own question; it calls `requestQuit` when answered.
+        if (self.close_hook) |hook| {
+            if (hook(self.close_ctx)) return;
+        }
+        self.quit_requested = true;
+    }
+
+    /// Close the window: what an app calls once its own question is answered.
+    pub fn requestQuit(self: *Host) void {
         self.quit_requested = true;
     }
 
@@ -364,6 +376,28 @@ test "host: onClose requests quit" {
     try testHost(&h, null, noopRoot);
     try std.testing.expect(!h.isQuit());
     h.onCloseEvent();
+    try std.testing.expect(h.isQuit());
+}
+
+// An app that must ask before closing: the hook holds the window open, and `requestQuit` is the answer.
+const CloseHolder = struct {
+    var calls: usize = 0;
+
+    fn hook(_: ?*anyopaque) bool {
+        calls += 1;
+        return true;
+    }
+};
+
+test "host: a close hook can hold the window open, and requestQuit closes it" {
+    var h: Host = undefined;
+    try testHost(&h, null, noopRoot);
+    CloseHolder.calls = 0;
+    h.close_hook = CloseHolder.hook;
+    h.onCloseEvent();
+    try std.testing.expect(!h.isQuit());
+    try std.testing.expectEqual(@as(usize, 1), CloseHolder.calls);
+    h.requestQuit();
     try std.testing.expect(h.isQuit());
 }
 

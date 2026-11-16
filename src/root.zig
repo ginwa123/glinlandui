@@ -114,6 +114,8 @@ pub const components = struct {
     pub const image = @import("core/components/image.zig");
     pub const input = @import("core/components/input.zig");
     pub const list = @import("core/components/list.zig");
+    // A scrim over the window and a centred card: the toolkit's "answer this before anything else" surface.
+    pub const modal = @import("core/components/modal.zig");
     pub const radio = @import("core/components/radio.zig");
     pub const reorder = @import("core/components/reorder.zig");
     pub const scroll = @import("core/components/scroll.zig");
@@ -149,6 +151,8 @@ test {
     // The reusable sidebar: a panel whose width the pointer owns, and the splitter that does the same for a pane.
     _ = @import("core/components/sidebar.zig");
     _ = @import("core/components/split.zig");
+    // The modal card: the surface an app asks a question on before it does something irreversible.
+    _ = @import("core/components/modal.zig");
     // The MVVM runtime: the ViewModel store and the theme value.
     _ = @import("core/view_model.zig");
     _ = @import("core/theme.zig");
