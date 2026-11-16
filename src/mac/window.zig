@@ -171,7 +171,11 @@ pub const Window = struct {
         if (adapter.applyPendingResize(&self.state)) {
             onResized(self);
         }
-        if (adapter.resolveQuit(&self.state)) return;
+        if (adapter.resolveQuit(&self.state)) {
+            // An app that asked to quit (a dialog's "Save and quit") ends the run loop here, not only its frames.
+            c.glin_cocoa_quit(self.handle);
+            return;
+        }
         const w = self.state.win_w;
         const h = self.state.win_h;
 
