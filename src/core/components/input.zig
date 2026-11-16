@@ -919,10 +919,8 @@ fn drawSingleLine(field: *Field, draft: []const u8, blink_on: bool, fg: Color, n
         if (s > 0) cl.text(draft[0..s], .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
         cl.UI()(.{
             .id = .IDI(name, 1),
-            .layout = .{
-                .sizing = .{ .w = .fit, .h = .grow },
-                .padding = .{ .top = 1, .bottom = 1 },
-            },
+            // Fit and unpadded: a taller highlight lifts every glyph on the line the moment a selection appears.
+            .layout = .{ .sizing = .{ .w = .fit, .h = .fit } },
             .background_color = field.sel_bg.toClay(),
         })({
             cl.text(draft[s..e], .{ .font_size = field.font_size.whole(), .color = field.sel_fg.toClay() });
@@ -1023,10 +1021,8 @@ fn drawLine(field: *Field, line: []const u8, line_start: usize, sel: ?text_edito
     if (a > 0) cl.text(line[0..a], .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
     cl.UI()(.{
         .id = .IDI(name, lineSelIndex(index)),
-        .layout = .{
-            .sizing = .{ .w = .fit, .h = .grow },
-            .padding = .{ .top = 1, .bottom = 1 },
-        },
+        // Fit and unpadded, like the single-line highlight: a taller box would resize the line it sits on.
+        .layout = .{ .sizing = .{ .w = .fit, .h = .fit } },
         .background_color = field.sel_bg.toClay(),
     })({
         cl.text(line[a..b], .{ .font_size = field.font_size.whole(), .color = field.sel_fg.toClay() });
@@ -2099,4 +2095,78 @@ fn hasCaret(cmds: []const cl.RenderCommand, line: usize) bool {
         if (c.command_type == .rectangle and c.id == id) return true;
     }
     return false;
+}
+
+// A selection is a highlight, not a resize: it must not move the glyphs it covers or grow the line they sit on.
+var sel_field: Field = .{ .id = .{ .text = "test-sel-field" } };
+
+fn declareSelField() void {
+    textField(&sel_field);
+}
+
+fn firstTextRun(cmds: []const cl.RenderCommand) struct { y: f32, h: f32 } {
+    for (cmds) |c| {
+        if (c.command_type == .text) return .{ .y = c.bounding_box.y, .h = c.bounding_box.height };
+    }
+    return .{ .y = 0, .h = 0 };
+}
+
+fn hasRect(cmds: []const cl.RenderCommand, id: u32) bool {
+    for (cmds) |c| {
+        if (c.command_type == .rectangle and c.id == id) return true;
+    }
+    return false;
+}
+
+test "a selection highlights the text without moving it or resizing the field" {
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.ptr_down = false;
+    beginFrame();
+    sel_field = .{ .id = .{ .text = "test-sel-field" }, .value = "hello world", .w = .{ .fixed = 200 }, .h = .{ .fixed = 30 } };
+    sel_field.bind();
+
+    const plain = try layoutCommands(declareSelField);
+    const field_a = cl.getElementData(cl.getElementId("test-sel-field")).bounding_box;
+    const text_a = firstTextRun(plain);
+
+    sel_field.editor.setCaret(0, false);
+    sel_field.editor.setCaret(5, true);
+    const marked = try layoutCommands(declareSelField);
+    const field_b = cl.getElementData(cl.getElementId("test-sel-field")).bounding_box;
+    const text_b = firstTextRun(marked);
+
+    // The highlight is drawn, and the run under it sits exactly where it sat before the selection.
+    try std.testing.expect(hasRect(marked, cl.ElementId.IDI("test-sel-field", 1).id));
+    try std.testing.expectApproxEqAbs(text_a.y, text_b.y, 0.01);
+    try std.testing.expectApproxEqAbs(text_a.h, text_b.h, 0.01);
+    try std.testing.expectApproxEqAbs(field_a.height, field_b.height, 0.01);
+}
+
+test "a selection in a multiline field leaves every line row where it was" {
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.ptr_down = false;
+    beginFrame();
+    sel_field = .{
+        .id = .{ .text = "test-sel-multi" },
+        .value = "one\ntwo\nthree",
+        .multiline = true,
+        .w = .{ .fixed = 200 },
+        .h = .{ .fixed = 90 },
+    };
+    sel_field.bind();
+
+    _ = try layoutCommands(declareSelField);
+    const row_a = cl.getElementData(lineBoxId("test-sel-multi", 0)).bounding_box;
+
+    // The first line and the newline after it: the span runs into the second line.
+    sel_field.editor.setCaret(0, false);
+    sel_field.editor.setCaret(4, true);
+    const marked = try layoutCommands(declareSelField);
+    const row_b = cl.getElementData(lineBoxId("test-sel-multi", 0)).bounding_box;
+
+    try std.testing.expect(hasRect(marked, cl.ElementId.IDI("test-sel-multi", lineSelIndex(0)).id));
+    try std.testing.expectApproxEqAbs(row_a.y, row_b.y, 0.01);
+    try std.testing.expectApproxEqAbs(row_a.height, row_b.height, 0.01);
 }
