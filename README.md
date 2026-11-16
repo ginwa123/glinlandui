@@ -240,6 +240,12 @@ Two components already do the plumbing an app would otherwise repeat: `component
 key at all — and `components.list` owns a list's rows, their ids, hover and per-row clicks (registering each
 row's target before its box, so a button inside the row wins the hit test).
 
+Every field also offers its own right-click card: **Cut, Copy, Paste and Select All** are always there, and
+`Field.menu` appends the app's own rows after them — the engine calls the app's `on_select` with the app's OWN
+index, so adding rows never shifts the four. A read-only field still shows all four and dims Cut and Paste,
+because they would edit it. A right click takes the caret where it landed and keeps a selection it landed
+inside, so Copy has something to copy.
+
 `Field.multiline = true` makes the same field a text area: Enter types a new line (the caret moves onto it, per
 line, with its selection drawn per line), Ctrl/Cmd+Enter raises `on_submit`, and a click picks a line before a
 column — so an app that needs a body editor, a query pane or a notes box no longer hand-rolls one. Give it

@@ -57,7 +57,7 @@ has to compute with the number and a growing axis gives it none.
 | `box.zig` | the container: direction, sizing, padding, gap, radius, border, background. Also `row`, `column` and `spacer` helpers |
 | `text.zig` | a single text run: size, colour, wrap |
 | `button.zig` | a clickable label with hover, disabled and border states |
-| `input.zig` | ONE text field: `textField(&field)` draws a `Field`, which carries its look, its draft, the caret and the selection, and raises `on_change`/`on_submit`. The engine types into the focused one, so an app routes no keys. `value` is the declared text and wins whenever it changes, and `placeholder` is drawn while the draft is empty. `click_z` lifts the field's own hit target above an overlay that swallows clicks |
+| `input.zig` | ONE text field: `textField(&field)` draws a `Field`, which carries its look, its draft, the caret and the selection, and raises `on_change`/`on_submit`. The engine types into the focused one, so an app routes no keys. `value` is the declared text and wins whenever it changes, and `placeholder` is drawn while the draft is empty. `click_z` lifts the field's own hit target above an overlay that swallows clicks. Every field raises its own card — Cut, Copy, Paste, Select All always, then `Field.menu`'s rows with the app's own indices |
 | `list.zig` | rows, cells or a grid, with selection, hover and per-row click targets — registered BEFORE each row, so a widget inside it wins the hit test |
 | `tree.zig` | hierarchical rows: depth indent, caret, expansion state, selection, right-aligned meta |
 | `tabs.zig` | a tab bar: active state, optional accent dot, optional close button |
@@ -66,7 +66,7 @@ has to compute with the number and a growing axis gives it none.
 | `dropdown.zig` | an overlay menu that floats above in-flow content |
 | `checkbox.zig`, `radio.zig`, `toggle.zig`, `slider.zig` | the form controls |
 | `icon.zig`, `image.zig` | a glyph and a bitmap |
-| `context_menu.zig` | the one right-click card: a component hands in `props.ContextMenu` and the engine opens, dismisses and draws it (not visual itself) |
+| `context_menu.zig` | the one right-click card: a component hands in `props.ContextMenu` and the engine opens, dismisses and draws it. `on_open` fires when the card is raised, `disabled[i]` dims a row and swallows its click (not visual itself) |
 | `reorder.zig` | drag a row onto another: `list(.{ .reorder = … })` / `tree(.{ .reorder = … })`, a 2 pt drop line or a ring for `into`, `on_move(from, to)` for a plain list and `on_drop(from, to, Zone)` when the rows have zones (not visual itself) |
 | `click_registry.zig` | the per-frame hit-target table (not visual) |
 | `dispatch.zig` | routes a pointer event to the registered target (not visual) |

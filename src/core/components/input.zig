@@ -8,6 +8,7 @@ const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const caret_mod = @import("caret.zig");
 const scroll_mod = @import("scroll.zig");
+const context_menu = @import("context_menu.zig");
 const frame_mod = @import("../frame.zig");
 const text_editor = @import("../text_editor.zig");
 const text_backend = @import("../text_backend.zig");
@@ -398,6 +399,11 @@ pub const Field = struct {
     measure: *const fn ([]const u8, u16) f32 = text_backend.runWidth,
     // Copy, cut and paste: the system clipboard unless a caller (or a test) hands in its own.
     clipboard: Clipboard = .{},
+    // The rows this field ADDS after its own four, and the card's look; `on_select` is called with the app's own index.
+    menu: prop.ContextMenu = .{},
+    // The field's two mandatory rows followed by the app's, merged per frame: one list, so a row index is unambiguous.
+    menu_items: [menu_cap][]const u8 = undefined,
+    menu_disabled: [menu_cap]bool = undefined,
 
     // ---- the state it owns ----
     buf: [max_field_len]u8 = undefined,
@@ -411,6 +417,8 @@ pub const Field = struct {
     dragging: bool = false,
     // How far the text has slid left inside the field, so the caret stays in view: the clip applies it.
     h_scroll: f32 = 0,
+    // The caret the scroll reveal last ran for: a caret that has NOT moved must not undo a wheel scroll every frame.
+    revealed_caret: ?usize = null,
     // The clip's width in the previous frame: the room the caret has before the text has to slide.
     inner_w: f32 = 0,
     bound: bool = false,
@@ -437,6 +445,7 @@ pub const Field = struct {
         // Re-init only when the model handed over a different run, so the caret and the selection survive a redraw.
         if (!self.bound or self.editor.buf.ptr != bytes.ptr or self.editor.buf.len != bytes.len) {
             self.editor = text_editor.Editor.init(bytes);
+            self.revealed_caret = null;
             self.bound = true;
             // A different run starts at its own beginning, so the reason to be scrolled left is gone.
             self.h_scroll = 0;
@@ -479,6 +488,7 @@ pub const Field = struct {
         self.editor.setText(value);
         // The caret is back at the front of a new value, so the text has no reason to be slid left.
         self.h_scroll = 0;
+        self.revealed_caret = null;
     }
 
     // Empty the draft without reporting it.
@@ -564,6 +574,16 @@ fn platformWrite(_: ?*anyopaque, text: []const u8) void {
     @import("../select.zig").Clipboard.write(text);
 }
 
+// The rows EVERY text field offers, in this order: they are the field's own, and an app's `menu.items` follow them.
+pub const menu_prefix = [_][]const u8{ "Cut", "Copy", "Paste", "Select All" };
+
+// How many rows a field's card can hold: its own four, then the app's.
+pub const menu_cap: usize = 12;
+
+// Which of the four CANNOT act, index-aligned with `menu_prefix`. A read-only field still shows all four (mandatory) and dims Cut and Paste.
+const menu_editable_disabled = [_]bool{ false, false, false, false };
+const menu_readonly_disabled = [_]bool{ true, false, true, false };
+
 // The field that owns the keyboard this frame: the engine types into it, so the app never routes a key.
 var active: ?*Field = null;
 
@@ -610,9 +630,9 @@ pub fn dispatchKey(mods: Mods, keycode: u32) bool {
     if (mods.shortcut()) {
         switch (keycode) {
             // Copy is the whole point of a read-only pane, so it stays; cut and paste would edit it, so they are absorbed.
-            text_editor.KEY_C => return copyText(field),
-            text_editor.KEY_X => if (field.readonly) return true else return cutText(field),
-            text_editor.KEY_V => if (field.readonly) return true else return pasteText(field),
+            text_editor.KEY_C => return copySelection(field),
+            text_editor.KEY_X => if (field.readonly) return true else return cutSelection(field),
+            text_editor.KEY_V => if (field.readonly) return true else return pasteClipboard(field),
             else => {},
         }
     }
@@ -643,7 +663,7 @@ fn isNavigation(keycode: u32, shortcut: bool) bool {
 }
 
 // Copy the selection: the pasteboard copies at once, so it is handed the draft's own bytes and nothing is allocated.
-fn copyText(field: *Field) bool {
+pub fn copySelection(field: *Field) bool {
     const span = field.editor.caret.selection() orelse return false;
     if (span.end <= span.start) return false;
     field.clipboard.write(field.editor.buf[span.start..span.end]);
@@ -651,21 +671,86 @@ fn copyText(field: *Field) bool {
 }
 
 // Cut: copy, then delete, which the field reports like any other edit.
-fn cutText(field: *Field) bool {
-    if (!copyText(field)) return false;
+pub fn cutSelection(field: *Field) bool {
+    if (!copySelection(field)) return false;
     if (!field.editor.deleteSelection()) return false;
     field.report();
     return true;
 }
 
 // Paste: one run from the clipboard, replacing a selection, reported as one edit.
-fn pasteText(field: *Field) bool {
+pub fn pasteClipboard(field: *Field) bool {
     var buf: [paste_max]u8 = undefined;
     const text = field.clipboard.read(&buf);
     if (text.len == 0) return false;
     if (text_editor.handleText(&field.editor, text) == .ignored) return false;
     field.report();
     return true;
+}
+
+// The card a field raises: its own four rows first, then whatever the app asked for, in ONE list so an index is unambiguous.
+fn fieldMenu(field: *Field) prop.ContextMenu {
+    for (menu_prefix, 0..) |label, i| {
+        field.menu_items[i] = label;
+        field.menu_disabled[i] = if (field.readonly) menu_readonly_disabled[i] else menu_editable_disabled[i];
+    }
+    var n: usize = menu_prefix.len;
+    for (field.menu.items, 0..) |label, i| {
+        if (n == menu_cap) break;
+        field.menu_items[n] = label;
+        field.menu_disabled[n] = field.menu.isDisabled(i);
+        n += 1;
+    }
+    var menu = field.menu;
+    menu.items = field.menu_items[0..n];
+    menu.disabled = field.menu_disabled[0..n];
+    menu.on_select = .{ .f = onMenuPick, .ctx = field };
+    menu.on_open = .{ .f = onMenuOpen, .ctx = field };
+    return menu;
+}
+
+// A row was picked: the field's four are its own, and anything after them is the app's, with the app's own index.
+fn onMenuPick(ctx: ?*anyopaque, index: usize) void {
+    const field: *Field = @ptrCast(@alignCast(ctx.?));
+    switch (index) {
+        0 => {
+            if (!field.readonly) _ = cutSelection(field);
+        },
+        1 => _ = copySelection(field),
+        2 => {
+            if (!field.readonly) _ = pasteClipboard(field);
+        },
+        3 => field.editor.selectAll(),
+        else => {
+            const app = field.menu.on_select;
+            if (app.f) |f| f(app.ctx, index - menu_prefix.len);
+        },
+    }
+}
+
+// A right click takes the caret where it landed, and keeps a selection it landed INSIDE, so Copy has something to copy.
+fn onMenuOpen(ctx: ?*anyopaque) void {
+    const field: *Field = @ptrCast(@alignCast(ctx.?));
+    if (field.menu.on_open.f) |f| f(field.menu.on_open.ctx);
+    const data = cl.getElementData(cl.getElementId(field.name()));
+    if (!data.found) return;
+    const bb = data.bounding_box;
+    const inside = frame_mod.ptr_x >= bb.x and frame_mod.ptr_x < bb.x + bb.width and frame_mod.ptr_y >= bb.y and frame_mod.ptr_y < bb.y + bb.height;
+    if (!inside) return;
+    const x = frame_mod.ptr_x - bb.x - field.pad_lr.pts() + field.h_scroll;
+    const y = frame_mod.ptr_y - bb.y - field.pad.top.pts();
+    const at = field.caretOffsetAtPoint(x, y);
+    if (field.editor.caret.selection()) |span| {
+        if (at >= @min(span.start, span.end) and at <= @max(span.start, span.end)) {
+            field.editor.idle = 0;
+            frame_mod.setFocus(field.name());
+            if (field.on_focus.f) |f| f(field.on_focus.ctx);
+            return;
+        }
+    }
+    field.editor.setCaret(at, false);
+    frame_mod.setFocus(field.name());
+    if (field.on_focus.f) |f| f(field.on_focus.ctx);
 }
 
 // Anchor the caret on the press, extend it while the button stays down, and release the drag when it comes up.
@@ -724,9 +809,13 @@ pub fn textField(field: *Field) void {
     const blink_on = text_editor.caretVisible(input) and caretLineOnScreen(field);
     // A hint belongs to an empty single-line field nobody is typing in, so it never competes with a draft or a caret.
     const hint = field.placeholder.len > 0 and draft.len == 0 and !input.focused and !field.disabled;
-    // The caret's row is revealed after the layout: mid-declare its box does not exist yet.
+    // The caret's row is revealed after the layout, mid-declare its box does not exist yet, and only when it MOVED: a reveal every frame pulled the box back to the caret, so a wheel scroll could not stay down.
     if (field.multiline and input.focused and field.scroll_id != null) {
-        scroll_mod.revealAfterLayout(field.scroll_id.?, lineBoxId(name, field.caretLine()));
+        const caret_now = @min(input.caret.offset, input.len);
+        if (field.revealed_caret != caret_now) scroll_mod.revealAfterLayout(field.scroll_id.?, lineBoxId(name, field.caretLine()));
+        field.revealed_caret = caret_now;
+    } else {
+        field.revealed_caret = null;
     }
 
     cl.UI()(.{
@@ -774,6 +863,8 @@ pub fn textField(field: *Field) void {
         });
     }
     registry.registerClickDoubleCursorZ(field.id.clay(), onFieldClick, onFieldDoubleClick, field, .text, field.click_z);
+    // Every field offers its own card, so an input is never a place where a right click does nothing.
+    if (!field.disabled and name.len > 0) context_menu.register(field.id.clay(), fieldMenu(field), field.click_z);
 }
 
 // How many lines of a multiline field are drawn: a buffer is bounded by its own length, but a frame's command stream is not free.
@@ -2168,6 +2259,34 @@ test "a multiline field in a scroll keeps the caret's line in view" {
     try std.testing.expectEqual(@as(usize, 9), scroll_field.caretLine());
 }
 
+test "a wheel scroll is not undone by the caret's reveal every frame" {
+    scroll_field.bind();
+    scroll_field.setText("1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20");
+    // The caret stays on line 0, which is what a selection leaves behind while the hand scrolls away from it.
+    scroll_field.editor.setCaret(0, false);
+    frame_mod.ptr_down = false;
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    frame_mod.setFocus("test-scroll-field");
+
+    // Two frames: the caret's own reveal has already run, and no frame is left asking for it.
+    _ = layoutScrollBox();
+    _ = layoutScrollBox();
+    try std.testing.expectEqual(@as(f32, 0), scroll_mod.view("test-scroll-box").y);
+
+    // The wheel moves the box down; the caret has not moved, so nothing may pull it back.
+    scroll_mod.scrollBy("test-scroll-box", 0, 60);
+    _ = layoutScrollBox();
+    try std.testing.expectApproxEqAbs(@as(f32, 60), scroll_mod.view("test-scroll-box").y, 1);
+    _ = layoutScrollBox();
+    try std.testing.expectApproxEqAbs(@as(f32, 60), scroll_mod.view("test-scroll-box").y, 1);
+
+    // And a caret that DOES move still brings its line back into view.
+    scroll_field.editor.setCaret(scroll_field.editor.len, false);
+    _ = layoutScrollBox();
+    _ = layoutScrollBox();
+    try std.testing.expect(scroll_mod.view("test-scroll-box").y > 60);
+}
+
 test "a caret outside the viewport is not drawn: the clip of a scroll cannot cut a floating bar" {
     scroll_field.bind();
     scroll_field.setText("0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19");
@@ -2285,4 +2404,130 @@ test "a selection in a multiline field leaves every line row where it was" {
     try std.testing.expect(hasRect(marked, cl.ElementId.IDI("test-sel-multi", lineSelIndex(0)).id));
     try std.testing.expectApproxEqAbs(row_a.y, row_b.y, 0.01);
     try std.testing.expectApproxEqAbs(row_a.height, row_b.height, 0.01);
+}
+
+// ---- the field's own context menu: Cut, Copy, Paste and Select All are mandatory, and an app's rows follow them ----
+
+const menu_app_rows = [_][]const u8{ "Clear", "Copy as cURL" };
+var menu_app_pick: struct { calls: usize = 0, index: usize = 0 } = .{};
+
+fn onMenuAppRow(ctx: ?*anyopaque, index: usize) void {
+    const c: *@TypeOf(menu_app_pick) = @ptrCast(@alignCast(ctx.?));
+    c.calls += 1;
+    c.index = index;
+}
+
+// One frame the way the Host drives it: the field, then the engine's card when one is up.
+fn layoutWithCard() []cl.RenderCommand {
+    registry.beginFrame();
+    context_menu.beginFrame();
+    cl.beginLayout();
+    textField(&test_field);
+    context_menu.declare();
+    return cl.endLayout();
+}
+
+// A right click on the text raises the card, and the caret lands where the pointer did.
+fn openFieldMenu() !void {
+    return openFieldMenuAt(40);
+}
+
+fn openFieldMenuAt(from_left: f32) !void {
+    const bb = cl.getElementData(cl.getElementId("test-field")).bounding_box;
+    const x = bb.x + test_field.pad_lr.pts() + from_left;
+    const y = bb.y + bb.height * 0.5;
+    frame_mod.setPointer(x, y);
+    try std.testing.expect(context_menu.secondaryClick(x, y, 720, 480));
+    try std.testing.expect(context_menu.isOpen());
+}
+
+fn menuField(value: []const u8, readonly: bool) void {
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.ptr_down = false;
+    beginFrame();
+    menu_app_pick = .{};
+    test_field = .{
+        .id = .{ .text = "test-field" },
+        .value = value,
+        .readonly = readonly,
+        .menu = .{ .items = &menu_app_rows, .on_select = .{ .f = onMenuAppRow, .ctx = &menu_app_pick } },
+    };
+    test_field.bind();
+    test_field.clipboard = fakeClipboard();
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+}
+
+test "a right click on a field offers Cut, Copy, Paste and Select All, then the app's own rows" {
+    menuField("hello world", false);
+    _ = layoutWithCard();
+    _ = try openFieldMenu();
+    // The caret followed the click in, so Copy has a field to copy from.
+    try std.testing.expect(test_field.editor.caret.offset > 0);
+    try std.testing.expect(frame_mod.isFocused("test-field"));
+
+    // The card draws the field's four rows, then the app's, in that order.
+    const cmds = layoutWithCard();
+    for (menu_prefix) |label| try std.testing.expect(drawnRun(cmds, label) != null);
+    try std.testing.expect(drawnRun(cmds, "Clear") != null);
+    try std.testing.expect(drawnRun(cmds, "Copy as cURL") != null);
+
+    // An app row reports the app's OWN index, so adding rows never shifts the field's four.
+    const app_row = cl.getElementData(context_menu.rowId(menu_prefix.len)).bounding_box;
+    try std.testing.expect(registry.dispatchClick(app_row.x + 4, app_row.y + 4));
+    try std.testing.expectEqual(@as(usize, 1), menu_app_pick.calls);
+    try std.testing.expectEqual(@as(usize, 0), menu_app_pick.index);
+    try std.testing.expect(!context_menu.isOpen());
+}
+
+test "Select All, Copy and Paste work from the field's own menu rows" {
+    menuField("hello world", false);
+    _ = layoutWithCard();
+    _ = try openFieldMenu();
+    _ = layoutWithCard();
+    // Select All is the field's fourth row.
+    const all = cl.getElementData(context_menu.rowId(3)).bounding_box;
+    try std.testing.expect(registry.dispatchClick(all.x + 4, all.y + 4));
+    const span = test_field.editor.caret.selection() orelse return error.NoSelection;
+    try std.testing.expectEqual(@as(usize, 0), span.start);
+    try std.testing.expectEqual(@as(usize, 11), span.end);
+
+    // Copy is the second row.
+    _ = try openFieldMenu();
+    _ = layoutWithCard();
+    const copy = cl.getElementData(context_menu.rowId(1)).bounding_box;
+    try std.testing.expect(registry.dispatchClick(copy.x + 4, copy.y + 4));
+    try std.testing.expectEqualStrings("hello world", clip_buf[0..clip_len]);
+    try std.testing.expectEqualStrings("hello world", test_field.text());
+
+    // Paste is the third: right-clicked at the end of the line, it types the run back at the caret.
+    test_field.editor.setCaret(test_field.editor.len, false);
+    const width = cl.getElementData(cl.getElementId("test-field")).bounding_box.width;
+    try openFieldMenuAt(width - 20);
+    _ = layoutWithCard();
+    const paste = cl.getElementData(context_menu.rowId(2)).bounding_box;
+    try std.testing.expect(registry.dispatchClick(paste.x + 4, paste.y + 4));
+    try std.testing.expectEqualStrings("hello worldhello world", test_field.text());
+}
+
+test "a read-only field still offers all four rows, and the two that would edit it do nothing" {
+    menuField("abc", true);
+    _ = layoutWithCard();
+    _ = try openFieldMenu();
+    const cmds = layoutWithCard();
+    for (menu_prefix) |label| try std.testing.expect(drawnRun(cmds, label) != null);
+
+    // Cut: the row is there, the click is swallowed by the card, and neither the text nor the pasteboard changes.
+    const cut = cl.getElementData(context_menu.rowId(0)).bounding_box;
+    try std.testing.expect(registry.dispatchClick(cut.x + 4, cut.y + 4));
+    try std.testing.expectEqualStrings("abc", test_field.text());
+    try std.testing.expectEqual(@as(usize, 0), clip_len);
+
+    // Paste: same, so a response body can never be typed into from its menu.
+    _ = try openFieldMenu();
+    _ = layoutWithCard();
+    const paste = cl.getElementData(context_menu.rowId(2)).bounding_box;
+    try std.testing.expect(registry.dispatchClick(paste.x + 4, paste.y + 4));
+    try std.testing.expectEqualStrings("abc", test_field.text());
+    try std.testing.expect(!context_menu.isOpen());
 }

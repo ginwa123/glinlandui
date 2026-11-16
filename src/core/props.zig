@@ -130,11 +130,16 @@ pub const RowExtra = struct {
 // Empty (the default) means the component has NO menu and never reacts to a right click.
 pub const ContextMenu = struct {
     items: []const []const u8 = &.{},
+    // Index-aligned with `items`: a row nobody can pick is drawn dim and answers nothing.
+    disabled: []const bool = &.{},
     on_select: Select = .{},
+    // Called when this target's card is raised, before it is drawn, so a component can take the click into account.
+    on_open: Click = .{},
     // The card's look. The defaults are a dark card; an app passes its theme's own colours.
     bg: Color = Color.rgb(0x22, 0x22, 0x22),
     fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
     hover_bg: Color = Color.rgb(0x33, 0x33, 0x33),
+    disabled_fg: Color = Color.rgb(0x6a, 0x6a, 0x6a),
     border: Color = Color.rgb(0x3a, 0x3a, 0x3a),
     font_size: Len = .{ .px = 13 },
     row_h: Len = .{ .px = 28 },
@@ -144,6 +149,11 @@ pub const ContextMenu = struct {
 
     pub fn isNone(self: ContextMenu) bool {
         return self.items.len == 0;
+    }
+
+    // True when row `index` cannot be picked; a `disabled` slice shorter than `items` leaves the rest enabled.
+    pub fn isDisabled(self: ContextMenu, index: usize) bool {
+        return index < self.disabled.len and self.disabled[index];
     }
 };
 
