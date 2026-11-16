@@ -102,6 +102,8 @@ fn trackDrag(p: Props) void {
         s.origin = pointerAlong(p.axis, frame_mod.ptr_press_x, frame_mod.ptr_press_y);
         s.origin_size = size(p);
     }
+    // The line owns the pointer from the press that grabbed it: without this the pane under it drag-scrolled too.
+    frame_mod.claimDrag();
     const now = pointerAlong(p.axis, frame_mod.ptr_x, frame_mod.ptr_y);
     const delta = now - s.origin;
     // Towards the pane grows it: below the line that is up (a negative delta), above it down.
@@ -183,6 +185,7 @@ fn frame(x: f32, y: f32, down: bool, press_x: f32, press_y: f32) void {
 }
 
 fn frameWith(comptime declare_fn: fn () void, x: f32, y: f32, down: bool, press_x: f32, press_y: f32) void {
+    frame_mod.beginDragFrame();
     registry.beginFrame();
     frame_mod.setPointer(x, y);
     frame_mod.setPointerButton(down, press_x, press_y);
@@ -267,6 +270,22 @@ test "a pane before the line grows the other way: the sign follows the side" {
     // Down by 60: the pane ABOVE the line grows.
     frameWith(declareBefore, 200, grab_y + 60, true, 200, grab_y);
     try std.testing.expectApproxEqAbs(@as(f32, 360), test_state.size, 0.01);
+}
+
+test "the resize line claims the drag, so the pane under it cannot drag-scroll" {
+    begin();
+    frame_mod.beginDragFrame();
+    const line = boxOf("test-split");
+    const grab_y = line.y + line.height * 0.5;
+    // Nothing is being dragged yet, so the Host is free to drag-scroll the pane under the pointer.
+    try std.testing.expect(!frame_mod.dragClaimed());
+    // A press on the line makes the line the owner of the pointer for that frame.
+    frame(200, grab_y, true, 200, grab_y);
+    try std.testing.expect(test_state.dragging);
+    try std.testing.expect(frame_mod.dragClaimed());
+    // Released: the claim is gone, so a drag somewhere else scrolls as it always did.
+    frame(200, grab_y, false, 200, grab_y);
+    try std.testing.expect(!frame_mod.dragClaimed());
 }
 
 test "a press that began off the line does not resize the pane" {

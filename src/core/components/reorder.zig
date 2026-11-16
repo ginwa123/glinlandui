@@ -3,6 +3,7 @@ const std = @import("std");
 const cl = @import("zclay");
 const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
+const frame_mod = @import("../frame.zig");
 
 /// Where a drop lands relative to the row under the pointer: above it, inside it, or below it.
 pub const Zone = enum {
@@ -74,6 +75,10 @@ const Target = struct { index: usize, zone: Zone };
 /// Forget last frame's rows; the drag in flight survives, because it spans frames.
 pub fn beginFrame() void {
     row_count = 0;
+    // A row lifted off its slot owns the pointer: the list it came from must not drag-scroll with it.
+    if (drag) |d| {
+        if (d.active) frame_mod.claimDrag();
+    }
 }
 
 /// A list offers a row for dragging; a spec with no handler registers nothing, so a static list costs one branch.

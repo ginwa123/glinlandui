@@ -89,6 +89,7 @@ pub const Host = struct {
         // A devtool client is waiting: fire its action BEFORE the registries are cleared, so it lands in the targets the last frame declared.
         if (self.service) |svc| svc.begin(svc.ptr, self);
         // Fresh registries per frame (components self-register during declare; stale boxes must never ghost-fire).
+        frame_mod.beginDragFrame();
         registry.beginFrame();
         context_menu.beginFrame();
         reorder_mod.beginFrame();
@@ -195,9 +196,9 @@ pub const Host = struct {
         const thumb_moved = scroll_mod.moveThumb(x, y);
         if (button == dispatch.BTN_LEFT and !pressed) scroll_mod.endThumbGrab();
         if (thumb_moved) return;
-        // Slider-style drag: a press-drag nudges the scroll container under the pointer 1:1 — unless the press landed on text.
+        // Slider-style drag: a press-drag nudges the scroll container under the pointer 1:1 — unless the press landed on text, or a component owns the drag.
         if (self.ptr.down and self.ptr.dragging and (x != last_x or y != last_y)) {
-            if (!self.drag_selecting_text) scroll_mod.dragScroll(x, y, x - last_x, y - last_y);
+            if (!self.drag_selecting_text and !frame_mod.dragClaimed()) scroll_mod.dragScroll(x, y, x - last_x, y - last_y);
             reorder_mod.move(x, y);
         }
     }

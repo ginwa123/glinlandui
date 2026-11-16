@@ -91,6 +91,8 @@ fn trackDrag(p: Props) void {
         s.drag_origin_x = frame_mod.ptr_press_x;
         s.drag_origin_width = width(p);
     }
+    // The handle owns the pointer: the list beside it must not drag-scroll while the panel is resized.
+    frame_mod.claimDrag();
     const delta = frame_mod.ptr_x - s.drag_origin_x;
     const moved = if (p.side == .left) delta else -delta;
     const want = s.drag_origin_width + moved;

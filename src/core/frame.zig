@@ -149,6 +149,33 @@ pub fn setPointerButton(down: bool, press_x: f32, press_y: f32) void {
     ptr_press_y = press_y;
 }
 
+// True while a component owns the pointer's drag: the Host must not ALSO drag-scroll the pane under it.
+var drag_claim = false;
+
+// Start a frame's claim: a component that owns a drag says so again in the declare that follows.
+pub fn beginDragFrame() void {
+    drag_claim = false;
+}
+
+// Claim the pointer's drag for this frame: the split line, the sidebar handle, a row being reordered.
+pub fn claimDrag() void {
+    drag_claim = true;
+}
+
+// True when the frame that just declared claimed the drag.
+pub fn dragClaimed() bool {
+    return drag_claim;
+}
+
+test "the drag claim lasts one frame: reset at the start, honoured until the next" {
+    beginDragFrame();
+    try std.testing.expect(!dragClaimed());
+    claimDrag();
+    try std.testing.expect(dragClaimed());
+    beginDragFrame();
+    try std.testing.expect(!dragClaimed());
+}
+
 // Record the frame clock. `delta` is the time since the previous frame, in seconds.
 pub fn setTime(now: f32, delta: f32) void {
     time_s = now;
