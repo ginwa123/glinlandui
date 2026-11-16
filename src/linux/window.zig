@@ -15,6 +15,7 @@ const ui_scale = @import("ui_scale.zig");
 const scale = @import("../core/scale.zig");
 // The one place a logical window becomes device pixels, shared with the CPU backends so a 2x window means the same thing everywhere.
 const soft = @import("../core/render_software.zig");
+const Ctx = @import("../core/erased.zig").Ctx;
 
 // Wayland client bootstrap + xdg-toplevel/EGL window (Task A, tiled).
 const c = @cImport({
@@ -1111,35 +1112,35 @@ test "attached delegate round-trips on_key/on_close/is_quit" {
         last_h: u32 = 0,
     };
     const fns = struct {
-        fn onFrame(ptr: *anyopaque, w: u32, h: u32) void {
-            const s: *State = @ptrCast(@alignCast(ptr));
+        fn onFrame(ptr: Ctx, w: u32, h: u32) void {
+            const s = ptr.get(State);
             s.frames += 1;
             s.last_w = w;
             s.last_h = h;
         }
-        fn onPointer(_: *anyopaque, _: f32, _: f32, _: bool, _: u32) void {}
-        fn onKey(ptr: *anyopaque, keycode: u32, pressed: bool) bool {
-            const s: *State = @ptrCast(@alignCast(ptr));
+        fn onPointer(_: Ctx, _: f32, _: f32, _: bool, _: u32) void {}
+        fn onKey(ptr: Ctx, keycode: u32, pressed: bool) bool {
+            const s = ptr.get(State);
             if (pressed and keyToClose(keycode)) {
                 s.quit = true;
                 return true;
             }
             return false;
         }
-        fn onResize(_: *anyopaque, _: u32, _: u32) void {}
-        fn onClose(ptr: *anyopaque) void {
-            const s: *State = @ptrCast(@alignCast(ptr));
+        fn onResize(_: Ctx, _: u32, _: u32) void {}
+        fn onClose(ptr: Ctx) void {
+            const s = ptr.get(State);
             s.quit = true;
         }
-        fn isQuit(ptr: *anyopaque) bool {
-            const s: *State = @ptrCast(@alignCast(ptr));
+        fn isQuit(ptr: Ctx) bool {
+            const s = ptr.get(State);
             return s.quit;
         }
     };
     var state = State{};
     var win = Window.init(std.testing.allocator, .{});
     win.delegate = .{
-        .ptr = &state,
+        .ptr = Ctx.from(&state),
         .on_frame = fns.onFrame,
         .on_pointer = fns.onPointer,
         .on_key = fns.onKey,
