@@ -1,7 +1,6 @@
 //! Composition root — the ONLY file in the repository that branches on OS.
 const builtin = @import("builtin");
 const std = @import("std");
-const Ctx = @import("core/erased.zig").Ctx;
 
 /// One window backend per OS, selected here and nowhere else.
 pub const window = if (builtin.is_test)
@@ -117,7 +116,7 @@ pub const web_exports = if (builtin.is_test or !builtin.cpu.arch.isWasm())
         /// A no-op on native, so the application can call it unconditionally.
         pub fn Exports(
             comptime App: type,
-            comptime root: *const fn (Ctx, u32, u32) void,
+            comptime root: *const fn (?*anyopaque, u32, u32) void,
         ) type {
             _ = App;
             _ = root;

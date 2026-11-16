@@ -19,17 +19,15 @@ const inspector_mod = @import("devtools/inspector.zig");
 const glyphs = @import("glyphs.zig");
 const text_face = @import("text_face.zig");
 const clock_mod = @import("clock.zig");
-const erased = @import("erased.zig");
-const Ctx = erased.Ctx;
 
 /// App declare callback: builds the Clay tree for a w x h window.
-pub const RootFn = *const fn (Ctx, u32, u32) void;
+pub const RootFn = *const fn (?*anyopaque, u32, u32) void;
 
 /// The devtool service, if the app hosts one: the frame loop fires a waiting request before the app declares, and serialises its reply once the tree is resolved.
 pub const ServiceHooks = struct {
-    ptr: Ctx,
-    begin: *const fn (ptr: Ctx, host: *Host) void,
-    end: *const fn (ptr: Ctx, host: *Host, w: u32, h: u32) void,
+    ptr: *anyopaque,
+    begin: *const fn (ptr: *anyopaque, host: *Host) void,
+    end: *const fn (ptr: *anyopaque, host: *Host, w: u32, h: u32) void,
 };
 
 pub const Host = struct {
@@ -45,8 +43,8 @@ pub const Host = struct {
     win_h: u32 = 480,
     ptr: dispatch.PtrState = .{},
     /// Millisecond clock for double-click timing and the caret blink. Defaults to the platform's monotonic clock; null means no double clicks and a fixed frame step.
-    clock: ?*const fn (Ctx) i64 = null,
-    clock_ctx: Ctx = Ctx.none,
+    clock: ?*const fn (?*anyopaque) i64 = null,
+    clock_ctx: ?*anyopaque = null,
     /// A monotonic frame clock in seconds. The host advances it; a component only reads it.
     clock_s: f32 = 0,
     /// The wall clock reading of the last frame, in milliseconds, so `delta_s` is real time rather than one frame's worth.
@@ -57,14 +55,14 @@ pub const Host = struct {
     quit_requested: bool = false,
     views: dispatch.Views = .{},
     keys: dispatch.KeyChain = .{},
-    root_ctx: Ctx = Ctx.none,
+    root_ctx: ?*anyopaque = null,
     root_fn: RootFn,
     /// The devtool. Non-null turns the app into one that answers a right click with its own component tree; the app's own code is untouched.
     inspect: ?*inspector_mod.Inspector = null,
     /// The devtool service. Non-null means a client may be waiting on this frame, so the loop fires its request before declaring and answers after resolving.
     service: ?ServiceHooks = null,
 
-    pub fn init(alloc: std.mem.Allocator, ctx: Ctx, root_fn: RootFn) !Host {
+    pub fn init(alloc: std.mem.Allocator, ctx: ?*anyopaque, root_fn: RootFn) !Host {
         // The platform's monotonic clock by default: a double click and a 1 Hz caret need real time, and an app that never wires one has neither.
         var self = Host{ .alloc = alloc, .root_ctx = ctx, .root_fn = root_fn, .clock = clock_mod.monoMs };
         // The glyph cache and the measured face spend the app's allocator, not a page-per-glyph one of their own.
@@ -106,8 +104,8 @@ pub const Host = struct {
         if (self.inspect) |dev| dev.declare(w, h);
     }
 
-    fn declareThunk(ctx: Ctx, w: u32, h: u32) void {
-        const self = ctx.get(Host);
+    fn declareThunk(ctx: *anyopaque, w: u32, h: u32) void {
+        const self: *Host = @ptrCast(@alignCast(ctx));
         self.declareFrame(w, h);
     }
 
@@ -154,7 +152,7 @@ pub const Host = struct {
             w,
             h,
             declareThunk,
-            Ctx.from(self),
+            self,
             &effective,
         );
         // Every box is real now, so a component that asked to stay in view is scrolled before the next frame draws.
@@ -250,50 +248,50 @@ pub const Host = struct {
         return self.quit_requested;
     }
 
-    fn onFrame(ptr: Ctx, w: u32, h: u32) void {
-        const self = ptr.get(Host);
+    fn onFrame(ptr: *anyopaque, w: u32, h: u32) void {
+        const self: *Host = @ptrCast(@alignCast(ptr));
         self.frame(w, h);
     }
 
-    fn onPointer(ptr: Ctx, x: f32, y: f32, pressed: bool, button: u32) void {
-        const self = ptr.get(Host);
+    fn onPointer(ptr: *anyopaque, x: f32, y: f32, pressed: bool, button: u32) void {
+        const self: *Host = @ptrCast(@alignCast(ptr));
         self.onPointerEvent(x, y, pressed, button);
     }
 
-    fn onScroll(ptr: Ctx, dx: f32, dy: f32) void {
-        const self = ptr.get(Host);
+    fn onScroll(ptr: *anyopaque, dx: f32, dy: f32) void {
+        const self: *Host = @ptrCast(@alignCast(ptr));
         self.onScrollEvent(dx, dy);
     }
 
-    fn onKey(ptr: Ctx, keycode: u32, pressed: bool) bool {
-        const self = ptr.get(Host);
+    fn onKey(ptr: *anyopaque, keycode: u32, pressed: bool) bool {
+        const self: *Host = @ptrCast(@alignCast(ptr));
         return self.onKeyEvent(keycode, pressed);
     }
 
-    fn onText(ptr: Ctx, text: []const u8) void {
-        const self = ptr.get(Host);
+    fn onText(ptr: *anyopaque, text: []const u8) void {
+        const self: *Host = @ptrCast(@alignCast(ptr));
         _ = self.onTextEvent(text);
     }
 
-    fn onResize(ptr: Ctx, w: u32, h: u32) void {
-        const self = ptr.get(Host);
+    fn onResize(ptr: *anyopaque, w: u32, h: u32) void {
+        const self: *Host = @ptrCast(@alignCast(ptr));
         self.onResizeEvent(w, h);
     }
 
-    fn onClose(ptr: Ctx) void {
-        const self = ptr.get(Host);
+    fn onClose(ptr: *anyopaque) void {
+        const self: *Host = @ptrCast(@alignCast(ptr));
         self.onCloseEvent();
     }
 
-    fn isQuitFn(ptr: Ctx) bool {
-        const self = ptr.get(Host);
+    fn isQuitFn(ptr: *anyopaque) bool {
+        const self: *Host = @ptrCast(@alignCast(ptr));
         return self.isQuit();
     }
 
     /// Same Delegate shape as ui Shell (Window accepts it directly).
     pub fn delegate(self: *Host) contract.Delegate {
         return .{
-            .ptr = Ctx.from(self),
+            .ptr = self,
             .on_frame = onFrame,
             .on_pointer = onPointer,
             .on_scroll = onScroll,
@@ -308,7 +306,7 @@ pub const Host = struct {
 
 // ---- Test doubles ----
 
-fn noopRoot(_: Ctx, _: u32, _: u32) void {}
+fn noopRoot(_: ?*anyopaque, _: u32, _: u32) void {}
 
 const FrameRec = struct {
     calls: usize = 0,
@@ -316,21 +314,21 @@ const FrameRec = struct {
     h: u32 = 0,
 };
 
-fn recRoot(ctx: Ctx, w: u32, h: u32) void {
-    const r = ctx.get(FrameRec);
+fn recRoot(ctx: ?*anyopaque, w: u32, h: u32) void {
+    const r: *FrameRec = @ptrCast(@alignCast(ctx.?));
     r.calls += 1;
     r.w = w;
     r.h = h;
 }
 
 // ARENA DISCIPLINE (mirrors ui views_test.zig): testHost() intentionally never deinits — Clay keeps a global currentContext pointer inside the init.
-fn testHost(h: *Host, ctx: Ctx, root_fn: RootFn) !void {
+fn testHost(h: *Host, ctx: ?*anyopaque, root_fn: RootFn) !void {
     h.* = try Host.init(std.heap.page_allocator, ctx, root_fn);
 }
 
 test "host: init defaults headless (Clay only, renderer stays null)" {
     var h: Host = undefined;
-    try testHost(&h, Ctx.none, noopRoot);
+    try testHost(&h, null, noopRoot);
     try std.testing.expect(h.clay_ready);
     try std.testing.expect(h.renderer == null);
     try std.testing.expectEqual(@as(u32, 720), h.win_w);
@@ -346,7 +344,7 @@ test "host: init defaults headless (Clay only, renderer stays null)" {
 
 test "host: delegate drives every event (shape + wiring)" {
     var h: Host = undefined;
-    try testHost(&h, Ctx.none, noopRoot);
+    try testHost(&h, null, noopRoot);
     var d = h.delegate();
     d.on_resize(d.ptr, 800, 600);
     try std.testing.expectEqual(@as(u32, 800), h.win_w);
@@ -363,7 +361,7 @@ test "host: delegate drives every event (shape + wiring)" {
 
 test "host: onClose requests quit" {
     var h: Host = undefined;
-    try testHost(&h, Ctx.none, noopRoot);
+    try testHost(&h, null, noopRoot);
     try std.testing.expect(!h.isQuit());
     h.onCloseEvent();
     try std.testing.expect(h.isQuit());
@@ -371,7 +369,7 @@ test "host: onClose requests quit" {
 
 test "host: pointer press latches down, release clears" {
     var h: Host = undefined;
-    try testHost(&h, Ctx.none, noopRoot);
+    try testHost(&h, null, noopRoot);
     h.onPointerEvent(10, 20, true, 272);
     try std.testing.expectEqual(@as(f32, 10), h.ptr.x);
     try std.testing.expectEqual(@as(f32, 20), h.ptr.y);
@@ -382,7 +380,7 @@ test "host: pointer press latches down, release clears" {
 
 test "host: a frame applies whole pixels of scroll and keeps the remainder" {
     var h: Host = undefined;
-    try testHost(&h, Ctx.none, noopRoot);
+    try testHost(&h, null, noopRoot);
     // Three small deltas add up to one pixel plus a remainder; the pixel moves now, the remainder waits.
     h.onScrollEvent(0, -0.4);
     h.onScrollEvent(0, -0.4);
@@ -393,7 +391,7 @@ test "host: a frame applies whole pixels of scroll and keeps the remainder" {
 
 test "host: a no-op scroll does not make the frame dirty" {
     var h: Host = undefined;
-    try testHost(&h, Ctx.none, noopRoot);
+    try testHost(&h, null, noopRoot);
     // A zero delta, or jitter below a hundredth of a point, must not cost a repaint: that kept an idle window at 60 fps.
     h.onScrollEvent(0, 0);
     h.onScrollEvent(0.001, -0.004);
@@ -404,16 +402,16 @@ test "host: a no-op scroll does not make the frame dirty" {
 
 test "host: empty keychain returns false (press + release)" {
     var h: Host = undefined;
-    try testHost(&h, Ctx.none, noopRoot);
+    try testHost(&h, null, noopRoot);
     try std.testing.expect(!h.onKeyEvent(30, true));
     try std.testing.expect(!h.onKeyEvent(30, false));
 }
 
 test "host: delegate on_text reaches the registered text handler" {
     var h: Host = undefined;
-    try testHost(&h, Ctx.none, noopRoot);
+    try testHost(&h, null, noopRoot);
     var r = dispatch.TextRec{ .ret = true };
-    h.keys.registerText(dispatch.textRec, Ctx.from(&r));
+    h.keys.registerText(dispatch.textRec, &r);
     const d = h.delegate();
     d.on_text.?(d.ptr, "A");
     try std.testing.expectEqual(@as(usize, 1), r.calls);
@@ -425,7 +423,7 @@ test "host: delegate on_text reaches the registered text handler" {
 test "host: frame runs the declare thunk with current dims" {
     var rec = FrameRec{};
     var h: Host = undefined;
-    try testHost(&h, Ctx.from(&rec), recRoot);
+    try testHost(&h, &rec, recRoot);
     h.frame(800, 600);
     try std.testing.expectEqual(@as(usize, 1), rec.calls);
     try std.testing.expectEqual(@as(u32, 800), rec.w);
@@ -436,7 +434,7 @@ test "host: frame runs the declare thunk with current dims" {
 
 test "host: wheel scroll accumulates and frame consumes it" {
     var h: Host = undefined;
-    try testHost(&h, Ctx.none, noopRoot);
+    try testHost(&h, null, noopRoot);
     const d = h.delegate();
     try std.testing.expect(d.on_scroll != null);
     d.on_scroll.?(d.ptr, 0, 120);
@@ -446,7 +444,7 @@ test "host: wheel scroll accumulates and frame consumes it" {
     // Frame consumes exactly once (delta resets to zero).
     var rec = FrameRec{};
     h.root_fn = recRoot;
-    h.root_ctx = Ctx.from(&rec);
+    h.root_ctx = &rec;
     h.frame(800, 600);
     try std.testing.expectEqual(@as(usize, 1), rec.calls);
     try std.testing.expectApproxEqAbs(@as(f32, 0), h.scroll_dx, 1e-6);
@@ -468,13 +466,13 @@ fn hostScrollProbeChildren(_: void) void {
     }
 }
 
-fn hostScrollProbeRoot(_: Ctx, _: u32, _: u32) void {
+fn hostScrollProbeRoot(_: ?*anyopaque, _: u32, _: u32) void {
     scroll_mod.scroll(.{ .id = .{ .text = "host-scroll" }, .h = .{ .fixed = 100 }, .w = .{ .fixed = 200 } }, {}, hostScrollProbeChildren);
 }
 
 test "host: wheel-down (Wayland positive dy) scrolls content down" {
     var h: Host = undefined;
-    try testHost(&h, Ctx.none, hostScrollProbeRoot);
+    try testHost(&h, null, hostScrollProbeRoot);
     h.frame(720, 480);
     const y0 = cl.getElementData(cl.getElementId("host-scroll-probe")).bounding_box.y;
     // Hover the container center, then wheel down in Wayland coords.
@@ -489,7 +487,7 @@ test "host: wheel-down (Wayland positive dy) scrolls content down" {
 
 test "host: press-drag down scrolls down slider-style (no click)" {
     var h: Host = undefined;
-    try testHost(&h, Ctx.none, hostScrollProbeRoot);
+    try testHost(&h, null, hostScrollProbeRoot);
     h.frame(720, 480);
     const y0 = cl.getElementData(cl.getElementId("host-scroll-probe")).bounding_box.y;
     const box = cl.getElementData(cl.getElementId("host-scroll")).bounding_box;
@@ -507,7 +505,7 @@ test "host: press-drag down scrolls down slider-style (no click)" {
 
 test "host: a host starts with a clock, so two clicks can be told from a double click" {
     var h: Host = undefined;
-    try testHost(&h, Ctx.none, noopRoot);
+    try testHost(&h, null, noopRoot);
     // Without a clock the pointer state stays at 0 ms forever, and `fireClick` can only ever report a single click.
     try std.testing.expect(h.clock != null);
     if (h.clock) |read| {
@@ -518,7 +516,7 @@ test "host: a host starts with a clock, so two clicks can be told from a double 
 
 test "host: a press on the scrollbar pill drags its content instead of nudging it 1:1" {
     var h: Host = undefined;
-    try testHost(&h, Ctx.none, hostScrollProbeRoot);
+    try testHost(&h, null, hostScrollProbeRoot);
     h.frame(720, 480);
     // The thumb is declared from the previous frame's scroll data, so the second frame is the one that has a box.
     h.frame(720, 480);

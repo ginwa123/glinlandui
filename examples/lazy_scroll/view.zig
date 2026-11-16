@@ -1,7 +1,6 @@
 // The View: pure declaration from the state.
 // Nothing here writes the model. A widget raises an intent on the ViewModel and the next frame draws whatever the model says.
 const glinlandui = @import("glinlandui");
-const Ctx = glinlandui.props.Ctx;
 const box_mod = glinlandui.components.box;
 const text_mod = glinlandui.components.text;
 const button = glinlandui.components.button;
@@ -88,7 +87,7 @@ fn headerChildren(scope: *Scope) void {
         .fg = if (scope.ui.auto) t.colors.on_primary else t.colors.text,
         .hover_bg = if (scope.ui.auto) t.colors.primary_hover else t.colors.divider,
         .pad = props.Pad.axes(4, 14),
-        .on_click = props.Click.on(scope.vm, onToggleAuto),
+        .on_click = .{ .f = onToggleAuto, .ctx = scope.vm },
     });
     button.button(.{
         .id = .{ .text = "header.bottom" },
@@ -97,15 +96,17 @@ fn headerChildren(scope: *Scope) void {
         .fg = t.colors.text,
         .hover_bg = t.colors.divider,
         .pad = props.Pad.axes(4, 14),
-        .on_click = props.Click.on(scope.vm, onJumpBottom),
+        .on_click = .{ .f = onJumpBottom, .ctx = scope.vm },
     });
 }
 
-fn onToggleAuto(vm: *LazyViewModel) void {
+fn onToggleAuto(raw: ?*anyopaque) void {
+    const vm: *LazyViewModel = @ptrCast(@alignCast(raw.?));
     vm.toggleAuto();
 }
 
-fn onJumpBottom(vm: *LazyViewModel) void {
+fn onJumpBottom(raw: ?*anyopaque) void {
+    const vm: *LazyViewModel = @ptrCast(@alignCast(raw.?));
     vm.jumpToBottom();
 }
 

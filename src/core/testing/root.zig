@@ -10,8 +10,6 @@ const assertions = @import("assertions.zig");
 const action_plan = @import("actions.zig");
 const cl = @import("zclay");
 const props = @import("../props.zig");
-const erased = @import("../erased.zig");
-const Ctx = erased.Ctx;
 
 pub const Host = host_mod.Host;
 // The toolkit's own box type: a test asserts on this, never on Clay's struct.
@@ -93,7 +91,7 @@ pub const Driver = struct {
     /// Initialize a Host with the supplied application root callback.
     pub fn initOwned(
         alloc: std.mem.Allocator,
-        ctx: Ctx,
+        ctx: ?*anyopaque,
         root_fn: host_mod.RootFn,
     ) !Driver {
         const host = try alloc.create(Host);
@@ -130,7 +128,7 @@ pub const Driver = struct {
         self.last_text_count = 0;
         self.options = .{
             .probe = captureFrame,
-            .probe_user_data = Ctx.from(self),
+            .probe_user_data = @ptrCast(self),
             // Resolve the semantics tree so onNode()/waitForIdle() see the geometry THIS frame produced.
             .resolve_semantics = true,
             .no_present = self.headless,
@@ -377,12 +375,12 @@ pub const Driver = struct {
     }
 
     fn captureFrame(
-        user_data: Ctx,
+        user_data: ?*anyopaque,
         frame_commands: []const RenderCommand,
         width: u32,
         height: u32,
     ) void {
-        const self = user_data.get(Driver);
+        const self: *Driver = @ptrCast(@alignCast(user_data.?));
         self.last_frame.width = width;
         self.last_frame.height = height;
         self.last_frame.command_count = frame_commands.len;
@@ -628,7 +626,7 @@ test "the typing table types what the field decodes" {
 test "a repaint that draws the same commands is reported as repeated, and a change is not" {
     const App = struct {
         var show_extra: bool = false;
-        fn root(_: Ctx, _: u32, _: u32) void {
+        fn root(_: ?*anyopaque, _: u32, _: u32) void {
             const clay = @import("zclay");
             clay.UI()(.{
                 .id = .ID("repeat.box"),
@@ -644,7 +642,7 @@ test "a repaint that draws the same commands is reported as repeated, and a chan
             }
         }
     };
-    var driver = try Driver.initOwned(std.heap.page_allocator, Ctx.none, App.root);
+    var driver = try Driver.initOwned(std.heap.page_allocator, null, App.root);
     defer driver.deinit();
     try driver.start(.{ .width = 300, .height = 200 });
 
@@ -667,9 +665,9 @@ test "a repaint that draws the same commands is reported as repeated, and a chan
 
 test "driver exposes deterministic viewport and empty root" {
     const root = struct {
-        fn declare(_: Ctx, _: u32, _: u32) void {}
+        fn declare(_: ?*anyopaque, _: u32, _: u32) void {}
     }.declare;
-    var driver = try Driver.initOwned(std.heap.page_allocator, Ctx.none, root);
+    var driver = try Driver.initOwned(std.heap.page_allocator, null, root);
     defer driver.deinit();
     try driver.start(.{ .width = 800, .height = 600 });
     try std.testing.expectEqual(@as(u32, 800), driver.viewport.width);
@@ -682,23 +680,23 @@ test "driver captures a real component frame" {
     const Rec = struct { clicks: usize = 0 };
     const App = struct {
         state: Rec = .{},
-        fn root(ctx: Ctx, _: u32, _: u32) void {
-            const app = ctx.get(@This());
+        fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
+            const app: *@This() = @ptrCast(@alignCast(ctx.?));
             button.button(.{
                 .id = .{ .text = "testkit-button" },
                 .label = .{ .text = "OK" },
                 .w = .{ .fixed = 100 },
                 .h = .{ .fixed = 40 },
-                .on_click = .{ .f = onClick, .ctx = Ctx.from(&app.state) },
+                .on_click = .{ .f = onClick, .ctx = &app.state },
             });
         }
-        fn onClick(ctx: Ctx) void {
-            const rec = ctx.get(Rec);
+        fn onClick(ctx: ?*anyopaque) void {
+            const rec: *Rec = @ptrCast(@alignCast(ctx.?));
             rec.clicks += 1;
         }
     };
     var app = App{};
-    var driver = try Driver.initOwned(std.heap.page_allocator, Ctx.from(&app), App.root);
+    var driver = try Driver.initOwned(std.heap.page_allocator, &app, App.root);
     defer driver.deinit();
     try driver.start(.{});
     try std.testing.expect(driver.exists("testkit-button"));
@@ -712,23 +710,23 @@ test "driver follows pointer press/release and keyboard routes" {
     const input = @import("../components/input.zig");
     const App = struct {
         key_hits: usize = 0,
-        fn root(_: Ctx, _: u32, _: u32) void {}
-        fn onKey(ctx: Ctx, _: input.Mods, keycode: u32) bool {
+        fn root(_: ?*anyopaque, _: u32, _: u32) void {}
+        fn onKey(ctx: ?*anyopaque, _: input.Mods, keycode: u32) bool {
             _ = keycode;
-            const app = ctx.get(@This());
+            const app: *@This() = @ptrCast(@alignCast(ctx.?));
             app.key_hits += 1;
             return true;
         }
     };
     var app = App{};
-    var driver = try Driver.initOwned(std.heap.page_allocator, Ctx.from(&app), App.root);
+    var driver = try Driver.initOwned(std.heap.page_allocator, &app, App.root);
     defer driver.deinit();
     try driver.start(.{});
     driver.pressAt(10, 10);
     try std.testing.expect(driver.host.ptr.down);
     driver.releaseAt(10, 10);
     try std.testing.expect(!driver.host.ptr.down);
-    driver.host.keys.register(App.onKey, Ctx.from(&app));
+    driver.host.keys.register(App.onKey, &app);
     try std.testing.expect(try driver.key(input.KEY_A));
     try std.testing.expectEqual(@as(usize, 1), app.key_hits);
 }
@@ -748,7 +746,7 @@ const e2e_rows = [_][]const u8{
 const E2eApp = struct {
     clicks: usize = 0,
 
-    fn root(ctx: Ctx, _: u32, _: u32) void {
+    fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
         box_mod.box(.{
             .id = .{ .text = "e2e-root" },
             .direction = .column,
@@ -757,7 +755,7 @@ const E2eApp = struct {
         }, ctx, appChildren);
     }
 
-    fn appChildren(ctx: Ctx) void {
+    fn appChildren(ctx: ?*anyopaque) void {
         // 10 rows of 40px in a 120px viewport: rows 0..2 are visible, the rest are clipped out until something scrolls them in.
         scroll_mod.scroll(.{
             .id = .{ .text = "e2e-scroll" },
@@ -777,7 +775,7 @@ const E2eApp = struct {
         });
     }
 
-    fn scrollChildren(ctx: Ctx) void {
+    fn scrollChildren(ctx: ?*anyopaque) void {
         for (e2e_rows) |tag| {
             button_mod.button(.{
                 .id = .{ .text = tag },
@@ -790,8 +788,8 @@ const E2eApp = struct {
         }
     }
 
-    fn bump(ctx: Ctx) void {
-        const self = ctx.get(E2eApp);
+    fn bump(ctx: ?*anyopaque) void {
+        const self: *E2eApp = @ptrCast(@alignCast(ctx.?));
         self.clicks += 1;
     }
 };
@@ -800,7 +798,7 @@ const e2e_viewport = Driver.Viewport{ .width = 200, .height = 400 };
 
 fn e2eDriver(app: *E2eApp) !Driver {
     // page_allocator, not testing.allocator: the Clay arena is deliberately left alive for the test process (see Driver.deinit's note), so a leak-checking.
-    var driver = try Driver.initOwned(std.heap.page_allocator, Ctx.from(app), E2eApp.root);
+    var driver = try Driver.initOwned(std.heap.page_allocator, app, E2eApp.root);
     try driver.start(e2e_viewport);
     return driver;
 }
@@ -963,13 +961,13 @@ test "e2e: scrolling via the wheel path also counts as not-idle until settled" {
 
 const ExtState = struct { hits: usize = 0 };
 
-fn extHit(ctx: Ctx, _: usize) void {
-    const s = ctx.get(ExtState);
+fn extHit(ctx: ?*anyopaque, _: usize) void {
+    const s: *ExtState = @ptrCast(@alignCast(ctx.?));
     s.hits += 1;
 }
 
 const ExtApp = struct {
-    fn root(ctx: Ctx, _: u32, _: u32) void {
+    fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
         // Exactly what examples/calculator/ does: `on_click = null` so button() does not self-register, then an indexed registration.
         button_mod.button(.{
             .id = .{ .text = "ext-key" },
@@ -984,7 +982,7 @@ const ExtApp = struct {
 
 test "e2e: a click registered outside the component still reports hasClickAction" {
     var state = ExtState{};
-    var driver = try Driver.initOwned(std.heap.page_allocator, Ctx.from(&state), ExtApp.root);
+    var driver = try Driver.initOwned(std.heap.page_allocator, &state, ExtApp.root);
     defer driver.deinit();
     try driver.start(.{ .width = 120, .height = 80 });
     try driver.waitForIdle();
@@ -1002,9 +1000,9 @@ test "e2e: a click registered outside the component still reports hasClickAction
 
 test "the driver keeps the pointer bookkeeping a cross-frame gesture reads" {
     const root = struct {
-        fn declare(_: Ctx, _: u32, _: u32) void {}
+        fn declare(_: ?*anyopaque, _: u32, _: u32) void {}
     }.declare;
-    var driver = try Driver.initOwned(std.heap.page_allocator, Ctx.none, root);
+    var driver = try Driver.initOwned(std.heap.page_allocator, null, root);
     defer driver.deinit();
     try driver.start(.{ .width = 200, .height = 100 });
 

@@ -2,7 +2,6 @@
 // Nothing here writes the model: a key raises an intent on the ViewModel and the next frame draws whatever the model says.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
-const Ctx = glinlandui.props.Ctx;
 const Color = glinlandui.Color;
 
 const components = glinlandui.components;
@@ -54,10 +53,10 @@ pub const Scope = struct {
 };
 
 // The Clay root for this screen, with the MODEL as ctx: the Activity's `content` looks the model up in the store and calls `show`, and the view's own tests drive the same tree through this.
-pub fn root(ctx: Ctx, w: u32, h: u32) void {
+pub fn root(ctx: ?*anyopaque, w: u32, h: u32) void {
     _ = w;
     _ = h;
-    const vm = ctx.get(CalculatorViewModel);
+    const vm: *CalculatorViewModel = @ptrCast(@alignCast(ctx.?));
     show(vm);
 }
 
@@ -151,7 +150,7 @@ fn rowChildren(ctx: *RowCtx) void {
         registry.registerZCursor(
             frame.clayId(state_mod.KEY_IDS[i]),
             onKeyPress,
-            Ctx.from(ctx.vm),
+            ctx.vm,
             i,
             0,
             .pointer,
@@ -159,8 +158,8 @@ fn rowChildren(ctx: *RowCtx) void {
     }
 }
 
-fn onKeyPress(ctx: Ctx, index: usize) void {
-    const vm = ctx.get(CalculatorViewModel);
+fn onKeyPress(ctx: ?*anyopaque, index: usize) void {
+    const vm: *CalculatorViewModel = @ptrCast(@alignCast(ctx.?));
     vm.pressIndex(index);
 }
 
@@ -242,7 +241,7 @@ fn keyFill(cmds: []const glinlandui.RenderCommand, index: usize) ?[4]f32 {
 const Capture = struct {
     var cmds: []const glinlandui.RenderCommand = &.{};
 
-    fn probe(_: Ctx, c: []const glinlandui.RenderCommand, _: u32, _: u32) void {
+    fn probe(_: ?*anyopaque, c: []const glinlandui.RenderCommand, _: u32, _: u32) void {
         cmds = c;
     }
 };
@@ -251,7 +250,7 @@ const Capture = struct {
 fn drawFrame(host: *glinlandui.host.Host) []const glinlandui.RenderCommand {
     var opt = glinlandui.frame.FrameOptions{};
     opt.probe = Capture.probe;
-    opt.probe_user_data = Ctx.none;
+    opt.probe_user_data = null;
     _ = host.frameWithOptions(360, 440, &opt);
     return Capture.cmds;
 }
@@ -260,7 +259,7 @@ test "declaring the app emits the display, every key and the row boxes" {
     const Rec = struct {
         var rects: usize = 0;
         var texts: usize = 0;
-        fn probe(_: Ctx, cmds: []const glinlandui.RenderCommand, _: u32, _: u32) void {
+        fn probe(_: ?*anyopaque, cmds: []const glinlandui.RenderCommand, _: u32, _: u32) void {
             for (cmds) |c| switch (c.command_type) {
                 .rectangle => rects += 1,
                 .text => texts += 1,
@@ -271,11 +270,11 @@ test "declaring the app emits the display, every key and the row boxes" {
     const alloc = std.heap.page_allocator;
     var vm = CalculatorViewModel.init();
     // NOTE: no `host.deinit()` here. Clay keeps a process-global pointer into the arena that deinit frees, so the next Host.init() would read a dangling currentContext and segfault in Clay_MinMemorySize. The page-allocator arena is intentionally left alive for the rest of the test process — exactly what core/testing/root.zig's Driver.deinit does.
-    var host = try glinlandui.host.Host.init(alloc, Ctx.from(&vm), root);
+    var host = try glinlandui.host.Host.init(alloc, &vm, root);
 
     var opt = glinlandui.frame.FrameOptions{};
     opt.probe = Rec.probe;
-    opt.probe_user_data = Ctx.none;
+    opt.probe_user_data = null;
     _ = host.frameWithOptions(360, 440, &opt);
 
     // 20 buttons + root + display = 22 rects (the display is opaque; the row boxes are transparent and emit nothing).
@@ -288,7 +287,7 @@ test "a click on a declared key fires its indexed handler" {
     const alloc = std.heap.page_allocator;
     var vm = CalculatorViewModel.init();
     // NOTE: no `host.deinit()` here. Clay keeps a process-global pointer into the arena that deinit frees, so the next Host.init() would read a dangling currentContext and segfault in Clay_MinMemorySize. The page-allocator arena is intentionally left alive for the rest of the test process — exactly what core/testing/root.zig's Driver.deinit does.
-    var host = try glinlandui.host.Host.init(alloc, Ctx.from(&vm), root);
+    var host = try glinlandui.host.Host.init(alloc, &vm, root);
 
     host.frame(360, 440);
 
@@ -311,7 +310,7 @@ test "the keypad lays out as five rows of four, without overlap" {
     const alloc = std.heap.page_allocator;
     var vm = CalculatorViewModel.init();
     // NOTE: no `host.deinit()` here. Clay keeps a process-global pointer into the arena that deinit frees, so the next Host.init() would read a dangling currentContext and segfault in Clay_MinMemorySize. The page-allocator arena is intentionally left alive for the rest of the test process — exactly what core/testing/root.zig's Driver.deinit does.
-    var host = try glinlandui.host.Host.init(alloc, Ctx.from(&vm), root);
+    var host = try glinlandui.host.Host.init(alloc, &vm, root);
     host.frame(360, 440);
 
     for (state_mod.KEY_IDS, 0..) |id, i| {
@@ -346,7 +345,7 @@ test "the keypad lays out as five rows of four, without overlap" {
 test "the view shows 0 before any input" {
     const alloc = std.heap.page_allocator;
     var vm = CalculatorViewModel.init();
-    var host = try glinlandui.host.Host.init(alloc, Ctx.from(&vm), root);
+    var host = try glinlandui.host.Host.init(alloc, &vm, root);
     const cmds = drawFrame(&host);
     try std.testing.expectEqualStrings("0", displayString(cmds).?);
     // No operation pending, so the expression line is not declared.
@@ -357,7 +356,7 @@ test "the view shows 0 before any input" {
 test "typing updates the display the view renders" {
     const alloc = std.heap.page_allocator;
     var vm = CalculatorViewModel.init();
-    var host = try glinlandui.host.Host.init(alloc, Ctx.from(&vm), root);
+    var host = try glinlandui.host.Host.init(alloc, &vm, root);
 
     try std.testing.expectEqualStrings("0", displayString(drawFrame(&host)).?);
 
@@ -381,7 +380,7 @@ test "typing updates the display the view renders" {
 test "the expression line appears and disappears with the pending operation" {
     const alloc = std.heap.page_allocator;
     var vm = CalculatorViewModel.init();
-    var host = try glinlandui.host.Host.init(alloc, Ctx.from(&vm), root);
+    var host = try glinlandui.host.Host.init(alloc, &vm, root);
 
     // Fresh: no expression line, so one text per key + one display.
     try std.testing.expectEqual(@as(usize, 21), textCount(drawFrame(&host)));
@@ -405,7 +404,7 @@ test "the expression line appears and disappears with the pending operation" {
 test "a computed result replaces the display, and the operand line follows" {
     const alloc = std.heap.page_allocator;
     var vm = CalculatorViewModel.init();
-    var host = try glinlandui.host.Host.init(alloc, Ctx.from(&vm), root);
+    var host = try glinlandui.host.Host.init(alloc, &vm, root);
     for ("12345") |c| vm.feedChar(c);
     vm.feedChar('*');
     vm.feedChar('2');
@@ -419,7 +418,7 @@ test "a computed result replaces the display, and the operand line follows" {
 test "divide by zero turns the display red in the next frame" {
     const alloc = std.heap.page_allocator;
     var vm = CalculatorViewModel.init();
-    var host = try glinlandui.host.Host.init(alloc, Ctx.from(&vm), root);
+    var host = try glinlandui.host.Host.init(alloc, &vm, root);
     const healthy = displayColor(drawFrame(&host)).?;
     try std.testing.expectEqual(COLOR_FG.toClay(), healthy);
 
@@ -437,7 +436,7 @@ test "divide by zero turns the display red in the next frame" {
 test "a keypad click is visible in the next frame" {
     const alloc = std.heap.page_allocator;
     var vm = CalculatorViewModel.init();
-    var host = try glinlandui.host.Host.init(alloc, Ctx.from(&vm), root);
+    var host = try glinlandui.host.Host.init(alloc, &vm, root);
     host.frame(360, 440);
 
     // Press "7" the way dispatch.pointerEvent does, then redraw.
@@ -454,7 +453,7 @@ test "a keypad click is visible in the next frame" {
 test "the keypad repaints on hover as the pointer moves" {
     const alloc = std.heap.page_allocator;
     var vm = CalculatorViewModel.init();
-    var host = try glinlandui.host.Host.init(alloc, Ctx.from(&vm), root);
+    var host = try glinlandui.host.Host.init(alloc, &vm, root);
 
     // Frame 1: pointer far away, so every key shows its resting fill.
     host.onPointerEvent(-1, -1, false, 0);
@@ -479,7 +478,7 @@ test "the keypad repaints on hover as the pointer moves" {
 test "the operators keep their tint across a state change" {
     const alloc = std.heap.page_allocator;
     var vm = CalculatorViewModel.init();
-    var host = try glinlandui.host.Host.init(alloc, Ctx.from(&vm), root);
+    var host = try glinlandui.host.Host.init(alloc, &vm, root);
     host.onPointerEvent(-1, -1, false, 0);
     const before = drawFrame(&host);
 

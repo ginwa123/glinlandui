@@ -6,11 +6,9 @@ const Color = @import("../color.zig").Color;
 const prop = @import("../props.zig");
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
-const erased = @import("../erased.zig");
-const Ctx = erased.Ctx;
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
-pub const ClickFn = ?*const fn (Ctx) void;
+pub const ClickFn = ?*const fn (?*anyopaque) void;
 
 /// Toolkit-style button props: a label that carries its own type, a size per axis, padding, a border, a radius, and the tones a pointer can put it in.
 pub const ButtonProps = struct {
@@ -69,15 +67,6 @@ pub fn button(p: ButtonProps) void {
     }
 }
 
-/// Declare a button whose click is a TYPED pair — `onClick(.{ .label = .{ .text = "Send" } }, self, App.onSend)`.
-/// The same shape as the field's `onChange`/`onSubmit`/`onFocus`: the model and the handler travel together.
-pub fn onClick(look: ButtonProps, model: anytype, comptime handler: anytype) void {
-    const Model = erased.pointeeOf(@TypeOf(model));
-    var p = look;
-    p.on_click = .{ .f = erased.call0(Model, handler), .ctx = Ctx.from(model) };
-    button(p);
-}
-
 fn rectColorForId(cmds: []cl.RenderCommand, id: u32) ?cl.Color {
     for (cmds) |c| {
         if (c.command_type == .rectangle and c.id == id) return c.render_data.rectangle.background_color;
@@ -89,8 +78,8 @@ const ClickCtx = struct {
     calls: usize = 0,
 };
 
-fn testOnClick(ctx: Ctx) void {
-    const c = ctx.get(ClickCtx);
+fn testOnClick(ctx: ?*anyopaque) void {
+    const c: *ClickCtx = @ptrCast(@alignCast(ctx.?));
     c.calls += 1;
 }
 
@@ -101,7 +90,7 @@ fn declareButton() void {
 }
 
 fn declareClickButton() void {
-    button(.{ .id = .{ .text = "test-click-button" }, .label = .{ .text = "OK" }, .on_click = .{ .f = testOnClick, .ctx = Ctx.from(&click_rec) } });
+    button(.{ .id = .{ .text = "test-click-button" }, .label = .{ .text = "OK" }, .on_click = .{ .f = testOnClick, .ctx = &click_rec } });
 }
 
 fn declareNoClickButton() void {
@@ -109,7 +98,7 @@ fn declareNoClickButton() void {
 }
 
 fn declareDisabledButton() void {
-    button(.{ .id = .{ .text = "test-disabled-button" }, .label = .{ .text = "OK" }, .disabled = true, .on_click = .{ .f = testOnClick, .ctx = Ctx.from(&click_rec) } });
+    button(.{ .id = .{ .text = "test-disabled-button" }, .label = .{ .text = "OK" }, .disabled = true, .on_click = .{ .f = testOnClick, .ctx = &click_rec } });
 }
 
 fn declareFixedButton() void {
@@ -168,14 +157,14 @@ test "ButtonProps carries neutral dark defaults, and needs only an id" {
     try std.testing.expectEqual(@as(f32, 6), p.pad.top.pts());
     try std.testing.expectEqual(@as(f32, 12), p.pad.left.pts());
     try std.testing.expect(p.on_click.f == null);
-    try std.testing.expect(p.on_click.ctx.isNone());
+    try std.testing.expect(p.on_click.ctx == null);
 }
 
 test "ButtonProps stores on_click/ctx; direct invocation fires" {
     var c = ClickCtx{};
-    const p = ButtonProps{ .id = .{ .text = "x" }, .label = .{ .text = "y" }, .on_click = .{ .f = testOnClick, .ctx = Ctx.from(&c) } };
+    const p = ButtonProps{ .id = .{ .text = "x" }, .label = .{ .text = "y" }, .on_click = .{ .f = testOnClick, .ctx = &c } };
     try std.testing.expect(p.on_click.f != null);
-    try std.testing.expect(!p.on_click.ctx.isNone());
+    try std.testing.expect(p.on_click.ctx != null);
     p.on_click.f.?(p.on_click.ctx);
     try std.testing.expectEqual(@as(usize, 1), c.calls);
 }
@@ -230,29 +219,6 @@ test "button without on_click registers nothing; dispatchClick returns false" {
     _ = try headless.frameCommands(declareNoClickButton);
     const bb = cl.getElementData(cl.getElementId("test-noclick-button")).bounding_box;
     try std.testing.expect(!registry.dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
-}
-
-const TypedModel = struct {
-    calls: usize = 0,
-};
-
-fn onTypedClick(model: *TypedModel) void {
-    model.calls += 1;
-}
-
-var typed_rec = TypedModel{};
-
-fn declareTypedButton() void {
-    onClick(.{ .id = .{ .text = "test-typed-button" }, .label = .{ .text = "OK" } }, &typed_rec, onTypedClick);
-}
-
-test "onClick pairs the model and the handler with no cast; a click reaches THAT model" {
-    typed_rec = .{};
-    registry.beginFrame();
-    _ = try headless.frameCommands(declareTypedButton);
-    const bb = cl.getElementData(cl.getElementId("test-typed-button")).bounding_box;
-    try std.testing.expect(registry.dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
-    try std.testing.expectEqual(@as(usize, 1), typed_rec.calls);
 }
 
 test "button self-registers on_click; dispatchClick at center fires once" {

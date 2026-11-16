@@ -4,8 +4,6 @@ const cl = @import("zclay");
 const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const frame_mod = @import("../frame.zig");
-const erased = @import("../erased.zig");
-const Ctx = erased.Ctx;
 
 /// Where a drop lands relative to the row under the pointer: above it, inside it, or below it.
 pub const Zone = enum {
@@ -22,10 +20,10 @@ pub const Zone = enum {
 /// What a list hands in to make its rows draggable. Both handlers null (the default) means the list is not draggable.
 pub const Reorder = struct {
     // Called once per drop on a plain list: the row that moved and the index it lands at AFTER the move, so an app can splice its own array.
-    on_move: ?*const fn (Ctx, usize, usize) void = null,
+    on_move: ?*const fn (?*anyopaque, usize, usize) void = null,
     // Called once per drop when the list knows zones: the row that moved, the row it was dropped ON, and where on it.
-    on_drop: ?*const fn (Ctx, usize, usize, Zone) void = null,
-    ctx: Ctx = Ctx.none,
+    on_drop: ?*const fn (?*anyopaque, usize, usize, Zone) void = null,
+    ctx: ?*anyopaque = null,
     // The line drawn where the row would land, the ring around a container it would land in, and the tint of the row being dragged.
     line: Color = Color.rgb(0x7a, 0xb8, 0xff),
     ghost_bg: Color = Color.rgb(0x3a, 0x3a, 0x3a),
@@ -330,8 +328,8 @@ fn canvasOnce() void {
 
 var move_ctx: struct { calls: usize = 0, from: usize = 0, to: usize = 0 } = .{};
 
-fn onMove(ctx: Ctx, from: usize, to: usize) void {
-    const c = ctx.get(@TypeOf(move_ctx));
+fn onMove(ctx: ?*anyopaque, from: usize, to: usize) void {
+    const c: *@TypeOf(move_ctx) = @ptrCast(@alignCast(ctx.?));
     c.calls += 1;
     c.from = from;
     c.to = to;
@@ -339,8 +337,8 @@ fn onMove(ctx: Ctx, from: usize, to: usize) void {
 
 var drop_ctx: struct { calls: usize = 0, from: usize = 0, to: usize = 0, zone: Zone = .after } = .{};
 
-fn onDrop(ctx: Ctx, from: usize, to: usize, zone: Zone) void {
-    const c = ctx.get(@TypeOf(drop_ctx));
+fn onDrop(ctx: ?*anyopaque, from: usize, to: usize, zone: Zone) void {
+    const c: *@TypeOf(drop_ctx) = @ptrCast(@alignCast(ctx.?));
     c.calls += 1;
     c.from = from;
     c.to = to;
@@ -414,7 +412,7 @@ fn treeReset() void {
     canvasOnce();
     drop_ctx = .{};
     cancel();
-    treeFrame(.{ .on_drop = onDrop, .ctx = Ctx.from(&drop_ctx) });
+    treeFrame(.{ .on_drop = onDrop, .ctx = &drop_ctx });
 }
 
 test "a list with no reorder spec never drags" {
@@ -431,7 +429,7 @@ test "a list with no reorder spec never drags" {
 
 test "dragging the first row past the last one reports a move to the end" {
     reset();
-    const spec = Reorder{ .on_move = onMove, .ctx = Ctx.from(&move_ctx) };
+    const spec = Reorder{ .on_move = onMove, .ctx = &move_ctx };
     frame(spec);
 
     const first = rowCenter(0);
@@ -452,7 +450,7 @@ test "dragging the first row past the last one reports a move to the end" {
 
 test "a press that does not move is left to the row's own click" {
     reset();
-    const spec = Reorder{ .on_move = onMove, .ctx = Ctx.from(&move_ctx) };
+    const spec = Reorder{ .on_move = onMove, .ctx = &move_ctx };
     frame(spec);
 
     const second = rowCenter(1);
@@ -466,7 +464,7 @@ test "a press that does not move is left to the row's own click" {
 
 test "dropping a row back where it came from reports nothing" {
     reset();
-    const spec = Reorder{ .on_move = onMove, .ctx = Ctx.from(&move_ctx) };
+    const spec = Reorder{ .on_move = onMove, .ctx = &move_ctx };
     frame(spec);
 
     const second = rowCenter(1);
@@ -557,10 +555,10 @@ test "a pointer above the first row and below the last clamp to that row's outer
 
 test "a plain list keeps on_move, and never reports a zone" {
     reset();
-    const spec = Reorder{ .on_move = onMove, .ctx = Ctx.from(&move_ctx), .on_drop = onDrop };
+    const spec = Reorder{ .on_move = onMove, .ctx = &move_ctx, .on_drop = onDrop };
     // The list registers its rows through `register`, so the boundary path reports the index, never a zone.
     try testing.expect(spec.on_drop != null);
-    const list_spec = Reorder{ .on_move = onMove, .ctx = Ctx.from(&move_ctx) };
+    const list_spec = Reorder{ .on_move = onMove, .ctx = &move_ctx };
     frame(list_spec);
     const first = rowCenter(0);
     press(first.x, first.y);

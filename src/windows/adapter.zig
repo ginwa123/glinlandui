@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const contract = @import("../core/window_contract.zig");
-const Ctx = @import("../core/erased.zig").Ctx;
 
 // ============================== coordinates ==============================
 
@@ -197,19 +196,19 @@ test "applyPendingResize adopts the pending size and notifies once" {
         resizes: usize = 0,
         w: u32 = 0,
         h: u32 = 0,
-        fn onFrame(_: Ctx, _: u32, _: u32) void {}
-        fn onPointer(_: Ctx, _: f32, _: f32, _: bool, _: u32) void {}
-        fn onKey(_: Ctx, _: u32, _: bool) bool {
+        fn onFrame(_: *anyopaque, _: u32, _: u32) void {}
+        fn onPointer(_: *anyopaque, _: f32, _: f32, _: bool, _: u32) void {}
+        fn onKey(_: *anyopaque, _: u32, _: bool) bool {
             return false;
         }
-        fn onResize(ptr: Ctx, w: u32, h: u32) void {
-            const s = ptr.get(@This());
+        fn onResize(ptr: *anyopaque, w: u32, h: u32) void {
+            const s: *@This() = @ptrCast(@alignCast(ptr));
             s.resizes += 1;
             s.w = w;
             s.h = h;
         }
-        fn onClose(_: Ctx) void {}
-        fn isQuit(_: Ctx) bool {
+        fn onClose(_: *anyopaque) void {}
+        fn isQuit(_: *anyopaque) bool {
             return false;
         }
     };
@@ -221,7 +220,7 @@ test "applyPendingResize adopts the pending size and notifies once" {
         .min_height = 300,
     });
     st.delegate = .{
-        .ptr = Ctx.from(&rec),
+        .ptr = &rec,
         .on_frame = Rec.onFrame,
         .on_pointer = Rec.onPointer,
         .on_key = Rec.onKey,
@@ -247,17 +246,17 @@ test "a WM_SIZE storm coalesces into a single applied size" {
     // This is the point of applyPendingResize: a live drag sends many messages per frame.
     const Rec = struct {
         resizes: usize = 0,
-        fn onFrame(_: Ctx, _: u32, _: u32) void {}
-        fn onPointer(_: Ctx, _: f32, _: f32, _: bool, _: u32) void {}
-        fn onKey(_: Ctx, _: u32, _: bool) bool {
+        fn onFrame(_: *anyopaque, _: u32, _: u32) void {}
+        fn onPointer(_: *anyopaque, _: f32, _: f32, _: bool, _: u32) void {}
+        fn onKey(_: *anyopaque, _: u32, _: bool) bool {
             return false;
         }
-        fn onResize(ptr: Ctx, _: u32, _: u32) void {
-            const s = ptr.get(@This());
+        fn onResize(ptr: *anyopaque, _: u32, _: u32) void {
+            const s: *@This() = @ptrCast(@alignCast(ptr));
             s.resizes += 1;
         }
-        fn onClose(_: Ctx) void {}
-        fn isQuit(_: Ctx) bool {
+        fn onClose(_: *anyopaque) void {}
+        fn isQuit(_: *anyopaque) bool {
             return false;
         }
     };
@@ -269,7 +268,7 @@ test "a WM_SIZE storm coalesces into a single applied size" {
         .min_height = 300,
     });
     st.delegate = .{
-        .ptr = Ctx.from(&rec),
+        .ptr = &rec,
         .on_frame = Rec.onFrame,
         .on_pointer = Rec.onPointer,
         .on_key = Rec.onKey,
@@ -310,17 +309,17 @@ test "noteResize honours the config minimum" {
 test "a pending size equal to the current one is dropped, not applied" {
     const Rec = struct {
         resizes: usize = 0,
-        fn onFrame(_: Ctx, _: u32, _: u32) void {}
-        fn onPointer(_: Ctx, _: f32, _: f32, _: bool, _: u32) void {}
-        fn onKey(_: Ctx, _: u32, _: bool) bool {
+        fn onFrame(_: *anyopaque, _: u32, _: u32) void {}
+        fn onPointer(_: *anyopaque, _: f32, _: f32, _: bool, _: u32) void {}
+        fn onKey(_: *anyopaque, _: u32, _: bool) bool {
             return false;
         }
-        fn onResize(ptr: Ctx, _: u32, _: u32) void {
-            const s = ptr.get(@This());
+        fn onResize(ptr: *anyopaque, _: u32, _: u32) void {
+            const s: *@This() = @ptrCast(@alignCast(ptr));
             s.resizes += 1;
         }
-        fn onClose(_: Ctx) void {}
-        fn isQuit(_: Ctx) bool {
+        fn onClose(_: *anyopaque) void {}
+        fn isQuit(_: *anyopaque) bool {
             return false;
         }
     };
@@ -333,7 +332,7 @@ test "a pending size equal to the current one is dropped, not applied" {
         .min_height = 300,
     });
     st.delegate = .{
-        .ptr = Ctx.from(&rec),
+        .ptr = &rec,
         .on_frame = Rec.onFrame,
         .on_pointer = Rec.onPointer,
         .on_key = Rec.onKey,
@@ -374,14 +373,14 @@ test "resolveQuit reports the backend's own quit flag" {
 test "resolveQuit latches a delegate-driven quit" {
     // Escape goes through `keyToClose` and sets the delegate's quit flag; the window must notice and stop without the close button being used.
     const Quit = struct {
-        fn onFrame(_: Ctx, _: u32, _: u32) void {}
-        fn onPointer(_: Ctx, _: f32, _: f32, _: bool, _: u32) void {}
-        fn onKey(_: Ctx, _: u32, _: bool) bool {
+        fn onFrame(_: *anyopaque, _: u32, _: u32) void {}
+        fn onPointer(_: *anyopaque, _: f32, _: f32, _: bool, _: u32) void {}
+        fn onKey(_: *anyopaque, _: u32, _: bool) bool {
             return false;
         }
-        fn onResize(_: Ctx, _: u32, _: u32) void {}
-        fn onClose(_: Ctx) void {}
-        fn isQuit(_: Ctx) bool {
+        fn onResize(_: *anyopaque, _: u32, _: u32) void {}
+        fn onClose(_: *anyopaque) void {}
+        fn isQuit(_: *anyopaque) bool {
             return true;
         }
     };

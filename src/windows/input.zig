@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const adapter = @import("adapter.zig");
-const Ctx = @import("../core/erased.zig").Ctx;
 
 /// evdev button codes, matching `components.dispatch.BTN_LEFT`.
 pub const BTN_LEFT: u32 = 272;
@@ -194,8 +193,8 @@ const Hit = struct {
 const App = struct {
     hit: Hit = .{},
 
-    fn root(ctx: Ctx, _: u32, _: u32) void {
-        const self = ctx.get(App);
+    fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
+        const self: *App = @ptrCast(@alignCast(ctx.?));
         box_widget.box(.{
             .id = .{ .text = "test-hit-box" },
             .direction = .column,
@@ -209,8 +208,8 @@ const App = struct {
         _ = self;
     }
 
-    fn onClick(ctx: Ctx, _: usize) void {
-        const self = ctx.get(App);
+    fn onClick(ctx: ?*anyopaque, _: usize) void {
+        const self: *App = @ptrCast(@alignCast(ctx.?));
         self.hit.fired += 1;
     }
 };
@@ -221,11 +220,11 @@ test "a Windows click reaches a real laid-out button's handler" {
     var app = App{};
 
     // Clay keeps a process-global context pointer into the init arena, so a test Host must not be deinit'd — the same discipline as the calculator.
-    var host = try host_mod.Host.init(std.heap.page_allocator, Ctx.from(&app), App.root);
+    var host = try host_mod.Host.init(std.heap.page_allocator, &app, App.root);
     host.frame(w, h);
 
     const reg = @import("../core/components/click_registry.zig");
-    reg.registerZCursor(cl.getElementId("test-hit-box"), App.onClick, Ctx.from(&app), 0, 0, .pointer);
+    reg.registerZCursor(cl.getElementId("test-hit-box"), App.onClick, &app, 0, 0, .pointer);
 
     // The button fills the window, so its centre is the window's centre.
     const data = cl.getElementData(cl.getElementId("test-hit-box"));
@@ -261,7 +260,7 @@ test "a click on the TOP of the window hits the TOP of the button" {
     const w: u32 = 200;
     const h: u32 = 200;
     var app = App{};
-    var host = try host_mod.Host.init(std.heap.page_allocator, Ctx.from(&app), App.root);
+    var host = try host_mod.Host.init(std.heap.page_allocator, &app, App.root);
     host.frame(w, h);
     const data = cl.getElementData(cl.getElementId("test-hit-box"));
     try std.testing.expect(data.found);

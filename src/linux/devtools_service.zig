@@ -3,7 +3,6 @@ const std = @import("std");
 const posix = std.posix;
 const linux = std.os.linux;
 const service_mod = @import("../core/devtools/service.zig");
-const Ctx = @import("../core/erased.zig").Ctx;
 
 // The socket lives in the runtime dir when there is one, so it is per-user and the session cleans it up.
 pub fn socketPath(name: []const u8, buf: []u8) ?[]const u8 {
@@ -39,7 +38,7 @@ pub fn open(alloc: std.mem.Allocator, io: std.Io, name: []const u8, service: *se
     server.wake_read = wake[0];
     server.wake_write = wake[1];
     service.wake = onWake;
-    service.wake_ctx = Ctx.from(server);
+    service.wake_ctx = server;
     server.thread = std.Thread.spawn(.{}, Server.run, .{server}) catch return null;
     server.thread.detach();
     return .{ .server = server };
@@ -95,8 +94,8 @@ const Server = struct {
 };
 
 // The wake hook: the socket thread pokes the pipe, and the window's poll sees it.
-fn onWake(ptr: Ctx) void {
-    const self = ptr.get(Server);
+fn onWake(ptr: ?*anyopaque) void {
+    const self: *Server = @ptrCast(@alignCast(ptr.?));
     _ = linux.write(self.wake_write, "x", 1);
 }
 

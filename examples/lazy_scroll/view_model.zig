@@ -3,7 +3,6 @@
 // Every public function here is an INTENT: it never draws, never reads a widget, and never knows a window exists.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
-const Ctx = glinlandui.props.Ctx;
 const scroll_mod = glinlandui.components.scroll;
 const input_mod = glinlandui.components.input;
 const table = glinlandui.table;
@@ -16,9 +15,9 @@ pub const scroll_id = "lazy.scroll";
 
 // What the window can do for an animation: ask for another frame, and stop asking once it is over.
 pub const FramePump = struct {
-    ctx: Ctx,
-    request: *const fn (Ctx) void,
-    idle: *const fn (Ctx) void,
+    ctx: ?*anyopaque,
+    request: *const fn (?*anyopaque) void,
+    idle: *const fn (?*anyopaque) void,
 };
 
 pub const LazyViewModel = struct {
@@ -101,9 +100,9 @@ pub const LazyViewModel = struct {
     }
 
     // `onKey`: evdev codes, so the handler is the same on every host. Every case here is an intent, so nothing is scrolled behind the model's back.
-    pub fn onKey(raw: Ctx, mods: input_mod.Mods, keycode: u32) bool {
+    pub fn onKey(raw: ?*anyopaque, mods: input_mod.Mods, keycode: u32) bool {
         _ = mods;
-        const self = raw.get(LazyViewModel);
+        const self: *LazyViewModel = @ptrCast(@alignCast(raw.?));
         switch (keycode) {
             key_space => {
                 self.toggleAuto();

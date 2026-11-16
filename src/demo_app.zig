@@ -1,7 +1,6 @@
 //! The demo application tree, shared by BOTH entry points.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
-const Ctx = glinlandui.props.Ctx;
 
 const components = glinlandui.components;
 const Color = glinlandui.Color;
@@ -22,8 +21,8 @@ pub const App = struct {
         &.{};
 
     /// The Clay declare callback: everything drawing happens here.
-    pub fn root(ctx: Ctx, _: u32, _: u32) void {
-        const self = ctx.get(App);
+    pub fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
+        const self: *App = @ptrCast(@alignCast(ctx.?));
         self.declare();
     }
 
@@ -55,19 +54,19 @@ pub const App = struct {
             .label = .{ .text = "Click me" },
             .w = .{ .fixed = 180 },
             .h = .{ .fixed = 40 },
-            .on_click = .{ .f = onClick, .ctx = Ctx.from(self) },
+            .on_click = .{ .f = onClick, .ctx = self },
         });
         components.toggle.toggle(.{
             .id = .{ .text = "toggle" },
             .on = self.toggled,
-            .on_click = .{ .f = onToggle, .ctx = Ctx.from(self) },
+            .on_click = .{ .f = onToggle, .ctx = self },
         });
         components.slider.slider(.{
             .id = .{ .text = "slider" },
             .w = props.Size.px(220),
             .h = props.Size.px(24),
             .value = self.slider_frac,
-            .on_change = props.Click.on(self, onSlider),
+            .on_change = .{ .f = onSlider, .ctx = self },
         });
         components.text.label(.{
             .label = .{ .text = self.statusText(), .size = .{ .px = 13 }, .color = Color.rgb(0x7a, 0xb8, 0xff) },
@@ -83,14 +82,14 @@ pub const App = struct {
                 .label = .{ .text = "Open a file..." },
                 .w = .{ .fixed = 220 },
                 .h = .{ .fixed = 40 },
-                .on_click = .{ .f = onOpenFile, .ctx = Ctx.from(self) },
+                .on_click = .{ .f = onOpenFile, .ctx = self },
             });
             components.button.button(.{
                 .id = .{ .text = "open-folder" },
                 .label = .{ .text = "Choose a folder..." },
                 .w = .{ .fixed = 220 },
                 .h = .{ .fixed = 40 },
-                .on_click = props.Click.on(self, onOpenFolder),
+                .on_click = .{ .f = onOpenFolder, .ctx = self },
             });
             components.text.label(.{
                 .label = .{ .text = self.pickText(), .size = .{ .px = 13 }, .color = Color.rgb(0x9a, 0x9a, 0x9a) },
@@ -106,13 +105,13 @@ pub const App = struct {
         }) catch "status";
     }
 
-    fn onClick(ctx: Ctx) void {
-        const self = ctx.get(App);
+    fn onClick(ctx: ?*anyopaque) void {
+        const self: *App = @ptrCast(@alignCast(ctx.?));
         self.clicks += 1;
     }
 
-    fn onToggle(ctx: Ctx) void {
-        const self = ctx.get(App);
+    fn onToggle(ctx: ?*anyopaque) void {
+        const self: *App = @ptrCast(@alignCast(ctx.?));
         self.toggled = !self.toggled;
     }
 
@@ -123,8 +122,8 @@ pub const App = struct {
     }
 
     /// Open a file, and report what came back.
-    fn onOpenFile(ctx: Ctx) void {
-        const self = ctx.get(App);
+    fn onOpenFile(ctx: ?*anyopaque) void {
+        const self: *App = @ptrCast(@alignCast(ctx.?));
         const alloc = glinlandui.platform.allocator;
         const selection = glinlandui.file_dialog.openFile(alloc, .{
             .title = "Open a file",
@@ -139,7 +138,8 @@ pub const App = struct {
         }
     }
 
-    fn onOpenFolder(self: *App) void {
+    fn onOpenFolder(ctx: ?*anyopaque) void {
+        const self: *App = @ptrCast(@alignCast(ctx.?));
         const alloc = glinlandui.platform.allocator;
         const selection = glinlandui.file_dialog.openFolder(alloc, .{
             .title = "Choose a folder",
@@ -174,8 +174,9 @@ pub const App = struct {
     /// One buffer for the formatting above, because the text is copied into `pick_buf` immediately and two dialogs in a row would otherwise each need their.
     var pick_scratch: [192]u8 = undefined;
 
-    fn onSlider(self: *App) void {
+    fn onSlider(ctx: ?*anyopaque) void {
         // The slider stores its fraction; advance it so the fill visibly moves and the status line updates.
+        const self: *App = @ptrCast(@alignCast(ctx.?));
         self.slider_frac = if (self.slider_frac >= 0.95) 0.05 else self.slider_frac + 0.1;
     }
 };

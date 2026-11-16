@@ -1,6 +1,5 @@
 // The View: declaration only — the page, its sections, the rows and the widget demos read the state and raise intents.
 const glinlandui = @import("glinlandui");
-const Ctx = glinlandui.props.Ctx;
 const props = glinlandui.props;
 const components = glinlandui.components;
 const box_mod = components.box;
@@ -237,7 +236,7 @@ fn emphasisButtons(scope: *Scope) void {
         .bg = c.primary,
         .fg = c.on_primary,
         .hover_bg = c.primary_hover,
-        .on_click = props.Click.on(scope.vm, onPrimary),
+        .on_click = .{ .f = onPrimary, .ctx = scope.vm },
     });
     button.button(.{
         .id = .{ .text = "catalog.btn.secondary" },
@@ -246,7 +245,7 @@ fn emphasisButtons(scope: *Scope) void {
         .fg = c.text,
         .hover_bg = c.hover,
         .border = .{ .width = .{ .px = 1 }, .color = c.divider },
-        .on_click = props.Click.on(scope.vm, onSecondary),
+        .on_click = .{ .f = onSecondary, .ctx = scope.vm },
     });
     button.button(.{
         .id = .{ .text = "catalog.btn.quiet" },
@@ -254,7 +253,7 @@ fn emphasisButtons(scope: *Scope) void {
         .bg = c.surface,
         .fg = c.text_dim,
         .hover_bg = c.hover,
-        .on_click = props.Click.on(scope.vm, onQuiet),
+        .on_click = .{ .f = onQuiet, .ctx = scope.vm },
     });
     button.button(.{
         .id = .{ .text = "catalog.btn.danger" },
@@ -263,7 +262,7 @@ fn emphasisButtons(scope: *Scope) void {
         .fg = state_mod.danger,
         .hover_bg = c.hover,
         .border = .{ .width = .{ .px = 1 }, .color = state_mod.danger_edge },
-        .on_click = props.Click.on(scope.vm, onDanger),
+        .on_click = .{ .f = onDanger, .ctx = scope.vm },
     });
     button.button(.{
         .id = .{ .text = "catalog.btn.disabled" },
@@ -286,7 +285,7 @@ fn sizeButtons(scope: *Scope) void {
         .hover_bg = c.primary_hover,
         .h = .{ .fixed = 24 },
         .pad = props.Pad.axes(0, 9),
-        .on_click = props.Click.on(scope.vm, onSmall),
+        .on_click = .{ .f = onSmall, .ctx = scope.vm },
     });
     button.button(.{
         .id = .{ .text = "catalog.btn.md" },
@@ -296,7 +295,7 @@ fn sizeButtons(scope: *Scope) void {
         .hover_bg = c.primary_hover,
         .h = .{ .fixed = 28 },
         .pad = props.Pad.axes(0, 12),
-        .on_click = props.Click.on(scope.vm, onMedium),
+        .on_click = .{ .f = onMedium, .ctx = scope.vm },
     });
     button.button(.{
         .id = .{ .text = "catalog.btn.lg" },
@@ -306,7 +305,7 @@ fn sizeButtons(scope: *Scope) void {
         .hover_bg = c.primary_hover,
         .h = .{ .fixed = 32 },
         .pad = props.Pad.axes(0, 16),
-        .on_click = props.Click.on(scope.vm, onLarge),
+        .on_click = .{ .f = onLarge, .ctx = scope.vm },
     });
 }
 
@@ -367,7 +366,7 @@ fn selectionRow(scope: *Scope) void {
         .check_color = c.on_primary,
         .border_color = c.text_done,
         .hover_bg = c.hover,
-        .on_click = props.Click.on(scope.vm, onCheck),
+        .on_click = .{ .f = onCheck, .ctx = scope.vm },
     });
     text_mod.label(.{ .label = .{ .text = "Include views", .size = t.type_scale.label, .color = c.text } });
 
@@ -381,7 +380,7 @@ fn selectionRow(scope: *Scope) void {
             .selected_border = c.primary,
             .border_color = c.text_done,
             .dot_color = c.primary,
-            .on_click = props.Click.on(&scope.vm.radio_ctxs[i], onRadio),
+            .on_click = .{ .f = onRadio, .ctx = &scope.vm.radio_ctxs[i] },
         });
     }
     text_mod.label(.{ .label = .{ .text = "read only", .size = t.type_scale.label, .color = c.text } });
@@ -392,7 +391,7 @@ fn selectionRow(scope: *Scope) void {
         .on_bg = c.primary,
         .off_bg = c.surface_variant,
         .knob_color = c.on_primary,
-        .on_click = props.Click.on(scope.vm, onToggle),
+        .on_click = .{ .f = onToggle, .ctx = scope.vm },
     });
     text_mod.label(.{ .label = .{ .text = "auto-run", .size = t.type_scale.label, .color = c.text } });
 
@@ -404,7 +403,7 @@ fn selectionRow(scope: *Scope) void {
         .track_bg = c.surface_variant,
         .fill_bg = c.primary,
         .thumb_color = c.primary,
-        .on_change = props.Click.on(scope.vm, onSlider),
+        .on_change = .{ .f = onSlider, .ctx = scope.vm },
     });
 }
 
@@ -500,7 +499,7 @@ fn tabsBody(scope: *Scope) void {
         .fg = c.text_dim,
         .active_fg = c.text,
         .close_fg = c.text_done,
-        .on_select = props.Select.on(scope.vm, onTab),
+        .on_select = .{ .f = onTab, .ctx = scope.vm },
     });
 }
 
@@ -518,7 +517,7 @@ fn listBody(scope: *Scope) void {
         .border_width = .{ .px = 1 },
         .border_color = c.divider,
         .selected = scope.state.row,
-        .on_select = props.Select.on(scope.vm, onRow),
+        .on_select = .{ .f = onRow, .ctx = scope.vm },
     }, state_mod.table_row_slice, scope, listRow);
 }
 
@@ -566,7 +565,7 @@ fn treeBody(scope: *Scope) void {
         .meta_fg = c.text_dim,
         .caret_fg = c.text_done,
         .selected_bar = c.primary,
-        .on_select = props.Select.on(scope.vm, onTree),
+        .on_select = .{ .f = onTree, .ctx = scope.vm },
     });
 }
 
@@ -605,7 +604,7 @@ fn dropdownWrapChildren(scope: *Scope) void {
         .field_bg = c.background,
         .border_width = .{ .px = 1 },
         .border_color = c.divider,
-        .on_select = props.Select.on(scope.vm, onOption),
+        .on_select = .{ .f = onOption, .ctx = scope.vm },
     }, shown[0..n], scope, optionRow);
 }
 
@@ -623,62 +622,77 @@ fn optionRow(scope: *Scope, item: []const u8, index: usize) void {
 // ---- intents -------------------------------------------------------------------------------------------------
 // A click runs after the frame that declared it, so every context here is the ViewModel's, never a frame's value.
 
-fn onPrimary(vm: *CatalogViewModel) void {
+fn onPrimary(raw: ?*anyopaque) void {
+    const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
     vm.pressPrimary();
 }
 
-fn onSecondary(vm: *CatalogViewModel) void {
+fn onSecondary(raw: ?*anyopaque) void {
+    const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
     vm.pressSecondary();
 }
 
-fn onQuiet(vm: *CatalogViewModel) void {
+fn onQuiet(raw: ?*anyopaque) void {
+    const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
     vm.pressQuiet();
 }
 
-fn onDanger(vm: *CatalogViewModel) void {
+fn onDanger(raw: ?*anyopaque) void {
+    const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
     vm.pressDanger();
 }
 
-fn onSmall(vm: *CatalogViewModel) void {
+fn onSmall(raw: ?*anyopaque) void {
+    const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
     vm.pressSmall();
 }
 
-fn onMedium(vm: *CatalogViewModel) void {
+fn onMedium(raw: ?*anyopaque) void {
+    const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
     vm.pressMedium();
 }
 
-fn onLarge(vm: *CatalogViewModel) void {
+fn onLarge(raw: ?*anyopaque) void {
+    const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
     vm.pressLarge();
 }
 
-fn onCheck(vm: *CatalogViewModel) void {
+fn onCheck(raw: ?*anyopaque) void {
+    const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
     vm.toggleChecked();
 }
 
-fn onRadio(radio: *CatalogViewModel.RadioCtx) void {
+fn onRadio(raw: ?*anyopaque) void {
+    const radio: *CatalogViewModel.RadioCtx = @ptrCast(@alignCast(raw.?));
     radio.vm.pickRadio(radio.index);
 }
 
-fn onToggle(vm: *CatalogViewModel) void {
+fn onToggle(raw: ?*anyopaque) void {
+    const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
     vm.toggleSwitch();
 }
 
-fn onSlider(vm: *CatalogViewModel) void {
+fn onSlider(raw: ?*anyopaque) void {
+    const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
     vm.slide();
 }
 
-fn onTab(vm: *CatalogViewModel, index: usize) void {
+fn onTab(raw: ?*anyopaque, index: usize) void {
+    const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
     vm.selectTab(index);
 }
 
-fn onRow(vm: *CatalogViewModel, index: usize) void {
+fn onRow(raw: ?*anyopaque, index: usize) void {
+    const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
     vm.selectListRow(index);
 }
 
-fn onTree(vm: *CatalogViewModel, index: usize) void {
+fn onTree(raw: ?*anyopaque, index: usize) void {
+    const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
     vm.selectTreeRow(index);
 }
 
-fn onOption(vm: *CatalogViewModel, index: usize) void {
+fn onOption(raw: ?*anyopaque, index: usize) void {
+    const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
     vm.selectOption(index);
 }

@@ -2,7 +2,6 @@
 // It owns the ViewModelStore, the theme and the window's frame pump, declares the screen, and lets the window's clock reach the meter.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
-const Ctx = glinlandui.props.Ctx;
 
 const view = @import("view.zig");
 const view_model = @import("view_model.zig");
@@ -30,10 +29,10 @@ pub const App = struct {
     // `setContent { LazyScrollScreen() }`, as the Host's root function.
     // The window repaints after every key and pointer event, so an intent raised by the user is on screen in the next frame; an app that animates
     // itself asks the window for a frame instead, which is what `advance` does.
-    pub fn content(ctx: Ctx, w: u32, h: u32) void {
+    pub fn content(ctx: ?*anyopaque, w: u32, h: u32) void {
         _ = w;
         _ = h;
-        const self = ctx.get(App);
+        const self: *App = @ptrCast(@alignCast(ctx.?));
         const model = self.vm();
 
         const now: i64 = @intCast(std.Io.Clock.awake.now(self.io).nanoseconds);

@@ -2,7 +2,6 @@
 // It creates the App (the Activity), opens the window, and hands the window the screen as its root function.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
-const Ctx = glinlandui.props.Ctx;
 const calculator = @import("calculator");
 
 const App = calculator.app.App;
@@ -30,7 +29,7 @@ pub fn main() !void {
     var app = App{};
     app.start();
 
-    var host = try glinlandui.host.Host.init(alloc, Ctx.from(&app), App.content);
+    var host = try glinlandui.host.Host.init(alloc, &app, App.content);
     defer host.deinit();
     // The devtool: right-click anywhere for this app's component tree. One line, and the app itself is untouched.
     _ = glinlandui.devtools.attach(alloc, &host);
@@ -109,12 +108,12 @@ fn captureCommands(
 ) ![]const glinlandui.RenderCommand {
     const Sink = struct {
         var commands: []const glinlandui.RenderCommand = &.{};
-        fn probe(_: Ctx, cmds: []const glinlandui.RenderCommand, _: u32, _: u32) void {
+        fn probe(_: ?*anyopaque, cmds: []const glinlandui.RenderCommand, _: u32, _: u32) void {
             commands = cmds;
         }
     };
     opt.probe = Sink.probe;
-    opt.probe_user_data = Ctx.none;
+    opt.probe_user_data = null;
     _ = host.frameWithOptions(w, h, opt);
     return Sink.commands;
 }

@@ -1,7 +1,6 @@
 // The Activity: what `MainActivity.onCreate` does in the Compose sample.
 // It owns the ViewModelStore and the theme, declares the screen, and lets the window's events reach the model.
 const glinlandui = @import("glinlandui");
-const Ctx = glinlandui.props.Ctx;
 const frame = glinlandui.frame;
 
 const view = @import("view.zig");
@@ -28,10 +27,10 @@ pub const App = struct {
     // The window repaints after every key and pointer event, and a click is dispatched BEFORE that repaint, so an
     // intent raised by the user is on screen in the next frame. An app that changes state from a timer asks the
     // window for a frame itself.
-    pub fn content(ctx: Ctx, w: u32, h: u32) void {
+    pub fn content(ctx: ?*anyopaque, w: u32, h: u32) void {
         _ = w;
         _ = h;
-        const self = ctx.get(App);
+        const self: *App = @ptrCast(@alignCast(ctx.?));
         const model = self.vm();
         var scope = view.Scope{
             .theme = self.theme,

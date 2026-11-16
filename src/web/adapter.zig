@@ -1,7 +1,6 @@
 //! Browser event adapter: the pure translation layer between DOM event properties and the toolkit's Delegate contract.
 const std = @import("std");
 const contract = @import("../core/window_contract.zig");
-const Ctx = @import("../core/erased.zig").Ctx;
 
 // ============================== coordinates ==============================
 
@@ -228,17 +227,17 @@ test "a resize storm coalesces into a single applied size" {
     // What applyPendingResize is for: a window drag asserts a new element size every frame, and only the LAST one before a draw should be adopted.
     const Rec = struct {
         resizes: usize = 0,
-        fn onFrame(_: Ctx, _: u32, _: u32) void {}
-        fn onPointer(_: Ctx, _: f32, _: f32, _: bool, _: u32) void {}
-        fn onKey(_: Ctx, _: u32, _: bool) bool {
+        fn onFrame(_: *anyopaque, _: u32, _: u32) void {}
+        fn onPointer(_: *anyopaque, _: f32, _: f32, _: bool, _: u32) void {}
+        fn onKey(_: *anyopaque, _: u32, _: bool) bool {
             return false;
         }
-        fn onResize(ptr: Ctx, _: u32, _: u32) void {
-            const s = ptr.get(@This());
+        fn onResize(ptr: *anyopaque, _: u32, _: u32) void {
+            const s: *@This() = @ptrCast(@alignCast(ptr));
             s.resizes += 1;
         }
-        fn onClose(_: Ctx) void {}
-        fn isQuit(_: Ctx) bool {
+        fn onClose(_: *anyopaque) void {}
+        fn isQuit(_: *anyopaque) bool {
             return false;
         }
     };
@@ -251,7 +250,7 @@ test "a resize storm coalesces into a single applied size" {
         .min_height = 300,
     });
     st.delegate = .{
-        .ptr = Ctx.from(&rec),
+        .ptr = &rec,
         .on_frame = Rec.onFrame,
         .on_pointer = Rec.onPointer,
         .on_key = Rec.onKey,
@@ -323,14 +322,14 @@ test "resolveQuit reports a backend-set flag and latches a delegate one" {
     try std.testing.expect(resolveQuit(&st));
 
     const Quit = struct {
-        fn onFrame(_: Ctx, _: u32, _: u32) void {}
-        fn onPointer(_: Ctx, _: f32, _: f32, _: bool, _: u32) void {}
-        fn onKey(_: Ctx, _: u32, _: bool) bool {
+        fn onFrame(_: *anyopaque, _: u32, _: u32) void {}
+        fn onPointer(_: *anyopaque, _: f32, _: f32, _: bool, _: u32) void {}
+        fn onKey(_: *anyopaque, _: u32, _: bool) bool {
             return false;
         }
-        fn onResize(_: Ctx, _: u32, _: u32) void {}
-        fn onClose(_: Ctx) void {}
-        fn isQuit(_: Ctx) bool {
+        fn onResize(_: *anyopaque, _: u32, _: u32) void {}
+        fn onClose(_: *anyopaque) void {}
+        fn isQuit(_: *anyopaque) bool {
             return true;
         }
     };

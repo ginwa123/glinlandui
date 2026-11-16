@@ -4,8 +4,6 @@ const cl = @import("zclay");
 const host_mod = @import("../host.zig");
 const snapshot_mod = @import("snapshot.zig");
 const cli = @import("cli.zig");
-const erased = @import("../erased.zig");
-const Ctx = erased.Ctx;
 
 // The longest request line a client may send, and the largest reply one request can produce.
 pub const request_cap = 512;
@@ -40,21 +38,21 @@ pub const Service = struct {
     // A long press releases this many frames from now.
     release_in: u8 = 0,
     // How a transport wakes an idle app: a pipe write, a posted event, whatever that host needs.
-    wake: ?*const fn (Ctx) void = null,
-    wake_ctx: Ctx = Ctx.none,
+    wake: ?*const fn (?*anyopaque) void = null,
+    wake_ctx: ?*anyopaque = null,
 
     // The hooks the Host calls each frame.
     pub fn hooks(self: *Service) host_mod.ServiceHooks {
-        return .{ .ptr = Ctx.from(self), .begin = onBegin, .end = onEnd };
+        return .{ .ptr = self, .begin = onBegin, .end = onEnd };
     }
 
-    fn onBegin(ptr: Ctx, host: *host_mod.Host) void {
-        const self = ptr.get(Service);
+    fn onBegin(ptr: *anyopaque, host: *host_mod.Host) void {
+        const self: *Service = @ptrCast(@alignCast(ptr));
         self.beginFrame(host);
     }
 
-    fn onEnd(ptr: Ctx, host: *host_mod.Host, w: u32, h: u32) void {
-        const self = ptr.get(Service);
+    fn onEnd(ptr: *anyopaque, host: *host_mod.Host, w: u32, h: u32) void {
+        const self: *Service = @ptrCast(@alignCast(ptr));
         self.endFrame(host, w, h);
     }
 
@@ -294,7 +292,7 @@ const App = struct {
     on: bool = false,
     clicks: u32 = 0,
 
-    fn root(ctx: Ctx, _: u32, _: u32) void {
+    fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
         box_mod.box(.{
             .id = .{ .text = "svc.root" },
             .direction = .column,
@@ -303,29 +301,29 @@ const App = struct {
         }, ctx, children);
     }
 
-    fn children(ctx: Ctx) void {
-        const self = ctx.get(App);
+    fn children(ctx: ?*anyopaque) void {
+        const self: *App = @ptrCast(@alignCast(ctx.?));
         toggle_mod.toggle(.{
             .id = .{ .text = "svc.toggle" },
             .on = self.on,
-            .on_click = .{ .f = onToggle, .ctx = Ctx.from(self) },
+            .on_click = .{ .f = onToggle, .ctx = self },
         });
         button_mod.button(.{
             .id = .{ .text = "svc.button" },
             .label = .{ .text = "Go" },
             .w = .{ .fixed = 80 },
             .h = .{ .fixed = 30 },
-            .on_click = .{ .f = onButton, .ctx = Ctx.from(self) },
+            .on_click = .{ .f = onButton, .ctx = self },
         });
     }
 
-    fn onToggle(ctx: Ctx) void {
-        const self = ctx.get(App);
+    fn onToggle(ctx: ?*anyopaque) void {
+        const self: *App = @ptrCast(@alignCast(ctx.?));
         self.on = !self.on;
     }
 
-    fn onButton(ctx: Ctx) void {
-        const self = ctx.get(App);
+    fn onButton(ctx: ?*anyopaque) void {
+        const self: *App = @ptrCast(@alignCast(ctx.?));
         self.clicks += 1;
     }
 };
@@ -336,7 +334,7 @@ const Rig = struct {
 
     fn init(self: *Rig, service: *Service) !void {
         // page_allocator, matching every other Host test: the Clay arena is process-lifetime by design.
-        self.host = try host_mod.Host.init(std.heap.page_allocator, Ctx.from(&self.app), App.root);
+        self.host = try host_mod.Host.init(std.heap.page_allocator, &self.app, App.root);
         self.host.service = service.hooks();
         // Warm up with the service already hooked: a click lands in the last frame's registry, and the tree must be resolved for a tag to have a centre.
         self.frame();

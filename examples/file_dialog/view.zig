@@ -1,6 +1,5 @@
 // The View: pure declaration from the state. Nothing here writes the model — a button raises an intent and the next frame draws what it says.
 const glinlandui = @import("glinlandui");
-const Ctx = glinlandui.props.Ctx;
 const box_mod = glinlandui.components.box;
 const button = glinlandui.components.button;
 const text_mod = glinlandui.components.text;
@@ -97,12 +96,13 @@ fn actionRow(scope: *Scope) void {
             .h = .{ .fixed = 40 },
             .bg = t.colors.primary,
             .hover_bg = t.colors.primary_hover,
-            .on_click = props.Click.on(&ctxs[i], onAction),
+            .on_click = .{ .f = onAction, .ctx = &ctxs[i] },
         });
     }
 }
 
-fn onAction(ctx: *DialogViewModel.ActionCtx) void {
+fn onAction(raw: ?*anyopaque) void {
+    const ctx: *DialogViewModel.ActionCtx = @ptrCast(@alignCast(raw.?));
     ctx.vm.open(state_mod.ACTIONS[ctx.index].kind);
 }
 

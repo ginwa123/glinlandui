@@ -7,8 +7,6 @@ const prop = @import("../props.zig");
 const registry = @import("click_registry.zig");
 const context_menu = @import("context_menu.zig");
 const semantics = @import("../semantics.zig");
-const erased = @import("../erased.zig");
-const Ctx = erased.Ctx;
 
 /// The sizing type a container props uses. One definition, named where a box needs it.
 pub const Size = prop.Size;
@@ -280,11 +278,11 @@ const BoxClickRec = struct {
 
 var box_click: BoxClickRec = .{};
 
-fn onOuterBox(_: Ctx) void {
+fn onOuterBox(_: ?*anyopaque) void {
     box_click.outer += 1;
 }
 
-fn onInnerBox(_: Ctx) void {
+fn onInnerBox(_: ?*anyopaque) void {
     box_click.inner += 1;
 }
 
@@ -293,7 +291,7 @@ fn declareClickableBox() void {
         .id = .{ .text = "test-click-box" },
         .w = .{ .fixed = 80 },
         .h = .{ .fixed = 40 },
-        .on_click = .{ .f = onOuterBox, .ctx = Ctx.from(&box_click) },
+        .on_click = .{ .f = onOuterBox, .ctx = &box_click },
     }, {}, emptyChildren);
 }
 
@@ -316,7 +314,7 @@ fn innerClickable(_: void) void {
         .id = .{ .text = "test-inner-click" },
         .w = .{ .fixed = 40 },
         .h = .{ .fixed = 20 },
-        .on_click = .{ .f = onInnerBox, .ctx = Ctx.from(&box_click) },
+        .on_click = .{ .f = onInnerBox, .ctx = &box_click },
     }, {}, emptyChildren);
 }
 
@@ -325,7 +323,7 @@ fn declareNestedClickable() void {
         .id = .{ .text = "test-outer-click" },
         .w = .{ .fixed = 120 },
         .h = .{ .fixed = 60 },
-        .on_click = .{ .f = onOuterBox, .ctx = Ctx.from(&box_click) },
+        .on_click = .{ .f = onOuterBox, .ctx = &box_click },
     }, {}, innerClickable);
 }
 

@@ -1,7 +1,6 @@
 //! glinlandui demo application — ONE source file, every platform.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
-const Ctx = glinlandui.props.Ctx;
 
 /// The demo tree lives in `src/demo_app.zig` so the browser build and the native build prove the SAME frame rather than two copies that can drift apart.
 const demo_app = @import("demo_app.zig");
@@ -43,7 +42,7 @@ pub fn main() !void {
     _ = glinlandui.text;
 
     var app = App{};
-    var host = try glinlandui.host.Host.init(alloc, Ctx.from(&app), App.root);
+    var host = try glinlandui.host.Host.init(alloc, &app, App.root);
     defer host.deinit();
     // The devtool: right-click anywhere for this app's component tree. One line, and the app itself is untouched.
     _ = glinlandui.devtools.attach(alloc, &host);
@@ -103,12 +102,12 @@ fn captureCommands(
 ) ![]const glinlandui.RenderCommand {
     const Sink = struct {
         var commands: []const glinlandui.RenderCommand = &.{};
-        fn probe(_: Ctx, cmds: []const glinlandui.RenderCommand, _: u32, _: u32) void {
+        fn probe(_: ?*anyopaque, cmds: []const glinlandui.RenderCommand, _: u32, _: u32) void {
             commands = cmds;
         }
     };
     opt.probe = Sink.probe;
-    opt.probe_user_data = Ctx.none;
+    opt.probe_user_data = null;
     _ = host.frameWithOptions(w, h, opt);
     return Sink.commands;
 }

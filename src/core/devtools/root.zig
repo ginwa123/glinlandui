@@ -9,8 +9,6 @@ const inspector_mod = @import("inspector.zig");
 const snapshot_mod = @import("snapshot.zig");
 const cli_mod = @import("cli.zig");
 const service_mod = @import("service.zig");
-const erased = @import("../erased.zig");
-const Ctx = erased.Ctx;
 
 pub const Inspector = inspector_mod.Inspector;
 pub const snapshot = snapshot_mod;
@@ -68,7 +66,7 @@ pub fn attach(alloc: std.mem.Allocator, host: *host_mod.Host) ?*Inspector {
 pub fn shoot(
     alloc: std.mem.Allocator,
     opts: cli_mod.Options,
-    ctx: Ctx,
+    ctx: ?*anyopaque,
     root_fn: host_mod.RootFn,
     out: *std.Io.Writer,
 ) !void {
@@ -123,7 +121,7 @@ fn writeTga(out: *std.Io.Writer, w: u32, h: u32, rgba: []const u8) !void {
 }
 
 test "attach hands the host a live inspector, and a second call replaces it" {
-    var host = try host_mod.Host.init(std.heap.page_allocator, Ctx.none, noopRoot);
+    var host = try host_mod.Host.init(std.heap.page_allocator, null, noopRoot);
     // No deinit: Clay keeps a global pointer into the arena it was initialised with, and freeing it would crash every later test.
     try std.testing.expect(host.inspect == null);
     const first = attach(std.heap.page_allocator, &host).?;
@@ -155,4 +153,4 @@ test "the TGA carries a matching header and one BGRA pixel per RGBA pixel" {
     try std.testing.expectEqualSlices(u8, &.{ 0, 255, 0, 255 }, out[30..34]);
 }
 
-fn noopRoot(_: Ctx, _: u32, _: u32) void {}
+fn noopRoot(_: ?*anyopaque, _: u32, _: u32) void {}

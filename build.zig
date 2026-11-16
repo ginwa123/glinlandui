@@ -604,17 +604,11 @@ pub fn build(b: *std.Build) void {
     b.step("zginlint", "Build the zginlint CLI into zig-out/bin/zginlint")
         .dependOn(&b.addInstallArtifact(zginlint_exe, .{}).step);
 
-    // ONE line per block (default 3), `has_side_effects` keeps a rerun from being skipped, and the erasure file is the ONLY anyopaque site core allows.
+    // ONE line per comment block (the tool's default is 3), and `has_side_effects` keeps a rerun from being skipped.
     const zginlint_check = b.step("zginlint:check", "Enforce the zginlint rules on the tree (zero findings)");
     const run_zginlint_check = b.addRunArtifact(zginlint_exe);
     run_zginlint_check.setCwd(b.path("."));
-    run_zginlint_check.addArgs(&.{
-        "--max-comment-lines",  "1",
-        "--no-anyopaque-paths", "src/core",
-        "--no-anyopaque-allow", "src/core/erased.zig",
-        "src",                  "tools",
-        "build.zig",
-    });
+    run_zginlint_check.addArgs(&.{ "--max-comment-lines", "1", "src", "tools", "build.zig" });
     run_zginlint_check.has_side_effects = true;
     zginlint_check.dependOn(&run_zginlint_check.step);
 

@@ -1,7 +1,6 @@
 //! The monotonic millisecond clock: what tells two clicks apart, and how long a caret has been still.
 const std = @import("std");
 const select = @import("select.zig");
-const Ctx = @import("erased.zig").Ctx;
 
 /// Milliseconds from a monotonic source, or 0 when the host has none: a double click is then never guessed at and a frame keeps its fixed delta.
 pub const monoMs = select.Clock.monoMs;
@@ -28,5 +27,5 @@ test "a reading from the epoch is not usable as a clock" {
 }
 
 test "a host with no clock reports 0 rather than a guessed time" {
-    try std.testing.expectEqual(@as(i64, 0), monoMs(Ctx.none));
+    try std.testing.expectEqual(@as(i64, 0), monoMs(null));
 }

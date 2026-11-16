@@ -1,8 +1,6 @@
 // Shared, platform-neutral window contract + tests.
 const std = @import("std");
 const consts = @import("protocol_consts.zig");
-const erased = @import("erased.zig");
-const Ctx = erased.Ctx;
 
 // Centered top-left corner of the default 720x480 window.
 pub const Placement = struct {
@@ -125,16 +123,16 @@ pub const WindowConfig = struct {
 
 // UI delegate: the backend owns the window/present; the delegate draws in on_frame and receives input/lifecycle callbacks.
 pub const Delegate = struct {
-    ptr: Ctx,
-    on_frame: *const fn (Ctx, w: u32, h: u32) void,
-    on_pointer: *const fn (Ctx, x: f32, y: f32, pressed: bool, button: u32) void,
-    on_scroll: ?*const fn (Ctx, dx: f32, dy: f32) void = null,
-    on_key: *const fn (Ctx, keycode: u32, pressed: bool) bool,
+    ptr: *anyopaque,
+    on_frame: *const fn (*anyopaque, w: u32, h: u32) void,
+    on_pointer: *const fn (*anyopaque, x: f32, y: f32, pressed: bool, button: u32) void,
+    on_scroll: ?*const fn (*anyopaque, dx: f32, dy: f32) void = null,
+    on_key: *const fn (*anyopaque, keycode: u32, pressed: bool) bool,
     // Text a printable key produced, already composed by the platform (Caps Lock, Shift, layout).
-    on_text: ?*const fn (Ctx, text: []const u8) void = null,
-    on_resize: *const fn (Ctx, w: u32, h: u32) void,
-    on_close: *const fn (Ctx) void,
-    is_quit: *const fn (Ctx) bool,
+    on_text: ?*const fn (*anyopaque, text: []const u8) void = null,
+    on_resize: *const fn (*anyopaque, w: u32, h: u32) void,
+    on_close: *const fn (*anyopaque) void,
+    is_quit: *const fn (*anyopaque) bool,
 };
 
 // A backend-neutral window: the state every backend shares.
@@ -242,35 +240,35 @@ test "attached delegate round-trips on_key/on_close/is_quit" {
         last_h: u32 = 0,
     };
     const fns = struct {
-        fn onFrame(ptr: Ctx, w: u32, h: u32) void {
-            const s = ptr.get(State);
+        fn onFrame(ptr: *anyopaque, w: u32, h: u32) void {
+            const s: *State = @ptrCast(@alignCast(ptr));
             s.frames += 1;
             s.last_w = w;
             s.last_h = h;
         }
-        fn onPointer(_: Ctx, _: f32, _: f32, _: bool, _: u32) void {}
-        fn onKey(ptr: Ctx, keycode: u32, pressed: bool) bool {
-            const s = ptr.get(State);
+        fn onPointer(_: *anyopaque, _: f32, _: f32, _: bool, _: u32) void {}
+        fn onKey(ptr: *anyopaque, keycode: u32, pressed: bool) bool {
+            const s: *State = @ptrCast(@alignCast(ptr));
             if (pressed and keyToClose(keycode)) {
                 s.quit = true;
                 return true;
             }
             return false;
         }
-        fn onResize(_: Ctx, _: u32, _: u32) void {}
-        fn onClose(ptr: Ctx) void {
-            const s = ptr.get(State);
+        fn onResize(_: *anyopaque, _: u32, _: u32) void {}
+        fn onClose(ptr: *anyopaque) void {
+            const s: *State = @ptrCast(@alignCast(ptr));
             s.quit = true;
         }
-        fn isQuit(ptr: Ctx) bool {
-            const s = ptr.get(State);
+        fn isQuit(ptr: *anyopaque) bool {
+            const s: *State = @ptrCast(@alignCast(ptr));
             return s.quit;
         }
     };
     var state = State{};
     var win = WindowState.init(.{});
     win.delegate = .{
-        .ptr = Ctx.from(&state),
+        .ptr = &state,
         .on_frame = fns.onFrame,
         .on_pointer = fns.onPointer,
         .on_key = fns.onKey,

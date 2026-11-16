@@ -2,7 +2,6 @@
 // Asserting only on `vm.uiState()` would pass with a blank window, so every test also checks the frame.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
-const Ctx = glinlandui.props.Ctx;
 const todo = @import("todo");
 
 const App = todo.app.App;
@@ -15,7 +14,7 @@ const key_enter: u32 = 28;
 // page_allocator, not testing.allocator: the Clay arena is intentionally leaked for the process's life.
 fn boot(app: *App) !Driver {
     app.start();
-    var driver = try Driver.initOwned(std.heap.page_allocator, Ctx.from(app), App.content);
+    var driver = try Driver.initOwned(std.heap.page_allocator, app, App.content);
     errdefer driver.deinit();
     // No key or text handler is registered: the engine types into the focused field on its own.
     try driver.start(.{ .width = 720, .height = 640 });

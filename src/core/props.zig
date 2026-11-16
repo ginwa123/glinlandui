@@ -11,7 +11,6 @@ const std = @import("std");
 const cl = @import("zclay");
 const Color = @import("color.zig").Color;
 const frame = @import("frame.zig");
-const erased = @import("erased.zig");
 
 // How a widget is named. Clay takes either a string or a (prefix, index) pair.
 
@@ -95,21 +94,11 @@ pub const Len = struct {
     }
 };
 
-// A callback's target, erased to one word; components spell the type `Ctx` and the erasure itself lives in `erased.zig`.
-
-pub const Ctx = erased.Ctx;
-
-// A click handler and its model: Zig has no closures, so the pair travels as one field and `.on` is the typed door.
+// A click handler and the model it belongs to: Zig has no closures, so the pair travels as one field.
 
 pub const Click = struct {
-    f: ?*const fn (Ctx) void = null,
-    ctx: Ctx = .{},
-
-    // The typed door: the target and the handler that reads it, paired so the handler names its own type.
-    pub fn on(target: anytype, comptime handler: anytype) Click {
-        const T = erased.pointeeOf(@TypeOf(target));
-        return .{ .f = erased.call0(T, handler), .ctx = Ctx.from(target) };
-    }
+    f: ?*const fn (?*anyopaque) void = null,
+    ctx: ?*anyopaque = null,
 };
 
 // The pointer shape a click target asks for: the registry and a widget's props share this one definition.
@@ -118,40 +107,22 @@ pub const Cursor = enum { default, pointer, text, ew_resize, ns_resize };
 // A text handler and its model: the new text is handed back, so the model can hold the draft.
 
 pub const Change = struct {
-    f: ?*const fn (Ctx, []const u8) void = null,
-    ctx: Ctx = .{},
-
-    // The typed door: the model and the handler that stores the draft, paired here and never cast by the app.
-    pub fn on(target: anytype, comptime handler: anytype) Change {
-        const T = erased.pointeeOf(@TypeOf(target));
-        return .{ .f = erased.call1(T, []const u8, handler), .ctx = Ctx.from(target) };
-    }
+    f: ?*const fn (?*anyopaque, []const u8) void = null,
+    ctx: ?*anyopaque = null,
 };
 
 // The same, for a handler that answers whether it took the text (a field clears itself when it did).
 
 pub const Submit = struct {
-    f: ?*const fn (Ctx, []const u8) bool = null,
-    ctx: Ctx = .{},
-
-    // The typed door, for a submit that answers: true means the text was consumed and the field clears itself.
-    pub fn on(target: anytype, comptime handler: anytype) Submit {
-        const T = erased.pointeeOf(@TypeOf(target));
-        return .{ .f = erased.call1Ret(T, []const u8, bool, handler), .ctx = Ctx.from(target) };
-    }
+    f: ?*const fn (?*anyopaque, []const u8) bool = null,
+    ctx: ?*anyopaque = null,
 };
 
 // An app's own content inside a component's row: told which row, it declares what it likes.
 
 pub const RowExtra = struct {
-    f: ?*const fn (Ctx, usize) void = null,
-    ctx: Ctx = .{},
-
-    // The typed door: the handler is told the row's index and reads its own model from the target it named here.
-    pub fn on(target: anytype, comptime handler: anytype) RowExtra {
-        const T = erased.pointeeOf(@TypeOf(target));
-        return .{ .f = erased.call1(T, usize, handler), .ctx = Ctx.from(target) };
-    }
+    f: ?*const fn (?*anyopaque, usize) void = null,
+    ctx: ?*anyopaque = null,
 };
 
 // A right-click menu a component offers: the rows, in order, and who to tell which one was picked.
@@ -189,14 +160,8 @@ pub const ContextMenu = struct {
 // The same, for a handler that is told WHICH row, tab or option was hit.
 
 pub const Select = struct {
-    f: ?*const fn (Ctx, usize) void = null,
-    ctx: Ctx = .{},
-
-    // The typed door: the picked index travels with the model the handler names, and no side spells a cast.
-    pub fn on(target: anytype, comptime handler: anytype) Select {
-        const T = erased.pointeeOf(@TypeOf(target));
-        return .{ .f = erased.call1(T, usize, handler), .ctx = Ctx.from(target) };
-    }
+    f: ?*const fn (?*anyopaque, usize) void = null,
+    ctx: ?*anyopaque = null,
 };
 
 // A run of text: what it says, how big it is, and what colour it is drawn in.

@@ -5,12 +5,11 @@ const window_mod = @import("window.zig");
 const input_mod = @import("input.zig");
 const adapter = @import("adapter.zig");
 const glyphs = @import("../core/glyphs.zig");
-const Ctx = @import("../core/erased.zig").Ctx;
 
 /// The application this module serves, as a comptime parameter.
 pub fn Exports(
     comptime App: type,
-    comptime root_fn: *const fn (Ctx, u32, u32) void,
+    comptime root_fn: *const fn (?*anyopaque, u32, u32) void,
 ) type {
     return struct {
         /// The longest `KeyboardEvent.code` is well under this ("NumpadSubtract" is 14, "LaunchApplication2" is 17); 32 is slack, and the page writes event.
@@ -61,7 +60,7 @@ pub fn Exports(
             const app_ptr = alloc.create(App) catch return 0;
             app_ptr.* = .{};
 
-            g_host = @import("../core/host.zig").Host.init(alloc, Ctx.from(app_ptr), root_fn) catch return 0;
+            g_host = @import("../core/host.zig").Host.init(alloc, app_ptr, root_fn) catch return 0;
             const host = if (g_host) |*h| h else return 0;
             g_app = app_ptr;
 

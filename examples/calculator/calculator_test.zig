@@ -2,7 +2,6 @@
 // `performClick` injects a real pointer press+release through `Host.onPointerEvent`, so a click travels the production path (drag threshold, release-at-press-origin, `click_registry` z-order, hit test). There is deliberately no `window.run()` below: every test here is headless.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
-const Ctx = glinlandui.props.Ctx;
 // A MODULE import, not a relative file import: a path import would pull the module's own tests into THIS binary as well as their own, and a module boundary is what Zig's test collector does not cross.
 const calculator = @import("calculator");
 
@@ -18,9 +17,9 @@ const viewport = Driver.Viewport{ .width = 360, .height = 440 };
 fn calcDriver(app: *App) !Driver {
     app.start();
     // page_allocator, not testing.allocator: the Clay arena is intentionally left alive for the process (Clay keeps a global pointer into it), so a leak-checking allocator would flag it. Same convention as the toolkit's own testing module.
-    var driver = try Driver.initOwned(std.heap.page_allocator, Ctx.from(app), App.content);
+    var driver = try Driver.initOwned(std.heap.page_allocator, app, App.content);
     try driver.start(viewport);
-    driver.host.keys.register(App.onKey, Ctx.from(app));
+    driver.host.keys.register(App.onKey, app);
     try driver.waitForIdle();
     return driver;
 }

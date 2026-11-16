@@ -39,8 +39,8 @@
         // `zig build zginlint:check` is the gate; the tool is std-only.
         // Move the pin: `zig fetch "git+https://github.com/ginwa123/zglint.git#<sha>"`.
         .zginlint = .{
-            .url = "git+https://github.com/ginwa123/zglint.git#d25af4bfd49ec371cca029ffa8484778751f1f55",
-            .hash = "zginlint-0.0.0-0kYHpmJ2AQDGniUShnLb-t7DaetEklCbpu2AXOXgpARe",
+            .url = "git+https://github.com/ginwa123/zglint.git#7e1faeba4d75640c7ae37efe2987f6be85fa2a89",
+            .hash = "zginlint-0.0.0-0kYHpg4dAQARigMlrQ54kyJUpbIlGU0fYVNhFMDuUvah",
         },
     },
     // Specifies the set of files and directories that are included in this package.

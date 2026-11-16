@@ -1,7 +1,6 @@
 // The entry point: the App, the window, and the Host that renders the app's content function.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
-const Ctx = glinlandui.props.Ctx;
 const catalog = @import("catalog");
 
 // The command line. `--bench` measures headless; without it the window opens.
@@ -58,7 +57,7 @@ pub fn main(init: std.process.Init) !void {
     });
 
     // `setContent { ... }`: the Host hands the composable the ctx it was built with.
-    var host = try glinlandui.host.Host.init(gpa, Ctx.from(&app), catalog.app.App.content);
+    var host = try glinlandui.host.Host.init(gpa, &app, catalog.app.App.content);
     defer host.deinit();
     // The devtool: right-click anywhere for this app's component tree. One line, and the app itself is untouched.
     _ = glinlandui.devtools.attach(gpa, &host);
@@ -76,7 +75,7 @@ fn bench(gpa: std.mem.Allocator, io: std.Io, opts: Opts) !void {
     const Driver = glinlandui.testing.Driver;
     var app = catalog.app.App{};
     app.start();
-    var driver = try Driver.initOwned(gpa, Ctx.from(&app), catalog.app.App.content);
+    var driver = try Driver.initOwned(gpa, &app, catalog.app.App.content);
     defer driver.deinit();
     try driver.start(.{ .width = opts.width, .height = opts.height });
     // A real window renders at the display's backing scale; 1x hides half the work the screen actually does.
