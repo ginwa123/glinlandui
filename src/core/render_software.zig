@@ -724,6 +724,15 @@ pub const Renderer = struct {
         self.surface.clear();
         self.surface.renderCommands(commands);
     }
+
+    /// Return a decoded image for a GPU backend that uploads it instead of blitting it, through the same cache the CPU path draws from.
+    pub fn imageFor(self: *Renderer, path: []const u8, max_dim: u16) ?Image {
+        const key = hashImageKey(path, max_dim);
+        if (self.surface.images.get(key)) |img| return img;
+        const decoded = self.surface.decodeImage(path, max_dim) orelse return null;
+        self.surface.images.put(self.surface.alloc, key, decoded) catch return null;
+        return decoded;
+    }
 };
 
 // True once a glyph-bearing font is available, so the fallback can be skipped. The face comes from `text_face`, which is the SAME face the layout
