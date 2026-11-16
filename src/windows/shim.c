@@ -641,12 +641,18 @@ static void degradeToGdi(GlinWinWindow *w, const char *why) {
 // Win32 plumbing
 // ---------------------------------------------------------------------------
 
+// Declared here because a pointer event and WM_SIZE both report DEVICE pixels, and the definitions live with the DPI code.
+static int glin_win_logical(GlinWinWindow *win, int device_pixels);
+static double glin_win_logical_f(GlinWinWindow *win, double device_pixels);
+
+// lParam carries DEVICE pixels while the toolkit lays out in LOGICAL units (see glin_win_content_size), so a pointer must cross the same divider or every hit test sits a scale factor away from the widget under the cursor.
 static void emitPointer(GlinWinWindow *w, int kind, int button, int x, int y,
                         int pressed) {
     if (w->on_pointer == NULL) {
         return;
     }
-    w->on_pointer(w->user, kind, button, (double)x, (double)y, pressed);
+    w->on_pointer(w->user, kind, button, glin_win_logical_f(w, (double)x),
+                  glin_win_logical_f(w, (double)y), pressed);
 }
 
 /// Map one of the four Win32 button messages to the shim's button numbering.
@@ -667,9 +673,6 @@ static int buttonFor(UINT msg, WPARAM wp) {
     }
     return GLIN_BTN_LEFT;
 }
-
-// Declared here because WM_SIZE (below) reports logical units and the definition lives with the DPI code.
-static int glin_win_logical(GlinWinWindow *win, int device_pixels);
 
 static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     GlinWinWindow *w = (GlinWinWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
@@ -1242,6 +1245,15 @@ static int glin_win_logical(GlinWinWindow *win, int device_pixels) {
         return device_pixels;
     }
     return (int)((double)device_pixels / s + 0.5);
+}
+
+// The same divider with no rounding, for a coordinate rather than a size: a pointer exactly on a widget's edge must stay inside it.
+static double glin_win_logical_f(GlinWinWindow *win, double device_pixels) {
+    double s = glin_win_scale(win);
+    if (s <= 0.0) {
+        return device_pixels;
+    }
+    return device_pixels / s;
 }
 
 int glin_win_d3d11_active(GlinWinWindow *win) {
