@@ -20,6 +20,8 @@ pub const frame = @import("core/frame.zig");
 pub const host = @import("core/host.zig");
 // The library's color type.
 pub const Color = @import("core/color.zig").Color;
+// A callback's target, erased to one word: `Ctx.from(&model)` writes it and `.get(T)` reads it back typed.
+pub const Ctx = @import("core/erased.zig").Ctx;
 // The vocabulary a widget's props are written in: Id, Label, Pad, Border, Radius, Size.
 pub const props = @import("core/props.zig");
 // Portable software rasterizer surface.
