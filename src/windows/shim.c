@@ -1727,3 +1727,641 @@ void glin_win_clipboard_write(const char *text_utf8, int len) {
     CloseClipboard();
 }
 
+// ---------------------------------------------------------------------------
+// The GPU renderer. This is the Windows counterpart of mac/metal.m: vertices
+// in (already in DEVICE pixels), one Draw per segment, and the same coverage
+// maths core/render_software.zig uses so the two agree pixel for pixel.
+//
+// Everything a frame needs is created once, here, and reused: the pipeline,
+// the states, the two samplers, one growable vertex buffer, the glyph atlas
+// and the image slots. The frame path only maps the vertex buffer, sets the
+// constant buffer and issues the draws — no COM object is created while
+// drawing, which is what keeps a D3D11 frame close to the cost of the draws
+// themselves.
+// ---------------------------------------------------------------------------
+
+// One vertex. MUST stay byte-for-byte in step with `GlinVertex` in shim.h and
+// with `Vertex` in src/windows/renderer.zig: 17 floats, 68 bytes, no padding.
+// The fields are plain floats and the input layout below spells every offset
+// out, so a compiler is never asked to agree about packing.
+static const char *const kGpuVS =
+    "cbuffer Frame : register(b0) { float2 res; float2 pad; };\n"
+    "struct VIn {\n"
+    "  float2 pos : POSITION;\n"
+    "  float2 uv : TEXCOORD0;\n"
+    "  float2 size : TEXCOORD1;\n"
+    "  float4 radius : TEXCOORD2;\n"
+    "  float4 color : TEXCOORD3;\n"
+    "  float mode : TEXCOORD4;\n"
+    "  float border : TEXCOORD5;\n"
+    "  float kind : TEXCOORD6;\n"
+    "};\n"
+    "struct VOut {\n"
+    "  float4 pos : SV_POSITION;\n"
+    "  float2 uv : TEXCOORD0;\n"
+    "  float2 size : TEXCOORD1;\n"
+    "  float4 radius : TEXCOORD2;\n"
+    "  float4 color : TEXCOORD3;\n"
+    "  float mode : TEXCOORD4;\n"
+    "  float border : TEXCOORD5;\n"
+    "  float kind : TEXCOORD6;\n"
+    "};\n"
+    "VOut VSMain(VIn v) {\n"
+    "  VOut o;\n"
+    // y is flipped HERE, like Metal: D3D11's NDC is y-up and the viewport's top row is +1, so a
+    // top-left device position needs 1 - 2*y/h. GL negates instead; copying that inverts the UI.
+    "  float2 clip = float2(v.pos.x / res.x * 2.0 - 1.0, 1.0 - v.pos.y / res.y * 2.0);\n"
+    "  o.pos = float4(clip, 0.0, 1.0);\n"
+    "  o.uv = v.uv; o.size = v.size; o.radius = v.radius; o.color = v.color;\n"
+    "  o.mode = v.mode; o.border = v.border; o.kind = v.kind;\n"
+    "  return o;\n"
+    "}\n";
+
+// The fragment half: sdRoundBox + cov transcribed from core/render_software.zig
+// (33-88), which is the reference the parity gate compares against. Do not
+// "improve" any expression here — a change that is nicer on the GPU and
+// different from the CPU is a parity failure, and the CPU is the definition.
+static const char *const kGpuPS =
+    "Texture2D tex0 : register(t0);\n"
+    "SamplerState smp_point : register(s0);\n"
+    "SamplerState smp_linear : register(s1);\n"
+    "float sdRoundBox(float2 p, float2 b, float4 r) {\n"
+    "  float rad = (p.x < 0.0) ? (p.y < 0.0 ? r.x : r.z) : (p.y < 0.0 ? r.y : r.w);\n"
+    "  float2 q = abs(p) - b + rad;\n"
+    "  return length(max(q, float2(0.0, 0.0))) + min(max(q.x, q.y), 0.0) - rad;\n"
+    "}\n"
+    "float cov(float d) { return clamp(0.5 - d, 0.0, 1.0); }\n"
+    "struct VOut {\n"
+    "  float4 pos : SV_POSITION;\n"
+    "  float2 uv : TEXCOORD0;\n"
+    "  float2 size : TEXCOORD1;\n"
+    "  float4 radius : TEXCOORD2;\n"
+    "  float4 color : TEXCOORD3;\n"
+    "  float mode : TEXCOORD4;\n"
+    "  float border : TEXCOORD5;\n"
+    "  float kind : TEXCOORD6;\n"
+    "};\n"
+    "float4 PSMain(VOut i) : SV_Target {\n"
+    "  if (i.kind > 1.5) {\n"
+    "    float4 c = tex0.Sample(smp_linear, i.uv);\n"
+    "    if (c.a <= 0.0) discard;\n"
+    "    return c;\n"
+    "  }\n"
+    "  if (i.kind > 0.5) {\n"
+    "    float a = tex0.Sample(smp_point, i.uv).r;\n"
+    "    if (a <= 0.0) discard;\n"
+    "    return float4(i.color.rgb, i.color.a * a);\n"
+    "  }\n"
+    "  float2 c = i.size * 0.5;\n"
+    "  float2 p = i.uv - c;\n"
+    "  float m = min(c.x, c.y);\n"
+    "  float4 r = min(max(i.radius, float4(0.0, 0.0, 0.0, 0.0)), float4(m, m, m, m));\n"
+    "  float a = cov(sdRoundBox(p, c, r));\n"
+    "  if (i.mode > 0.5) {\n"
+    "    float2 ib = max(c - i.border, float2(0.0, 0.0));\n"
+    "    float mi = min(ib.x, ib.y);\n"
+    "    float4 ri = min(max(r - i.border, float4(0.0, 0.0, 0.0, 0.0)), float4(mi, mi, mi, mi));\n"
+    "    a *= (1.0 - cov(sdRoundBox(p, ib, ri)));\n"
+    "  }\n"
+    "  if (a <= 0.0) discard;\n"
+    "  return float4(i.color.rgb, i.color.a * a);\n"
+    "}\n";
+
+/// The vertex-input slots, by byte offset. Written out rather than derived
+/// from a struct so that `GlinVertex` is the ONLY definition of the layout.
+static const D3D11_INPUT_ELEMENT_DESC kGpuInput[] = {
+    { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    { "TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT, 0, 16, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    { "TEXCOORD", 2, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    { "TEXCOORD", 3, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 40, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    { "TEXCOORD", 4, DXGI_FORMAT_R32_FLOAT, 0, 56, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    { "TEXCOORD", 5, DXGI_FORMAT_R32_FLOAT, 0, 60, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    { "TEXCOORD", 6, DXGI_FORMAT_R32_FLOAT, 0, 64, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+};
+
+/// The vertex buffer never shrinks and grows by doubling: a frame that crosses
+/// the current size pays one re-create, not one per frame around a boundary.
+#define GLIN_GPU_VBUF_FLOOR (65536u)
+
+struct GlinWinGpu {
+    ID3D11Device *device;
+    ID3D11DeviceContext *context;
+    /// The window this draws into, or NULL for the offscreen (parity) path.
+    GlinWinWindow *win;
+    ID3D11VertexShader *vs;
+    ID3D11PixelShader *ps;
+    ID3D11InputLayout *input_layout;
+    ID3D11Buffer *cbuf;
+    ID3D11BlendState *blend;
+    ID3D11RasterizerState *raster;
+    ID3D11SamplerState *smp_point;
+    ID3D11SamplerState *smp_linear;
+    ID3D11Buffer *vbuf;
+    UINT vbuf_bytes;
+    ID3D11Texture2D *atlas;
+    ID3D11ShaderResourceView *atlas_srv;
+    UINT atlas_w;
+    UINT atlas_h;
+    /// 1..GLIN_MAX_IMAGES-1 are usable, exactly as the Metal backend and
+    /// `glin_metal_set_image` number them; 0 always means the glyph atlas.
+    ID3D11Texture2D *img_tex[GLIN_MAX_IMAGES];
+    ID3D11ShaderResourceView *img_srv[GLIN_MAX_IMAGES];
+    UINT img_w[GLIN_MAX_IMAGES];
+    UINT img_h[GLIN_MAX_IMAGES];
+    /// 1 when this object created the device itself (the offscreen path).
+    int own_device;
+    ID3D11Texture2D *rt;
+    ID3D11RenderTargetView *rtv;
+    UINT width;
+    UINT height;
+    int frames;
+};
+
+static void gpuReleaseImages(GlinWinGpu *g) {
+    for (int i = 0; i < GLIN_MAX_IMAGES; ++i) {
+        if (g->img_srv[i] != NULL) {
+            ID3D11ShaderResourceView_Release(g->img_srv[i]);
+            g->img_srv[i] = NULL;
+        }
+        if (g->img_tex[i] != NULL) {
+            ID3D11Texture2D_Release(g->img_tex[i]);
+            g->img_tex[i] = NULL;
+        }
+        g->img_w[i] = 0;
+        g->img_h[i] = 0;
+    }
+}
+
+static void gpuRelease(GlinWinGpu *g) {
+    if (g == NULL) return;
+    gpuReleaseImages(g);
+    if (g->atlas_srv != NULL) ID3D11ShaderResourceView_Release(g->atlas_srv);
+    if (g->atlas != NULL) ID3D11Texture2D_Release(g->atlas);
+    if (g->vbuf != NULL) ID3D11Buffer_Release(g->vbuf);
+    if (g->smp_point != NULL) ID3D11SamplerState_Release(g->smp_point);
+    if (g->smp_linear != NULL) ID3D11SamplerState_Release(g->smp_linear);
+    if (g->raster != NULL) ID3D11RasterizerState_Release(g->raster);
+    if (g->blend != NULL) ID3D11BlendState_Release(g->blend);
+    if (g->cbuf != NULL) ID3D11Buffer_Release(g->cbuf);
+    if (g->input_layout != NULL) ID3D11InputLayout_Release(g->input_layout);
+    if (g->ps != NULL) ID3D11PixelShader_Release(g->ps);
+    if (g->vs != NULL) ID3D11VertexShader_Release(g->vs);
+    if (g->rtv != NULL) ID3D11RenderTargetView_Release(g->rtv);
+    if (g->rt != NULL) ID3D11Texture2D_Release(g->rt);
+    if (g->own_device) {
+        if (g->context != NULL) ID3D11DeviceContext_Release(g->context);
+        if (g->device != NULL) ID3D11Device_Release(g->device);
+    }
+    free(g);
+}
+
+/// Build every object a frame needs. Returns 0 on success; on failure the
+/// half-built object is released and nothing is left for the caller to undo.
+static int gpuBuild(GlinWinGpu *g) {
+    ID3D10Blob *vs_code = NULL;
+    ID3D10Blob *ps_code = NULL;
+    ID3D10Blob *errors = NULL;
+    HRESULT hr = D3DCompile(kGpuVS, strlen(kGpuVS), "glinlandui-gpu-vs", NULL, NULL, "VSMain",
+                            "vs_5_0", 0, 0, &vs_code, &errors);
+    if (errors != NULL) {
+        fprintf(stderr, "glinlandui: D3DCompile(VSMain) failed: %s\n",
+                (const char *)ID3D10Blob_GetBufferPointer(errors));
+        ID3D10Blob_Release(errors);
+        errors = NULL;
+    }
+    if (FAILED(hr) || vs_code == NULL) return 0;
+    hr = D3DCompile(kGpuPS, strlen(kGpuPS), "glinlandui-gpu-ps", NULL, NULL, "PSMain", "ps_5_0",
+                    0, 0, &ps_code, &errors);
+    if (errors != NULL) {
+        fprintf(stderr, "glinlandui: D3DCompile(PSMain) failed: %s\n",
+                (const char *)ID3D10Blob_GetBufferPointer(errors));
+        ID3D10Blob_Release(errors);
+        errors = NULL;
+    }
+    if (FAILED(hr) || ps_code == NULL) {
+        ID3D10Blob_Release(vs_code);
+        return 0;
+    }
+
+    hr = ID3D11Device_CreateVertexShader(g->device,
+                                         ID3D10Blob_GetBufferPointer(vs_code),
+                                         ID3D10Blob_GetBufferSize(vs_code), NULL, &g->vs);
+    if (SUCCEEDED(hr)) {
+        hr = ID3D11Device_CreatePixelShader(g->device,
+                                            ID3D10Blob_GetBufferPointer(ps_code),
+                                            ID3D10Blob_GetBufferSize(ps_code), NULL, &g->ps);
+    }
+    if (SUCCEEDED(hr)) {
+        hr = ID3D11Device_CreateInputLayout(g->device, kGpuInput,
+                                            (UINT)(sizeof(kGpuInput) / sizeof(kGpuInput[0])),
+                                            ID3D10Blob_GetBufferPointer(vs_code),
+                                            ID3D10Blob_GetBufferSize(vs_code), &g->input_layout);
+    }
+    ID3D10Blob_Release(vs_code);
+    ID3D10Blob_Release(ps_code);
+    if (FAILED(hr)) {
+        fprintf(stderr, "glinlandui: d3d11 renderer: shader/layout creation failed (hr=0x%08lx)\n",
+                (unsigned long)hr);
+        return 0;
+    }
+
+    // 16 bytes: `res` is 8, and a constant buffer below 16 is rejected.
+    D3D11_BUFFER_DESC cb;
+    memset(&cb, 0, sizeof(cb));
+    cb.ByteWidth = 16;
+    cb.Usage = D3D11_USAGE_DEFAULT;
+    cb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    if (FAILED(ID3D11Device_CreateBuffer(g->device, &cb, NULL, &g->cbuf))) return 0;
+
+    // The CPU rasterizer's blend, factor for factor: straight-alpha source-over, with the destination
+    // alpha kept saturated because the window is opaque.
+    D3D11_BLEND_DESC bd;
+    memset(&bd, 0, sizeof(bd));
+    bd.RenderTarget[0].BlendEnable = TRUE;
+    bd.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+    bd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    bd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+    bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    if (FAILED(ID3D11Device_CreateBlendState(g->device, &bd, &g->blend))) return 0;
+
+    // ScissorEnable is FALSE by default, which silently turns every scissor rect into a no-op; and
+    // CullMode defaults to BACK, which would drop every quad because the y flip inverts the winding.
+    D3D11_RASTERIZER_DESC rd;
+    memset(&rd, 0, sizeof(rd));
+    rd.FillMode = D3D11_FILL_SOLID;
+    rd.CullMode = D3D11_CULL_NONE;
+    rd.ScissorEnable = TRUE;
+    rd.DepthClipEnable = TRUE;
+    if (FAILED(ID3D11Device_CreateRasterizerState(g->device, &rd, &g->raster))) return 0;
+
+    // Two samplers, because the shader cannot declare one: glyphs are read from the R8 atlas 1:1
+    // (NEAREST), images are scaled (LINEAR). Both clamp.
+    D3D11_SAMPLER_DESC sd;
+    memset(&sd, 0, sizeof(sd));
+    sd.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sd.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sd.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    sd.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+    sd.MaxLOD = D3D11_FLOAT32_MAX;
+    if (FAILED(ID3D11Device_CreateSamplerState(g->device, &sd, &g->smp_point))) return 0;
+    sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    if (FAILED(ID3D11Device_CreateSamplerState(g->device, &sd, &g->smp_linear))) return 0;
+
+    return 1;
+}
+
+static int gpuEnsureVerts(GlinWinGpu *g, UINT bytes) {
+    if (bytes <= g->vbuf_bytes) return 1;
+    UINT want = g->vbuf_bytes == 0 ? GLIN_GPU_VBUF_FLOOR : g->vbuf_bytes;
+    while (want < bytes) want *= 2;
+    if (g->vbuf != NULL) {
+        ID3D11Buffer_Release(g->vbuf);
+        g->vbuf = NULL;
+        g->vbuf_bytes = 0;
+    }
+    D3D11_BUFFER_DESC vb;
+    memset(&vb, 0, sizeof(vb));
+    vb.ByteWidth = want;
+    vb.Usage = D3D11_USAGE_DYNAMIC;
+    vb.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    vb.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    if (FAILED(ID3D11Device_CreateBuffer(g->device, &vb, NULL, &g->vbuf))) return 0;
+    g->vbuf_bytes = want;
+    return 1;
+}
+
+void glin_win_gpu_set_atlas(GlinWinGpu *g, const unsigned char *r8, int w, int h) {
+    if (g == NULL || r8 == NULL || w <= 0 || h <= 0) return;
+    const UINT uw = (UINT)w;
+    const UINT uh = (UINT)h;
+    if (g->atlas == NULL || g->atlas_w != uw || g->atlas_h != uh) {
+        if (g->atlas_srv != NULL) {
+            ID3D11ShaderResourceView_Release(g->atlas_srv);
+            g->atlas_srv = NULL;
+        }
+        if (g->atlas != NULL) {
+            ID3D11Texture2D_Release(g->atlas);
+            g->atlas = NULL;
+        }
+        D3D11_TEXTURE2D_DESC td;
+        memset(&td, 0, sizeof(td));
+        td.Width = uw;
+        td.Height = uh;
+        td.MipLevels = 1;
+        td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_R8_UNORM;
+        td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_DEFAULT;
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(ID3D11Device_CreateTexture2D(g->device, &td, NULL, &g->atlas))) return;
+        if (FAILED(ID3D11Device_CreateShaderResourceView(g->device, GLIN_RES(g->atlas), NULL,
+                                                        &g->atlas_srv))) {
+            ID3D11Texture2D_Release(g->atlas);
+            g->atlas = NULL;
+            return;
+        }
+        g->atlas_w = uw;
+        g->atlas_h = uh;
+    }
+    // Whole-atlas upload: the CPU side only reports "dirty", so there is no rect to narrow it to yet.
+    ID3D11DeviceContext_UpdateSubresource(g->context, GLIN_RES(g->atlas), 0, NULL, r8, uw, 0);
+}
+
+void glin_win_gpu_set_image(GlinWinGpu *g, int slot, const unsigned char *rgba, int w, int h) {
+    if (g == NULL || slot <= 0 || slot >= GLIN_MAX_IMAGES) return;
+    if (g->img_srv[slot] != NULL) {
+        ID3D11ShaderResourceView_Release(g->img_srv[slot]);
+        g->img_srv[slot] = NULL;
+    }
+    if (g->img_tex[slot] != NULL) {
+        ID3D11Texture2D_Release(g->img_tex[slot]);
+        g->img_tex[slot] = NULL;
+    }
+    g->img_w[slot] = 0;
+    g->img_h[slot] = 0;
+    if (rgba == NULL || w <= 0 || h <= 0) return;
+
+    D3D11_TEXTURE2D_DESC td;
+    memset(&td, 0, sizeof(td));
+    td.Width = (UINT)w;
+    td.Height = (UINT)h;
+    td.MipLevels = 1;
+    td.ArraySize = 1;
+    td.Format = GLIN_DXGI_FORMAT;
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_DEFAULT;
+    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA init;
+    memset(&init, 0, sizeof(init));
+    init.pSysMem = rgba;
+    init.SysMemPitch = (UINT)w * 4u;
+    if (FAILED(ID3D11Device_CreateTexture2D(g->device, &td, &init, &g->img_tex[slot]))) return;
+    if (FAILED(ID3D11Device_CreateShaderResourceView(g->device, GLIN_RES(g->img_tex[slot]), NULL,
+                                                    &g->img_srv[slot]))) {
+        ID3D11Texture2D_Release(g->img_tex[slot]);
+        g->img_tex[slot] = NULL;
+        return;
+    }
+    g->img_w[slot] = (UINT)w;
+    g->img_h[slot] = (UINT)h;
+}
+
+/// Upload the frame's vertices and draw the segments into `rtv`. Shared by the
+/// window path and the parity path, so the two can never disagree about what
+/// "drawing a frame" means.
+static int gpuDrawFrame(GlinWinGpu *g, ID3D11RenderTargetView *rtv, UINT w, UINT h,
+                        const GlinVertex *verts, int vertex_count, const GlinSegment *segs,
+                        int seg_count, const float clear[4]) {
+    if (g == NULL || rtv == NULL || w == 0 || h == 0) return 0;
+    ID3D11DeviceContext_ClearRenderTargetView(g->context, rtv, clear);
+    if (getenv("GLIN_GPU_DEBUG") != NULL) {
+        fprintf(stderr, "gpu: rtv=%p v=%d s=%d sizeofV=%u v0.pos=%.1f,%.1f v0.size=%.1f,%.1f v0.kind=%.1f v0.uv=%.1f,%.1f\n",
+                (void *)rtv, vertex_count, seg_count, (unsigned)sizeof(GlinVertex),
+                verts[0].pos[0], verts[0].pos[1], verts[0].size[0], verts[0].size[1],
+                verts[0].kind, verts[0].local[0], verts[0].local[1]);
+        for (int i = 0; i < seg_count && i < 3; ++i) {
+            fprintf(stderr, "gpu: seg%d start=%d count=%d scissor=%d %d,%d,%d,%d tex=%d\n", i,
+                    segs[i].start, segs[i].count, segs[i].has_scissor, segs[i].sx, segs[i].sy,
+                    segs[i].sw, segs[i].sh, segs[i].texture_id);
+        }
+    }
+    if (vertex_count <= 0 || seg_count <= 0) return 1;
+
+    if (!gpuEnsureVerts(g, (UINT)vertex_count * (UINT)sizeof(GlinVertex))) return 0;
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    memset(&mapped, 0, sizeof(mapped));
+    if (FAILED(ID3D11DeviceContext_Map(g->context, GLIN_RES(g->vbuf), 0, D3D11_MAP_WRITE_DISCARD,
+                                       0, &mapped))) {
+        return 0;
+    }
+    memcpy(mapped.pData, verts, (size_t)vertex_count * sizeof(GlinVertex));
+    ID3D11DeviceContext_Unmap(g->context, GLIN_RES(g->vbuf), 0);
+
+    struct {
+        float res[2];
+        float pad[2];
+    } frame = { { (float)w, (float)h }, { 0.0f, 0.0f } };
+    ID3D11DeviceContext_UpdateSubresource(g->context, GLIN_RES(g->cbuf), 0, NULL, &frame, 0, 0);
+
+    D3D11_VIEWPORT vp;
+    memset(&vp, 0, sizeof(vp));
+    vp.TopLeftX = 0;
+    vp.TopLeftY = 0;
+    vp.Width = (float)w;
+    vp.Height = (float)h;
+    vp.MinDepth = 0.0f;
+    vp.MaxDepth = 1.0f;
+    ID3D11DeviceContext_RSSetViewports(g->context, 1, &vp);
+
+    ID3D11DeviceContext_OMSetRenderTargets(g->context, 1, &rtv, NULL);
+    ID3D11DeviceContext_OMSetBlendState(g->context, g->blend, NULL, 0xFFFFFFFFu);
+    ID3D11DeviceContext_RSSetState(g->context, g->raster);
+    // A Draw with no topology set removes the device on WARP, so this is not optional.
+    ID3D11DeviceContext_IASetPrimitiveTopology(g->context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ID3D11DeviceContext_IASetInputLayout(g->context, g->input_layout);
+    const UINT stride = (UINT)sizeof(GlinVertex);
+    const UINT offset = 0;
+    ID3D11DeviceContext_IASetVertexBuffers(g->context, 0, 1, &g->vbuf, &stride, &offset);
+    ID3D11DeviceContext_VSSetShader(g->context, g->vs, NULL, 0);
+    ID3D11DeviceContext_VSSetConstantBuffers(g->context, 0, 1, &g->cbuf);
+    ID3D11DeviceContext_PSSetShader(g->context, g->ps, NULL, 0);
+
+    for (int i = 0; i < seg_count; ++i) {
+        const GlinSegment *s = &segs[i];
+        if (s->count <= 0 || s->start < 0) continue;
+
+        // Top-left origin, and D3D11 scissor rects are top-left too — no flip, unlike GL. An
+        // out-of-range rect is invalid, so it is intersected with the target here rather than
+        // trusted (the CPU side only clamps at 0).
+        D3D11_RECT rect;
+        if (s->has_scissor) {
+            int left = s->sx < 0 ? 0 : s->sx;
+            int top = s->sy < 0 ? 0 : s->sy;
+            int right = s->sx + s->sw;
+            int bottom = s->sy + s->sh;
+            if (right > (int)w) right = (int)w;
+            if (bottom > (int)h) bottom = (int)h;
+            if (right <= left || bottom <= top) continue;
+            rect.left = left;
+            rect.top = top;
+            rect.right = right;
+            rect.bottom = bottom;
+        } else {
+            rect.left = 0;
+            rect.top = 0;
+            rect.right = (LONG)w;
+            rect.bottom = (LONG)h;
+        }
+        ID3D11DeviceContext_RSSetScissorRects(g->context, 1, &rect);
+
+        const int id = s->texture_id;
+        ID3D11ShaderResourceView *srv = g->atlas_srv;
+        ID3D11SamplerState *smp = g->smp_point;
+        if (id > 0 && id < GLIN_MAX_IMAGES && g->img_srv[id] != NULL) {
+            srv = g->img_srv[id];
+            smp = g->smp_linear;
+        }
+        // A missing texture must NOT drop the draw: a frame with no text has no atlas yet, and its
+        // rects still have to appear. Only a glyph or image segment samples, so an unbound slot is
+        // harmless there.
+        if (srv != NULL) {
+            ID3D11DeviceContext_PSSetShaderResources(g->context, 0, 1, &srv);
+            ID3D11DeviceContext_PSSetSamplers(g->context, 0, 1, &smp);
+        }
+        ID3D11DeviceContext_Draw(g->context, (UINT)s->count, (UINT)s->start);
+    }
+
+    // Unbind, so the next target bind or texture update is not fighting a live reference.
+    ID3D11DeviceContext_PSSetShaderResources(g->context, 0, 0, NULL);
+    ID3D11DeviceContext_OMSetRenderTargets(g->context, 0, NULL, NULL);
+    g->frames += 1;
+    return 1;
+}
+
+GlinWinGpu *glin_win_gpu_create(GlinWinWindow *win) {
+    if (win == NULL || win->device == NULL || win->context == NULL) return NULL;
+    GlinWinGpu *g = (GlinWinGpu *)calloc(1, sizeof(GlinWinGpu));
+    if (g == NULL) return NULL;
+    g->device = win->device;
+    g->context = win->context;
+    g->win = win;
+    if (!gpuBuild(g)) {
+        gpuRelease(g);
+        return NULL;
+    }
+    return g;
+}
+
+void glin_win_gpu_destroy(GlinWinGpu *g) {
+    gpuRelease(g);
+}
+
+int glin_win_gpu_active(GlinWinGpu *g) {
+    return g != NULL;
+}
+
+int glin_win_gpu_presented_frames(GlinWinGpu *g) {
+    return g != NULL ? g->frames : 0;
+}
+
+int glin_win_gpu_draw(GlinWinGpu *g, const GlinVertex *verts, int vertex_count,
+                      const GlinSegment *segs, int seg_count, float r, float gr, float b, float a) {
+    if (g == NULL || g->win == NULL) return 0;
+    GlinWinWindow *win = g->win;
+    if (win->gdi || win->device_failed) return 0;
+    if (!ensureBackBufferView(win)) return 0;
+    const UINT w = g->width != 0 ? g->width : 0;
+    (void)w;
+    int cw = 0;
+    int ch = 0;
+    glin_win_content_size(win, &cw, &ch);
+    if (cw <= 0 || ch <= 0) return 0;
+    // The swap chain's back buffer is in DEVICE pixels; the surface the layout was measured in is
+    // logical, so the target size is the window's own device client rect, not the logical one.
+    const UINT tw = (UINT)((double)cw * glin_win_scale(win) + 0.5);
+    const UINT th = (UINT)((double)ch * glin_win_scale(win) + 0.5);
+    const float clear[4] = { r, gr, b, a };
+    if (!gpuDrawFrame(g, win->back_rtv, tw, th, verts, vertex_count, segs, seg_count, clear)) {
+        return 0;
+    }
+    win->presented = 1;
+    win->frames += 1;
+    HRESULT hr = IDXGISwapChain_Present(win->swap_chain, 0, 0);
+    if (FAILED(hr)) {
+        degradeToGdi(win, "Present failed after a GPU frame");
+        return 0;
+    }
+    if (win->max_frames > 0 && win->frames >= win->max_frames) glin_win_quit(win);
+    return 1;
+}
+
+unsigned char *glin_win_gpu_offscreen(const GlinVertex *verts, int vertex_count,
+                                      const GlinSegment *segs, int seg_count, int w, int h,
+                                      float r, float gr, float b, float a,
+                                      const unsigned char *atlas, int atlas_w, int atlas_h) {
+    if (w <= 0 || h <= 0) return NULL;
+    GlinWinGpu *g = (GlinWinGpu *)calloc(1, sizeof(GlinWinGpu));
+    if (g == NULL) return NULL;
+    D3D_FEATURE_LEVEL got = D3D_FEATURE_LEVEL_11_0;
+    // Same device selection as the window (hardware, then WARP), so this probe measures the
+    // pipeline the window actually runs.
+    HRESULT hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, NULL, 0,
+                                   D3D11_SDK_VERSION, &g->device, &got, &g->context);
+    if (FAILED(hr) || g->device == NULL || g->context == NULL) {
+        if (g->device != NULL) ID3D11Device_Release(g->device);
+        if (g->context != NULL) ID3D11DeviceContext_Release(g->context);
+        g->device = NULL;
+        g->context = NULL;
+        hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_WARP, NULL, 0, NULL, 0, D3D11_SDK_VERSION,
+                               &g->device, &got, &g->context);
+    }
+    if (FAILED(hr) || g->device == NULL || g->context == NULL) {
+        gpuRelease(g);
+        return NULL;
+    }
+    g->own_device = 1;
+    if (!gpuBuild(g)) {
+        gpuRelease(g);
+        return NULL;
+    }
+    // The parity path renders glyphs too, so it needs the same atlas the window path uploads.
+    if (atlas != NULL && atlas_w > 0 && atlas_h > 0) {
+        glin_win_gpu_set_atlas(g, atlas, atlas_w, atlas_h);
+    }
+
+    D3D11_TEXTURE2D_DESC td;
+    D3D11_TEXTURE2D_DESC read_desc;
+    memset(&td, 0, sizeof(td));
+    td.Width = (UINT)w;
+    td.Height = (UINT)h;
+    td.MipLevels = 1;
+    td.ArraySize = 1;
+    td.Format = GLIN_DXGI_FORMAT;
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_DEFAULT;
+    td.BindFlags = D3D11_BIND_RENDER_TARGET;
+    read_desc = td;
+    read_desc.Usage = D3D11_USAGE_STAGING;
+    read_desc.BindFlags = 0;
+    read_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+
+    unsigned char *out = NULL;
+    ID3D11Texture2D *readback = NULL;
+    if (SUCCEEDED(ID3D11Device_CreateTexture2D(g->device, &td, NULL, &g->rt)) &&
+        SUCCEEDED(ID3D11Device_CreateRenderTargetView(g->device, GLIN_RES(g->rt), NULL, &g->rtv)) &&
+        SUCCEEDED(ID3D11Device_CreateTexture2D(g->device, &read_desc, NULL, &readback))) {
+        const float clear[4] = { r, gr, b, a };
+        if (gpuDrawFrame(g, g->rtv, (UINT)w, (UINT)h, verts, vertex_count, segs, seg_count, clear)) {
+            ID3D11DeviceContext_CopyResource(g->context, GLIN_RES(readback), GLIN_RES(g->rt));
+            D3D11_MAPPED_SUBRESOURCE mapped;
+            memset(&mapped, 0, sizeof(mapped));
+            if (SUCCEEDED(ID3D11DeviceContext_Map(g->context, GLIN_RES(readback), 0, D3D11_MAP_READ,
+                                                  0, &mapped))) {
+                out = (unsigned char *)malloc((size_t)w * (size_t)h * 4u);
+                if (out != NULL) {
+                    for (int y = 0; y < h; ++y) {
+                        memcpy(out + (size_t)y * (size_t)w * 4u,
+                               (const unsigned char *)mapped.pData +
+                                   (size_t)y * (size_t)mapped.RowPitch,
+                               (size_t)w * 4u);
+                    }
+                }
+                ID3D11DeviceContext_Unmap(g->context, GLIN_RES(readback), 0);
+            }
+        }
+    }
+    if (readback != NULL) ID3D11Texture2D_Release(readback);
+    gpuRelease(g);
+    return out;
+}
+
+void glin_win_gpu_free(void *p) {
+    free(p);
+}
+
+

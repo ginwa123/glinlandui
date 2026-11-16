@@ -281,6 +281,91 @@ void glin_win_clipboard_write(const char *text_utf8, int len);
 /// without including a Direct3D header.
 #define GLIN_SWAP_FORMAT_RGBA8 1
 
+// ---------------------------------------------------------------------------
+// The GPU renderer: vertices in, one draw per segment.
+//
+// This is the Windows mirror of `mac/metal.h`. The contracts match on purpose:
+// the same 68-byte vertex, the same segment struct, the same meaning for
+// `kind` (0 rect, 1 glyph, 2 image) — so `src/windows/renderer.zig` is a port
+// of `src/mac/renderer.zig` rather than a second design, and the parity test
+// can compare both against the CPU reference with one set of numbers.
+//
+// The fields are plain `float` ARRAYS, never a float4: an array has no
+// alignment requirement beyond its element, so the layout is 17 tightly packed
+// floats and the input layout in shim.c spells every offset out. Nothing here
+// is allowed to depend on a compiler's idea of packing.
+// ---------------------------------------------------------------------------
+
+/// One vertex. 17 floats, 68 bytes, no padding.
+typedef struct {
+    float pos[2];    ///< device pixels, top-left origin
+    float local[2];  ///< rect: box-local px; glyph/image: normalized uv
+    float size[2];   ///< rect box size in device px; 0 for glyph/image
+    float radius[4]; ///< TL, TR, BL, BR in device px
+    float color[4];  ///< straight (non-premultiplied) RGBA, 0..1
+    float mode;      ///< 0 fill, 1 border
+    float border;    ///< border width in device px
+    float kind;      ///< 0 rect, 1 glyph, 2 image
+} GlinVertex;
+
+/// A run of vertices sharing one scissor rect and one texture. This is what
+/// makes a clip bounded structurally instead of by a state machine: Clay
+/// interleaves boxes and text, so a scroll container's clip cannot be one
+/// rect per frame.
+typedef struct {
+    int start;      ///< first vertex index
+    int count;      ///< vertex count
+    int has_scissor; ///< 0 = no clip (the whole target)
+    int sx;         ///< scissor, device px, top-left origin
+    int sy;
+    int sw;
+    int sh;
+    int texture_id; ///< 0 = glyph atlas, 1..GLIN_MAX_IMAGES-1 = image slot
+} GlinSegment;
+
+/// Image slots. Ids 1..31 are usable; 0 always means the glyph atlas.
+#define GLIN_MAX_IMAGES 32
+
+typedef struct GlinWinGpu GlinWinGpu;
+
+/// Build the pipeline on the window's own device. NULL when the device is
+/// unusable or a shader failed to compile — the caller then keeps the CPU
+/// rasteriser, exactly as macOS keeps its CoreGraphics blit.
+GlinWinGpu *glin_win_gpu_create(GlinWinWindow *win);
+void glin_win_gpu_destroy(GlinWinGpu *gpu);
+int glin_win_gpu_active(GlinWinGpu *gpu);
+int glin_win_gpu_presented_frames(GlinWinGpu *gpu);
+
+/// Upload the R8 glyph atlas (1024x1024 in practice) before drawing.
+void glin_win_gpu_set_atlas(GlinWinGpu *gpu, const unsigned char *r8, int w, int h);
+
+/// Upload one RGBA8 image into `slot` (1..31). Pass NULL to clear the slot.
+void glin_win_gpu_set_image(GlinWinGpu *gpu, int slot, const unsigned char *rgba, int w, int h);
+
+/// Draw one frame into the window's back buffer and present it. `r,g,b,a` is
+/// the clear colour, 0..1, taken from the CPU rasterizer's own clear so a
+/// half-drawn frame never flashes a different colour.
+///
+/// Returns 1 when a frame was presented, 0 when the GPU could not (the caller
+/// must then fall back to the CPU surface for this frame).
+int glin_win_gpu_draw(GlinWinGpu *gpu, const GlinVertex *verts, int vertex_count,
+                      const GlinSegment *segs, int seg_count, float r, float g, float b, float a);
+
+/// Render the same vertices offscreen and return the DISPLAYED bytes as a
+/// freshly malloc'd R,G,B,A buffer of `w * h * 4` (free with
+/// glin_win_gpu_free). NULL when D3D11 is unavailable on this host, which is
+/// what lets the parity test skip instead of fail.
+///
+/// No channel swap and no row flip: the target is R8G8B8A8_UNORM, the same
+/// order the CPU surface holds, so the test compares channel for channel
+/// (unlike the Metal backend, whose layer is BGRA).
+unsigned char *glin_win_gpu_offscreen(const GlinVertex *verts, int vertex_count,
+                                      const GlinSegment *segs, int seg_count, int w, int h,
+                                      float r, float g, float b, float a,
+                                      const unsigned char *atlas, int atlas_w, int atlas_h);
+void glin_win_gpu_free(void *p);
+
+
 #ifdef __cplusplus
 }
 #endif
