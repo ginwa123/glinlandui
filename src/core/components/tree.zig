@@ -9,6 +9,7 @@ const registry = @import("click_registry.zig");
 const reorder_mod = @import("reorder.zig");
 const context_menu = @import("context_menu.zig");
 const semantics = @import("../semantics.zig");
+const text_fit = @import("../text_backend.zig");
 
 /// What a row is, which decides its colour.
 pub const RowKind = enum { group, item, leaf };
@@ -71,6 +72,8 @@ pub const TreeProps = struct {
     reorder: ?reorder_mod.Reorder = null,
     // The app's own leading content for a row (a chip, an icon), declared between the caret and the label.
     row_extra: prop.RowExtra = .{},
+    /// How wide `row_extra` draws, so a label's budget can subtract it: the one thing about the row only the app knows.
+    extra_width: prop.Len = .{},
 };
 
 /// The element id of row `i`. `+1` so row 0 never collides with the container's own id.
@@ -87,6 +90,58 @@ fn innerId(base: []const u8, i: usize, slot: u32) cl.ElementId {
 pub fn caretOf(props: TreeProps, row: Row) []const u8 {
     if (!row.has_children) return props.caret_leaf;
     return if (row.expanded) props.caret_open else props.caret_closed;
+}
+
+/// How much of a label still fits, and whether the rest has to be shown as dots.
+const Fitted = struct { keep: usize, dots: bool };
+
+/// The label cut to the row's own box from the previous frame, so a long name is shortened instead of wrapping into the row below.
+fn fitLabel(props: TreeProps, row: Row, i: usize, size: u16) Fitted {
+    if (row.label.len == 0) return .{ .keep = 0, .dots = false };
+    const el = cl.getElementData(rowId(props.id.str(), i));
+    if (!el.found) return .{ .keep = row.label.len, .dots = false };
+    const row_w = el.bounding_box.width;
+    if (row_w <= 0) return .{ .keep = row.label.len, .dots = false };
+    // What the row spends before the label: its two paddings, the indent, the caret, the app's decor, the count and the gaps.
+    const caret_w = text_fit.measureText(caretOf(props, row), props.caret_size.whole()).w;
+    const meta_w = if (row.meta.len > 0) text_fit.measureText(row.meta, 11).w else 0;
+    const gaps: f32 = 6 * @as(f32, if (row.meta.len > 0) 3 else 2);
+    const indent_w = props.indent.pts() * @as(f32, @floatFromInt(row.depth));
+    const budget = row_w - props.pad_lr.pts() * 2 - indent_w - caret_w - props.extra_width.pts() - meta_w - gaps;
+    if (budget <= 0) return .{ .keep = 0, .dots = true };
+    if (text_fit.measureText(row.label, size).w <= budget) return .{ .keep = row.label.len, .dots = false };
+    const dots_w = text_fit.measureText("...", size).w;
+    if (dots_w >= budget) return .{ .keep = 0, .dots = false };
+    // The longest prefix that still fits beside the dots: a binary search over codepoint counts, so a 200 char label costs a handful of measures.
+    var lo: usize = 0;
+    var hi: usize = codepoints(row.label);
+    while (lo < hi) {
+        const mid = lo + (hi - lo + 1) / 2;
+        if (text_fit.measureText(prefix(row.label, mid), size).w + dots_w <= budget) lo = mid else hi = mid - 1;
+    }
+    return .{ .keep = prefix(row.label, lo).len, .dots = true };
+}
+
+/// A count of codepoints, so a cut never lands inside a UTF-8 sequence.
+fn codepoints(text: []const u8) usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < text.len) : (n += 1) {
+        i += 1;
+        while (i < text.len and (text[i] & 0xC0) == 0x80) i += 1;
+    }
+    return n;
+}
+
+/// The first `n` codepoints of `text`.
+fn prefix(text: []const u8, n: usize) []const u8 {
+    var i: usize = 0;
+    var k: usize = 0;
+    while (i < text.len and k < n) : (k += 1) {
+        i += 1;
+        while (i < text.len and (text[i] & 0xC0) == 0x80) i += 1;
+    }
+    return text[0..i];
 }
 
 /// Declare a tree: one clickable row per entry, indented by `depth`.
@@ -192,9 +247,13 @@ fn rowUi(props: TreeProps, row: Row, i: usize) void {
                 .direction = .left_to_right,
                 .sizing = .{ .w = .grow, .h = .grow },
                 .child_alignment = .{ .x = .left, .y = .center },
+                .child_gap = 0,
             },
         })({
-            cl.text(row.label, .{ .font_size = label_size.whole(), .color = fg.toClay() });
+            const fitted = fitLabel(props, row, i, label_size.whole());
+            cl.text(row.label[0..fitted.keep], .{ .font_size = label_size.whole(), .color = fg.toClay() });
+            // Three dots rather than U+2026: the bundled face has Latin-1, and a missing glyph would read worse than a shortened name.
+            if (fitted.dots) cl.text("...", .{ .font_size = label_size.whole(), .color = fg.toClay() });
         });
         if (row.meta.len > 0) {
             cl.text(row.meta, .{ .font_size = 11, .color = props.meta_fg.toClay() });
