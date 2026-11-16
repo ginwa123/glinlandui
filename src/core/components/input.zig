@@ -436,12 +436,18 @@ pub const Field = struct {
     pub fn bindTo(self: *Field, buf: []u8) void {
         if (self.bound) return;
         self.editor = text_editor.Editor.init(buf);
+        self.revealed_caret = null;
         self.bound = true;
     }
 
     // Point a READ-ONLY field at text the app owns: the same bytes, no copy, and no `bindTo` length limit.
     pub fn show(self: *Field, shown: []const u8) void {
         const bytes = @constCast(shown);
+        // The same run at another address (a copy, an arena that moved) is the same document: repoint instead of resetting the caret.
+        if (self.bound and self.editor.buf.len == bytes.len and self.editor.buf.ptr != bytes.ptr) {
+            self.editor.buf = bytes;
+            return;
+        }
         // Re-init only when the model handed over a different run, so the caret and the selection survive a redraw.
         if (!self.bound or self.editor.buf.ptr != bytes.ptr or self.editor.buf.len != bytes.len) {
             self.editor = text_editor.Editor.init(bytes);
@@ -732,11 +738,10 @@ fn onMenuPick(ctx: ?*anyopaque, index: usize) void {
 fn onMenuOpen(ctx: ?*anyopaque) void {
     const field: *Field = @ptrCast(@alignCast(ctx.?));
     if (field.menu.on_open.f) |f| f(field.menu.on_open.ctx);
+    if (!pointInField(field, frame_mod.ptr_x, frame_mod.ptr_y)) return;
     const data = cl.getElementData(cl.getElementId(field.name()));
     if (!data.found) return;
     const bb = data.bounding_box;
-    const inside = frame_mod.ptr_x >= bb.x and frame_mod.ptr_x < bb.x + bb.width and frame_mod.ptr_y >= bb.y and frame_mod.ptr_y < bb.y + bb.height;
-    if (!inside) return;
     const x = frame_mod.ptr_x - bb.x - field.pad_lr.pts() + field.h_scroll;
     const y = frame_mod.ptr_y - bb.y - field.pad.top.pts();
     const at = field.caretOffsetAtPoint(x, y);
@@ -753,19 +758,40 @@ fn onMenuOpen(ctx: ?*anyopaque) void {
     if (field.on_focus.f) |f| f(field.on_focus.ctx);
 }
 
+// The field's box cut down to the viewport of the scroll it lives in: a field taller than its box is only clickable where it SHOWS.
+fn visibleBox(field: *const Field) ?cl.BoundingBox {
+    const data = cl.getElementData(cl.getElementId(field.name()));
+    if (!data.found) return null;
+    const bb = data.bounding_box;
+    const scroll_id = field.scroll_id orelse return bb;
+    const view = cl.getElementData(cl.getElementId(scroll_id));
+    if (!view.found) return bb;
+    const v = view.bounding_box;
+    const x0 = @max(bb.x, v.x);
+    const y0 = @max(bb.y, v.y);
+    const x1 = @min(bb.x + bb.width, v.x + v.width);
+    const y1 = @min(bb.y + bb.height, v.y + v.height);
+    return .{ .x = x0, .y = y0, .width = @max(x1 - x0, 0), .height = @max(y1 - y0, 0) };
+}
+
+// True when (x, y) is on the part of the field the user can actually see.
+fn pointInField(field: *const Field, x: f32, y: f32) bool {
+    const bb = visibleBox(field) orelse return false;
+    return x >= bb.x and x < bb.x + bb.width and y >= bb.y and y < bb.y + bb.height;
+}
+
 // Anchor the caret on the press, extend it while the button stays down, and release the drag when it comes up.
 fn dragSelect(field: *Field) void {
     if (!frame_mod.ptr_down) {
         field.dragging = false;
         return;
     }
+    // Only a press on the VISIBLE field may take the caret: a field taller than its scroll box reaches past the viewport.
+    const began_here = pointInField(field, frame_mod.ptr_press_x, frame_mod.ptr_press_y);
+    if (!field.dragging and !began_here) return;
     const data = cl.getElementData(cl.getElementId(field.name()));
     if (!data.found) return;
     const bb = data.bounding_box;
-    // Only a press that BEGAN inside the field may take the caret, so a drag that wanders in from elsewhere does not steal it.
-    const began_here = frame_mod.ptr_press_x >= bb.x and frame_mod.ptr_press_x <= bb.x + bb.width and
-        frame_mod.ptr_press_y >= bb.y and frame_mod.ptr_press_y <= bb.y + bb.height;
-    if (!field.dragging and !began_here) return;
     // `extend` is false on the anchoring frame (place the caret) and true after it (grow the selection from that anchor).
     const x = frame_mod.ptr_x - bb.x - field.pad_lr.pts() + field.h_scroll;
     const y = frame_mod.ptr_y - bb.y - field.pad.top.pts();
@@ -813,11 +839,14 @@ pub fn textField(field: *Field) void {
     var reveal_pending = false;
     if (field.multiline and input.focused and field.scroll_id != null) {
         const caret_now = @min(input.caret.offset, input.len);
+        // A reveal follows a caret that MOVED while no button was held: a drag belongs to whatever the press grabbed.
         if (field.revealed_caret != caret_now) {
-            scroll_mod.revealAfterLayout(field.scroll_id.?, lineBoxId(name, field.caretLine()));
-            reveal_pending = true;
+            if (!frame_mod.ptr_down) {
+                scroll_mod.revealAfterLayout(field.scroll_id.?, lineBoxId(name, field.caretLine()));
+                reveal_pending = true;
+            }
+            field.revealed_caret = caret_now;
         }
-        field.revealed_caret = caret_now;
     } else {
         field.revealed_caret = null;
     }
@@ -1173,6 +1202,7 @@ fn caretBar(field: *Field, text: []const u8) void {
 // Place the caret from a click, using the field's own box and the frame's pointer.
 fn onFieldClick(ctx: ?*anyopaque) void {
     const field: *Field = @ptrCast(@alignCast(ctx.?));
+    if (!pointInField(field, frame_mod.ptr_x, frame_mod.ptr_y)) return;
     const data = cl.getElementData(cl.getElementId(field.name()));
     if (!data.found) return;
     // The clip slid the text left by `h_scroll`, so the point is measured from where the text now starts.

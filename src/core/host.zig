@@ -196,8 +196,8 @@ pub const Host = struct {
         const thumb_moved = scroll_mod.moveThumb(x, y);
         if (button == dispatch.BTN_LEFT and !pressed) scroll_mod.endThumbGrab();
         if (thumb_moved) return;
-        // Slider-style drag: a press-drag nudges the scroll container under the pointer 1:1 — unless the press landed on text, or a component owns the drag.
-        if (self.ptr.down and self.ptr.dragging and (x != last_x or y != last_y)) {
+        // Slider-style drag: a press that is HELD and moved nudges the scroll container under the pointer 1:1 — never the press itself.
+        if (!pressed and self.ptr.down and self.ptr.dragging and (x != last_x or y != last_y)) {
             if (!self.drag_selecting_text and !frame_mod.dragClaimed()) scroll_mod.dragScroll(x, y, x - last_x, y - last_y);
             reorder_mod.move(x, y);
         }
