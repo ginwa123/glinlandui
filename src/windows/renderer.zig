@@ -52,6 +52,24 @@ const Segment = extern struct {
 };
 
 const GlyphKey = struct { cp: u21, size: u16 };
+
+// Module-level, like `mac/renderer.zig`'s `attachView`: the window hands itself over before `run()`, and
+// the frame asks whether the last draw went to the GPU. The Renderer instance lives in frame.zig, which
+// the window cannot reach.
+var pending_window: ?*anyopaque = null;
+var last_frame_gpu: bool = false;
+
+/// Hand the window over so the renderer can build its pipeline on the window's own device.
+pub fn attachWindow(win: ?*anyopaque) void {
+    pending_window = win;
+}
+
+/// True when the last frame's pixels reached the screen through D3D11, so the window must NOT blit the
+/// (stale) CPU surface on top of it.
+pub fn drewOnGpu() bool {
+    return last_frame_gpu;
+}
+
 const GlyphSlot = struct { x: u32, y: u32, w: u32, h: u32 };
 const ImageTex = struct { id: u32, w: u32, h: u32 };
 
@@ -119,11 +137,13 @@ pub const Renderer = struct {
 
     pub fn drawCommands(self: *Renderer, commands: []cl.RenderCommand, win_w: i32, win_h: i32) void {
         self.gpu_presented = false;
+        last_frame_gpu = false;
         if (on_windows) {
-            if (self.handle == null and self.window != null and !self.attach_tried) self.attach(self.window);
+            if (self.handle == null and !self.attach_tried) self.attach(self.window orelse pending_window);
             if (self.handle) |h| {
                 if (self.drawGpu(h, commands, win_w, win_h)) {
                     self.gpu_presented = true;
+                    last_frame_gpu = true;
                     return;
                 }
             }

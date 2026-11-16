@@ -2119,6 +2119,17 @@ static int gpuDrawFrame(GlinWinGpu *g, ID3D11RenderTargetView *rtv, UINT w, UINT
                         int seg_count, const float clear[4]) {
     if (g == NULL || rtv == NULL || w == 0 || h == 0) return 0;
     ID3D11DeviceContext_ClearRenderTargetView(g->context, rtv, clear);
+    if (getenv("GLIN_GPU_DEBUG") != NULL) {
+        fprintf(stderr, "gpu: rtv=%p v=%d s=%d sizeofV=%u v0.pos=%.1f,%.1f v0.size=%.1f,%.1f v0.kind=%.1f v0.uv=%.1f,%.1f\n",
+                (void *)rtv, vertex_count, seg_count, (unsigned)sizeof(GlinVertex),
+                verts[0].pos[0], verts[0].pos[1], verts[0].size[0], verts[0].size[1],
+                verts[0].kind, verts[0].local[0], verts[0].local[1]);
+        for (int i = 0; i < seg_count && i < 3; ++i) {
+            fprintf(stderr, "gpu: seg%d start=%d count=%d scissor=%d %d,%d,%d,%d tex=%d\n", i,
+                    segs[i].start, segs[i].count, segs[i].has_scissor, segs[i].sx, segs[i].sy,
+                    segs[i].sw, segs[i].sh, segs[i].texture_id);
+        }
+    }
     if (vertex_count <= 0 || seg_count <= 0) return 1;
 
     if (!gpuEnsureVerts(g, (UINT)vertex_count * (UINT)sizeof(GlinVertex))) return 0;
@@ -2195,9 +2206,13 @@ static int gpuDrawFrame(GlinWinGpu *g, ID3D11RenderTargetView *rtv, UINT w, UINT
             srv = g->img_srv[id];
             smp = g->smp_linear;
         }
-        if (srv == NULL) continue;
-        ID3D11DeviceContext_PSSetShaderResources(g->context, 0, 1, &srv);
-        ID3D11DeviceContext_PSSetSamplers(g->context, 0, 1, &smp);
+        // A missing texture must NOT drop the draw: a frame with no text has no atlas yet, and its
+        // rects still have to appear. Only a glyph or image segment samples, so an unbound slot is
+        // harmless there.
+        if (srv != NULL) {
+            ID3D11DeviceContext_PSSetShaderResources(g->context, 0, 1, &srv);
+            ID3D11DeviceContext_PSSetSamplers(g->context, 0, 1, &smp);
+        }
         ID3D11DeviceContext_Draw(g->context, (UINT)s->count, (UINT)s->start);
     }
 

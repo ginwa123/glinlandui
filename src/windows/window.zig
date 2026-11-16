@@ -8,6 +8,8 @@ const adapter = @import("adapter.zig");
 const input_win = @import("input.zig");
 const present = @import("present.zig");
 const soft = @import("../core/render_software.zig");
+// The backend's own renderer: it owns the D3D11 pipeline and decides per frame whether the GPU drew.
+const renderer = @import("renderer.zig");
 const frame_mod = @import("../core/frame.zig");
 
 // The shim header is plain C by design (see windows/shim.h), so @cImport never has to survive Direct3D's COM macros or typedefs.
@@ -139,6 +141,9 @@ pub const Window = struct {
         self.handle = handle;
         defer self.handle = null;
         defer c.glin_win_window_destroy(handle);
+        // Hand the window over before the first frame; the renderer builds its D3D11 pipeline on this
+        // window's device lazily, exactly as the macOS backend hands over its view.
+        renderer.attachWindow(handle);
 
         // The client area may differ from what was asked for; adopt the real size so the first frame lays out in it.
         var cw: c_int = 0;
@@ -201,6 +206,9 @@ pub const Window = struct {
         // Record the space those boxes were laid out in, so a pointer event that arrives before the next frame translates in it.
         self.layout_w = w;
         self.layout_h = h;
+        // When the renderer drew this frame on the GPU it has already presented it; uploading the CPU
+        // surface now would paint the previous frame back over it.
+        if (renderer.drewOnGpu()) return;
         self.presentFrame();
     }
 
