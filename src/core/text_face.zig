@@ -38,9 +38,11 @@ pub fn font() ?*glyphs.Font {
         return &face.?;
     }
     if (!load_tried) {
-        load_tried = true;
-        // No allocator yet means no `main` has run: stay fontless rather than inventing a heap.
-        if (face_alloc) |a| face = glyphs.Font.loadDefault(a);
+        // Only a real allocator may latch the attempt: a measurement taken before `main` ran must not leave the process fontless for good.
+        if (face_alloc) |a| {
+            load_tried = true;
+            face = glyphs.Font.loadDefault(a);
+        }
     }
     if (face) |*f| return f;
     return null;
