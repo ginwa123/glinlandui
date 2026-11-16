@@ -6,12 +6,14 @@ const prop = @import("../props.zig");
 const render = @import("../render_common.zig");
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
+const erased = @import("../erased.zig");
+const Ctx = erased.Ctx;
 
 /// Image fit re-export (renderer owns the enum + math).
 pub const Fit = render.ImageFit;
 
 /// Click callback: plain fn pointer + opaque ctx (no closures), same shape as button.ClickFn.
-pub const ClickFn = ?*const fn (?*anyopaque) void;
+pub const ClickFn = ?*const fn (Ctx) void;
 
 /// Toolkit-style image props.
 pub const ImageProps = struct {
@@ -108,7 +110,7 @@ test "ImageProps carries neutral defaults" {
     try std.testing.expectEqual(@as(f32, 256), p.max_dim.pts());
     try std.testing.expectEqual(@as(f32, 0), p.radius.pts());
     try std.testing.expect(p.on_click.f == null);
-    try std.testing.expect(p.on_click.ctx == null);
+    try std.testing.expect(p.on_click.ctx.isNone());
 }
 
 test "image_data round-trips path, fit, and max_dim" {
@@ -121,7 +123,7 @@ test "image_data round-trips path, fit, and max_dim" {
     for (cmds) |c| {
         if (c.command_type != .image) continue;
         const ptr = c.render_data.image.image_data orelse continue;
-        const ref: *const render.ImageRef = @ptrCast(@alignCast(ptr));
+        const ref = Ctx.from(ptr).getConst(render.ImageRef);
         try std.testing.expectEqualStrings("/p/b.png", ref.path_ptr[0..ref.path_len]);
         try std.testing.expectEqual(render.ImageFit.contain, ref.fit);
         try std.testing.expectEqual(@as(u16, 512), ref.max_dim);
@@ -145,8 +147,8 @@ const ClickCtx = struct {
     calls: usize = 0,
 };
 
-fn testOnClick(ctx: ?*anyopaque) void {
-    const c: *ClickCtx = @ptrCast(@alignCast(ctx.?));
+fn testOnClick(ctx: Ctx) void {
+    const c = ctx.get(ClickCtx);
     c.calls += 1;
 }
 
@@ -154,7 +156,7 @@ var click_rec = ClickCtx{};
 
 fn declareClickImage() void {
     beginFrame();
-    image(.{ .id = .{ .text = "test-click-image" }, .path = "/p/a.jpg", .w = prop.Size.px(150), .h = prop.Size.px(84), .on_click = .{ .f = testOnClick, .ctx = &click_rec } });
+    image(.{ .id = .{ .text = "test-click-image" }, .path = "/p/a.jpg", .w = prop.Size.px(150), .h = prop.Size.px(84), .on_click = .{ .f = testOnClick, .ctx = Ctx.from(&click_rec) } });
 }
 
 fn declareNoClickImage() void {

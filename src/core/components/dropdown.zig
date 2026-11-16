@@ -8,9 +8,11 @@ const registry = @import("click_registry.zig");
 const list = @import("list.zig");
 const input = @import("input.zig");
 const semantics = @import("../semantics.zig");
+const erased = @import("../erased.zig");
+const Ctx = erased.Ctx;
 
 /// Selection callback: plain fn pointer + opaque ctx (no closures).
-pub const DropdownSelectFn = ?*const fn (?*anyopaque, usize) void;
+pub const DropdownSelectFn = ?*const fn (Ctx, usize) void;
 
 /// Dropdown row kinds: info rows are display-only (search results headers, previews), action rows fire on_select, back rows are rendered without the.
 pub const RowKind = enum {
@@ -255,15 +257,15 @@ test "DropdownProps carries neutral dark defaults + null callbacks" {
     try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.row_bg);
     try std.testing.expectEqual(Color.rgb(0x26, 0x26, 0x26), p.field_bg);
     try std.testing.expect(p.on_select.f == null);
-    try std.testing.expect(p.on_select.ctx == null);
+    try std.testing.expect(p.on_select.ctx.isNone());
 }
 
-const Ctx = struct {
+const RowCtx = struct {
     kinds: []const RowKind,
     fg: Color,
 };
 
-fn renderRow(ctx: Ctx, item: []const u8, index: usize) void {
+fn renderRow(ctx: RowCtx, item: []const u8, index: usize) void {
     const kind: RowKind = if (index < ctx.kinds.len) ctx.kinds[index] else .info;
     cl.text(item, .{
         .font_size = 14,
@@ -291,14 +293,14 @@ const demo_kinds_slice: []const RowKind = &demo_kinds;
 var dd_ctx: input.Field = .{ .id = .{ .text = "test-dd-field" } };
 
 fn declareDropdown() void {
-    dropdown(.{ .field_id = "test-dd-field", .list_id = "test-dd-list", .field = &dd_ctx }, demo_slice, Ctx{
+    dropdown(.{ .field_id = "test-dd-field", .list_id = "test-dd-list", .field = &dd_ctx }, demo_slice, RowCtx{
         .kinds = demo_kinds_slice,
         .fg = Color.rgb(0xe8, 0xe8, 0xe8),
     }, renderRow);
 }
 
 fn declareNoSearch() void {
-    dropdown(.{ .field_id = "test-dd-ns-field", .list_id = "test-dd-ns-list" }, demo_slice, Ctx{
+    dropdown(.{ .field_id = "test-dd-ns-field", .list_id = "test-dd-ns-list" }, demo_slice, RowCtx{
         .kinds = demo_kinds_slice,
         .fg = Color.rgb(0xe8, 0xe8, 0xe8),
     }, renderRow);
@@ -326,8 +328,8 @@ const SelectCtx = struct {
     last: ?usize = null,
 };
 
-fn testOnSelect(ctx: ?*anyopaque, i: usize) void {
-    const c: *SelectCtx = @ptrCast(@alignCast(ctx.?));
+fn testOnSelect(ctx: Ctx, i: usize) void {
+    const c = ctx.get(SelectCtx);
     c.calls += 1;
     c.last = i;
 }
@@ -337,7 +339,7 @@ test "DropdownProps stores on_select/ctx; direct invocation delivers index" {
     const p = DropdownProps{
         .field_id = "f",
         .list_id = "l",
-        .on_select = .{ .f = testOnSelect, .ctx = &c },
+        .on_select = .{ .f = testOnSelect, .ctx = Ctx.from(&c) },
     };
     p.on_select.f.?(p.on_select.ctx, 2);
     try std.testing.expectEqual(@as(usize, 1), c.calls);
@@ -350,8 +352,8 @@ fn declareClickDropdown() void {
     dropdown(.{
         .field_id = "test-dd-click-field",
         .list_id = "test-dd-click-list",
-        .on_select = .{ .f = testOnSelect, .ctx = &click_rec },
-    }, demo_slice, Ctx{
+        .on_select = .{ .f = testOnSelect, .ctx = Ctx.from(&click_rec) },
+    }, demo_slice, RowCtx{
         .kinds = demo_kinds_slice,
         .fg = Color.rgb(0xe8, 0xe8, 0xe8),
     }, renderRow);
@@ -380,28 +382,28 @@ test "dropdown forwards on_select to rows; dispatchClick fires display index" {
 var dd_clicks_a = SelectCtx{};
 var dd_clicks_b = SelectCtx{};
 
-fn onDdClickA(ctx: ?*anyopaque, i: usize) void {
-    const c: *SelectCtx = @ptrCast(@alignCast(ctx.?));
+fn onDdClickA(ctx: Ctx, i: usize) void {
+    const c = ctx.get(SelectCtx);
     c.calls += 1;
     c.last = i;
 }
 
-fn onDdClickB(ctx: ?*anyopaque, i: usize) void {
-    const c: *SelectCtx = @ptrCast(@alignCast(ctx.?));
+fn onDdClickB(ctx: Ctx, i: usize) void {
+    const c = ctx.get(SelectCtx);
     c.calls += 1;
     c.last = i;
 }
 
 fn declareDdClicksPassthrough() void {
     const clicks = [_]registry.RowClick{
-        .{ .on_click = onDdClickA, .ctx = &dd_clicks_a },
-        .{ .on_click = onDdClickB, .ctx = &dd_clicks_b },
+        .{ .on_click = onDdClickA, .ctx = Ctx.from(&dd_clicks_a) },
+        .{ .on_click = onDdClickB, .ctx = Ctx.from(&dd_clicks_b) },
     };
     dropdown(.{
         .field_id = "test-dd-clicks-field",
         .list_id = "test-dd-clicks-list",
         .clicks = &clicks,
-    }, demo_slice[0..2], Ctx{
+    }, demo_slice[0..2], RowCtx{
         .kinds = demo_kinds_slice,
         .fg = Color.rgb(0xe8, 0xe8, 0xe8),
     }, renderRow);
@@ -485,7 +487,7 @@ fn declareOverlayFrame() void {
             .anchor_index = 0,
             .overlay_id = "test-overlay-float",
             .footer = "hint",
-        }, demo_slice[0..2], Ctx{
+        }, demo_slice[0..2], RowCtx{
             .kinds = demo_kinds_slice,
             .fg = Color.rgb(0xe8, 0xe8, 0xe8),
         }, renderRow);
@@ -532,7 +534,7 @@ fn declareTextAnchorFrame() void {
             .overlay = true,
             .anchor_text = "test-text-anchor",
             .overlay_id = "test-text-float",
-        }, demo_slice[0..2], Ctx{
+        }, demo_slice[0..2], RowCtx{
             .kinds = demo_kinds_slice,
             .fg = Color.rgb(0xe8, 0xe8, 0xe8),
         }, renderRow);

@@ -1,6 +1,7 @@
 // The devtool binary: run one of the repository's apps headless and print its component tree, or photograph it.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
+const Ctx = glinlandui.props.Ctx;
 
 const demo = @import("demo_app");
 const calculator = @import("calculator");
@@ -90,7 +91,7 @@ pub fn main(init: std.process.Init) !void {
         defer file.close(io);
         var buf: [8192]u8 = undefined;
         var out = file.writer(io, &buf);
-        try devtools.shoot(gpa, opts, app.ctx, app.root, &out.interface);
+        try devtools.shoot(gpa, opts, Ctx.from(app.ctx), app.root, &out.interface);
         try out.interface.flush();
         std.debug.print("glinlandui-inspect: wrote {s} ({d}x{d}, {s} with the inspector open)\n", .{ path, opts.width, opts.height, spec.name });
         return;
@@ -98,7 +99,7 @@ pub fn main(init: std.process.Init) !void {
 
     var buf: [8192]u8 = undefined;
     var out = std.Io.File.stdout().writer(io, &buf);
-    try devtools.cli.run(gpa, opts, app.ctx, app.root, &out.interface);
+    try devtools.cli.run(gpa, opts, Ctx.from(app.ctx), app.root, &out.interface);
     try out.interface.flush();
 }
 

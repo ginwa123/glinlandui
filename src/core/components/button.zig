@@ -6,9 +6,11 @@ const Color = @import("../color.zig").Color;
 const prop = @import("../props.zig");
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
+const erased = @import("../erased.zig");
+const Ctx = erased.Ctx;
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
-pub const ClickFn = ?*const fn (?*anyopaque) void;
+pub const ClickFn = ?*const fn (Ctx) void;
 
 /// Toolkit-style button props: a label that carries its own type, a size per axis, padding, a border, a radius, and the tones a pointer can put it in.
 pub const ButtonProps = struct {
@@ -78,8 +80,8 @@ const ClickCtx = struct {
     calls: usize = 0,
 };
 
-fn testOnClick(ctx: ?*anyopaque) void {
-    const c: *ClickCtx = @ptrCast(@alignCast(ctx.?));
+fn testOnClick(ctx: Ctx) void {
+    const c = ctx.get(ClickCtx);
     c.calls += 1;
 }
 
@@ -90,7 +92,7 @@ fn declareButton() void {
 }
 
 fn declareClickButton() void {
-    button(.{ .id = .{ .text = "test-click-button" }, .label = .{ .text = "OK" }, .on_click = .{ .f = testOnClick, .ctx = &click_rec } });
+    button(.{ .id = .{ .text = "test-click-button" }, .label = .{ .text = "OK" }, .on_click = .{ .f = testOnClick, .ctx = Ctx.from(&click_rec) } });
 }
 
 fn declareNoClickButton() void {
@@ -98,7 +100,7 @@ fn declareNoClickButton() void {
 }
 
 fn declareDisabledButton() void {
-    button(.{ .id = .{ .text = "test-disabled-button" }, .label = .{ .text = "OK" }, .disabled = true, .on_click = .{ .f = testOnClick, .ctx = &click_rec } });
+    button(.{ .id = .{ .text = "test-disabled-button" }, .label = .{ .text = "OK" }, .disabled = true, .on_click = .{ .f = testOnClick, .ctx = Ctx.from(&click_rec) } });
 }
 
 fn declareFixedButton() void {
@@ -157,14 +159,14 @@ test "ButtonProps carries neutral dark defaults, and needs only an id" {
     try std.testing.expectEqual(@as(f32, 6), p.pad.top.pts());
     try std.testing.expectEqual(@as(f32, 12), p.pad.left.pts());
     try std.testing.expect(p.on_click.f == null);
-    try std.testing.expect(p.on_click.ctx == null);
+    try std.testing.expect(p.on_click.ctx.isNone());
 }
 
 test "ButtonProps stores on_click/ctx; direct invocation fires" {
     var c = ClickCtx{};
-    const p = ButtonProps{ .id = .{ .text = "x" }, .label = .{ .text = "y" }, .on_click = .{ .f = testOnClick, .ctx = &c } };
+    const p = ButtonProps{ .id = .{ .text = "x" }, .label = .{ .text = "y" }, .on_click = .{ .f = testOnClick, .ctx = Ctx.from(&c) } };
     try std.testing.expect(p.on_click.f != null);
-    try std.testing.expect(p.on_click.ctx != null);
+    try std.testing.expect(!p.on_click.ctx.isNone());
     p.on_click.f.?(p.on_click.ctx);
     try std.testing.expectEqual(@as(usize, 1), c.calls);
 }

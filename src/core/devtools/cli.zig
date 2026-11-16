@@ -6,6 +6,8 @@ const testing = @import("../testing/root.zig");
 const finders = @import("../testing/finders.zig");
 const dispatch = @import("../components/dispatch.zig");
 const snapshot_mod = @import("snapshot.zig");
+const erased = @import("../erased.zig");
+const Ctx = erased.Ctx;
 
 // How many `--do` actions one run takes, in order.
 pub const max_actions = 16;
@@ -206,7 +208,7 @@ pub fn parsePoint(text: []const u8) ?cl.Vector2 {
 pub fn run(
     alloc: std.mem.Allocator,
     opts: Options,
-    ctx: ?*anyopaque,
+    ctx: Ctx,
     root_fn: host_mod.RootFn,
     out: *std.Io.Writer,
 ) !void {
@@ -468,7 +470,7 @@ const ActApp = struct {
     on: bool = false,
     clicks: u32 = 0,
 
-    fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
+    fn root(ctx: Ctx, _: u32, _: u32) void {
         components.box_mod.box(.{
             .id = .{ .text = "act.root" },
             .direction = .column,
@@ -477,29 +479,29 @@ const ActApp = struct {
         }, ctx, children);
     }
 
-    fn children(ctx: ?*anyopaque) void {
-        const self: *ActApp = @ptrCast(@alignCast(ctx.?));
+    fn children(ctx: Ctx) void {
+        const self = ctx.get(ActApp);
         components.toggle_mod.toggle(.{
             .id = .{ .text = "act.toggle" },
             .on = self.on,
-            .on_click = .{ .f = onToggle, .ctx = self },
+            .on_click = .{ .f = onToggle, .ctx = Ctx.from(self) },
         });
         components.button_mod.button(.{
             .id = .{ .text = "act.button" },
             .label = .{ .text = "Go" },
             .w = .{ .fixed = 80 },
             .h = .{ .fixed = 30 },
-            .on_click = .{ .f = onButton, .ctx = self },
+            .on_click = .{ .f = onButton, .ctx = Ctx.from(self) },
         });
     }
 
-    fn onToggle(ctx: ?*anyopaque) void {
-        const self: *ActApp = @ptrCast(@alignCast(ctx.?));
+    fn onToggle(ctx: Ctx) void {
+        const self = ctx.get(ActApp);
         self.on = !self.on;
     }
 
-    fn onButton(ctx: ?*anyopaque) void {
-        const self: *ActApp = @ptrCast(@alignCast(ctx.?));
+    fn onButton(ctx: Ctx) void {
+        const self = ctx.get(ActApp);
         self.clicks += 1;
     }
 };
@@ -507,7 +509,7 @@ const ActApp = struct {
 fn runInto(alloc: std.mem.Allocator, argv: []const []const u8, app: *ActApp, out: []u8) ![]const u8 {
     const opts = parse(argv);
     var w = std.Io.Writer.fixed(out);
-    try run(alloc, opts, app, ActApp.root, &w);
+    try run(alloc, opts, Ctx.from(app), ActApp.root, &w);
     return w.buffered();
 }
 

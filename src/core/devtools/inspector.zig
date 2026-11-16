@@ -8,6 +8,8 @@ const input_mod = @import("../components/input.zig");
 const semantics = @import("../semantics.zig");
 const prop = @import("../props.zig");
 const snapshot_mod = @import("snapshot.zig");
+const erased = @import("../erased.zig");
+const Ctx = erased.Ctx;
 
 const Snapshot = snapshot_mod.Snapshot;
 
@@ -411,7 +413,7 @@ pub const Inspector = struct {
             .background_color = Color.rgba(0, 0, 0, 0).toClay(),
         })({});
         // One step under the window's own controls, so an armed picker never makes the panel unusable.
-        registry.registerZCursor(pickCatcherId(), onPickCatcher, self, 0, hit_z - 2, .pointer);
+        registry.registerZCursor(pickCatcherId(), onPickCatcher, Ctx.from(self), 0, hit_z - 2, .pointer);
     }
 
     fn declareMenu(self: *Inspector, at: cl.Vector2) void {
@@ -429,7 +431,7 @@ pub const Inspector = struct {
             .layout = .{ .sizing = .{ .w = .fixed(win_w), .h = .fixed(win_h) } },
             .background_color = Color.rgba(0, 0, 0, 0).toClay(),
         })({});
-        registry.registerZCursor(backdropId(), onBackdrop, self, 0, hit_z - 1, .default);
+        registry.registerZCursor(backdropId(), onBackdrop, Ctx.from(self), 0, hit_z - 1, .default);
 
         cl.UI()(.{
             .id = menuId(),
@@ -447,7 +449,7 @@ pub const Inspector = struct {
             cl.text("Inspect element", .{ .font_size = 13, .color = fg.toClay() });
             cl.text(pickedLine(self), .{ .font_size = 11, .color = dim.toClay() });
         });
-        registry.registerZCursor(menuId(), onMenuInspect, self, 0, hit_z, .pointer);
+        registry.registerZCursor(menuId(), onMenuInspect, Ctx.from(self), 0, hit_z, .pointer);
     }
 
     fn declarePanel(self: *Inspector) void {
@@ -475,7 +477,7 @@ pub const Inspector = struct {
             self.declareDetail();
         });
         // The panel swallows clicks on its own face, one step under the rows, so a control behind it never fires and the rows still answer.
-        registry.registerZCursor(panelId(), swallow, self, 0, hit_z - 1, .default);
+        registry.registerZCursor(panelId(), swallow, Ctx.from(self), 0, hit_z - 1, .default);
     }
 
     fn declareHeader(self: *Inspector) void {
@@ -520,8 +522,8 @@ pub const Inspector = struct {
                 cl.text("x", .{ .font_size = 12, .color = fg.toClay() });
             });
         });
-        registry.registerZCursor(closeId(), onClose, self, 0, hit_z, .pointer);
-        registry.registerZCursor(pickButtonId(), onPickButton, self, 0, hit_z, .pointer);
+        registry.registerZCursor(closeId(), onClose, Ctx.from(self), 0, hit_z, .pointer);
+        registry.registerZCursor(pickButtonId(), onPickButton, Ctx.from(self), 0, hit_z, .pointer);
     }
 
     // The search bar: a real field and, while a query is up, how many nodes it names.
@@ -529,7 +531,7 @@ pub const Inspector = struct {
         // The field answers ABOVE the panel's own click swallow, or every click on it would be eaten by the panel.
         self.search.click_z = hit_z;
         // Enter walks the hits; the handler refuses the draft, so submitting never empties the box it was typed in.
-        self.search.on_submit = .{ .f = onSearchSubmit, .ctx = self };
+        self.search.on_submit = .{ .f = onSearchSubmit, .ctx = Ctx.from(self) };
         cl.UI()(.{
             .id = searchBarId(),
             .layout = .{
@@ -596,7 +598,7 @@ pub const Inspector = struct {
             cl.text(tag, .{ .font_size = 12, .color = (if (is_selected) fg else if (row.matched) accent else text).toClay() });
             cl.text(@tagName(item.role), .{ .font_size = 10, .color = dim.toClay() });
         });
-        registry.registerZCursor(rowId(row.node), onRow, self, index, hit_z, .pointer);
+        registry.registerZCursor(rowId(row.node), onRow, Ctx.from(self), index, hit_z, .pointer);
     }
 
     fn declareDetail(self: *Inspector) void {
@@ -681,7 +683,7 @@ pub const Inspector = struct {
         })({
             cl.text(line.text, .{ .font_size = line.size.whole(), .color = line.color.toClay() });
         });
-        registry.registerZCursor(detailLineId(slot), onDetailLine, self, slot, hit_z, .pointer);
+        registry.registerZCursor(detailLineId(slot), onDetailLine, Ctx.from(self), slot, hit_z, .pointer);
     }
 
     // Click a detail line: the line's value goes to the clipboard, and the line keeps the mark.
@@ -867,24 +869,24 @@ fn spacer(id: cl.ElementId, h: f32) void {
     })({});
 }
 
-fn onBackdrop(ctx: ?*anyopaque, _: usize) void {
-    const self: *Inspector = @ptrCast(@alignCast(ctx.?));
+fn onBackdrop(ctx: Ctx, _: usize) void {
+    const self = ctx.get(Inspector);
     self.menu = null;
 }
 
-fn onMenuInspect(ctx: ?*anyopaque, _: usize) void {
-    const self: *Inspector = @ptrCast(@alignCast(ctx.?));
+fn onMenuInspect(ctx: Ctx, _: usize) void {
+    const self = ctx.get(Inspector);
     self.openOnPicked();
 }
 
-fn onClose(ctx: ?*anyopaque, _: usize) void {
-    const self: *Inspector = @ptrCast(@alignCast(ctx.?));
+fn onClose(ctx: Ctx, _: usize) void {
+    const self = ctx.get(Inspector);
     self.close();
 }
 
 // The header's pick button: arm the picker, or stand it down when it is already armed.
-fn onPickButton(ctx: ?*anyopaque, _: usize) void {
-    const self: *Inspector = @ptrCast(@alignCast(ctx.?));
+fn onPickButton(ctx: Ctx, _: usize) void {
+    const self = ctx.get(Inspector);
     if (self.picking) {
         self.picking = false;
         self.hover_index = null;
@@ -893,30 +895,30 @@ fn onPickButton(ctx: ?*anyopaque, _: usize) void {
     self.startPicking();
 }
 
-fn onPickCatcher(ctx: ?*anyopaque, _: usize) void {
-    const self: *Inspector = @ptrCast(@alignCast(ctx.?));
+fn onPickCatcher(ctx: Ctx, _: usize) void {
+    const self = ctx.get(Inspector);
     self.takePick();
 }
 
 // Enter in the search box: step to the next hit. False, because the draft IS the query and the box must keep it.
-fn onSearchSubmit(ctx: ?*anyopaque, _: []const u8) bool {
-    const self: *Inspector = @ptrCast(@alignCast(ctx.?));
+fn onSearchSubmit(ctx: Ctx, _: []const u8) bool {
+    const self = ctx.get(Inspector);
     self.stepHit();
     return false;
 }
 
-fn onDetailLine(ctx: ?*anyopaque, slot: usize) void {
-    const self: *Inspector = @ptrCast(@alignCast(ctx.?));
+fn onDetailLine(ctx: Ctx, slot: usize) void {
+    const self = ctx.get(Inspector);
     self.copyLine(slot);
 }
 
-fn onRow(ctx: ?*anyopaque, index: usize) void {
-    const self: *Inspector = @ptrCast(@alignCast(ctx.?));
+fn onRow(ctx: Ctx, index: usize) void {
+    const self = ctx.get(Inspector);
     const row = if (index < self.row_count) self.rows[index] else return;
     self.clickRow(row.node);
 }
 
-fn swallow(_: ?*anyopaque, _: usize) void {}
+fn swallow(_: Ctx, _: usize) void {}
 
 // ---- Tests: the whole flow, through a real Host frame ----
 
@@ -931,7 +933,7 @@ const TestApp = struct {
     // Extra buttons under the first, so a test can overflow the panel and watch a hit scroll into view.
     extra: usize = 0,
 
-    fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
+    fn root(ctx: Ctx, _: u32, _: u32) void {
         box_mod.box(.{
             .id = .{ .text = "dev.root" },
             .src = @src(),
@@ -941,15 +943,15 @@ const TestApp = struct {
         }, ctx, children);
     }
 
-    fn children(ctx: ?*anyopaque) void {
-        const self: *TestApp = @ptrCast(@alignCast(ctx.?));
+    fn children(ctx: Ctx) void {
+        const self = ctx.get(TestApp);
         button_mod.button(.{
             .id = .{ .text = "dev.btn" },
             .label = .{ .text = "OK" },
             .w = .{ .fixed = 120 },
             .h = .{ .fixed = 40 },
             .pad = .{},
-            .on_click = .{ .f = onClick, .ctx = self },
+            .on_click = .{ .f = onClick, .ctx = Ctx.from(self) },
         });
         var i: usize = 0;
         while (i < self.extra) : (i += 1) {
@@ -963,15 +965,15 @@ const TestApp = struct {
         }
     }
 
-    fn onClick(ctx: ?*anyopaque) void {
-        const self: *TestApp = @ptrCast(@alignCast(ctx.?));
+    fn onClick(ctx: Ctx) void {
+        const self = ctx.get(TestApp);
         self.clicks += 1;
     }
 };
 
 // The frame probe: the ids of the rectangles one frame actually emitted, which is the only honest "is it on screen" answer.
-fn captureRects(user_data: ?*anyopaque, commands: []const cl.RenderCommand, _: u32, _: u32) void {
-    const self: *Harness = @ptrCast(@alignCast(user_data.?));
+fn captureRects(user_data: Ctx, commands: []const cl.RenderCommand, _: u32, _: u32) void {
+    const self = user_data.get(Harness);
     self.rect_len = 0;
     for (commands) |cmd| {
         if (cmd.command_type != .rectangle) continue;
@@ -991,7 +993,7 @@ const Harness = struct {
 
     fn init(self: *Harness) !void {
         // page_allocator, matching every other Host test: the Clay arena is process-lifetime by design.
-        self.host = try host_mod.Host.init(std.heap.page_allocator, &self.app, TestApp.root);
+        self.host = try host_mod.Host.init(std.heap.page_allocator, Ctx.from(&self.app), TestApp.root);
         self.host.inspect = &self.insp;
     }
 
@@ -1000,7 +1002,7 @@ const Harness = struct {
         var options = frame_mod.FrameOptions{
             .resolve_semantics = true,
             .probe = captureRects,
-            .probe_user_data = @ptrCast(self),
+            .probe_user_data = Ctx.from(self),
         };
         _ = self.host.frameWithOptions(w, h, &options);
     }
@@ -1434,12 +1436,12 @@ test "enter walks the hits and scrolls a far one into view" {
 var clip_buf: [512]u8 = undefined;
 var clip_len: usize = 0;
 
-fn fakeClipWrite(_: ?*anyopaque, text: []const u8) void {
+fn fakeClipWrite(_: Ctx, text: []const u8) void {
     clip_len = @min(text.len, clip_buf.len);
     @memcpy(clip_buf[0..clip_len], text[0..clip_len]);
 }
 
-fn fakeClipRead(_: ?*anyopaque, buf: []u8) []const u8 {
+fn fakeClipRead(_: Ctx, buf: []u8) []const u8 {
     const n = @min(clip_len, buf.len);
     @memcpy(buf[0..n], clip_buf[0..n]);
     return buf[0..n];

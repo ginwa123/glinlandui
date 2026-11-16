@@ -6,9 +6,11 @@ const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
+const erased = @import("../erased.zig");
+const Ctx = erased.Ctx;
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
-pub const ClickFn = ?*const fn (?*anyopaque) void;
+pub const ClickFn = ?*const fn (Ctx) void;
 
 /// Reserved Clay IDI offsets under .ID(props.id) for inner parts.
 pub const track_index: u32 = 1;
@@ -152,7 +154,7 @@ test "SliderProps carries neutral defaults" {
     try std.testing.expect(!p.disabled);
     try std.testing.expectEqual(Color.rgb(0x2a, 0x2a, 0x2a), p.disabled_bg);
     try std.testing.expect(p.on_change.f == null);
-    try std.testing.expect(p.on_change.ctx == null);
+    try std.testing.expect(p.on_change.ctx.isNone());
 }
 
 test "fracOf clamps below min and above max, guards zero range" {
@@ -210,15 +212,15 @@ const ClickCtx = struct {
     calls: usize = 0,
 };
 
-fn testOnChange(ctx: ?*anyopaque) void {
-    const c: *ClickCtx = @ptrCast(@alignCast(ctx.?));
+fn testOnChange(ctx: Ctx) void {
+    const c = ctx.get(ClickCtx);
     c.calls += 1;
 }
 
 var click_rec = ClickCtx{};
 
 fn declareClickSlider() void {
-    slider(.{ .id = .{ .text = "test-click-slider" }, .on_change = .{ .f = testOnChange, .ctx = &click_rec } });
+    slider(.{ .id = .{ .text = "test-click-slider" }, .on_change = .{ .f = testOnChange, .ctx = Ctx.from(&click_rec) } });
 }
 
 fn declareNoClickSlider() void {
@@ -260,7 +262,7 @@ test "slider self-registers on_change; dispatchClick at center fires once" {
 }
 
 fn declareDisabledSlider() void {
-    slider(.{ .id = .{ .text = "test-disabled-slider" }, .disabled = true, .on_change = .{ .f = testOnChange, .ctx = &click_rec } });
+    slider(.{ .id = .{ .text = "test-disabled-slider" }, .disabled = true, .on_change = .{ .f = testOnChange, .ctx = Ctx.from(&click_rec) } });
 }
 
 test "disabled slider uses disabled_bg and registers no click" {

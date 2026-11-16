@@ -14,6 +14,8 @@ const text_editor = @import("../text_editor.zig");
 const text_backend = @import("../text_backend.zig");
 const semantics = @import("../semantics.zig");
 const audit = @import("../audit.zig");
+const erased = @import("../erased.zig");
+const Ctx = erased.Ctx;
 
 // Raw evdev keycode → printable ASCII under the US layout.
 pub fn keyChar(evdev: u32, shift: bool) ?u8 {
@@ -544,10 +546,10 @@ pub const Field = struct {
 };
 
 // A field reports an edit: `(ctx, new_text)`.
-pub const ChangeFn = ?*const fn (?*anyopaque, []const u8) void;
+pub const ChangeFn = ?*const fn (Ctx, []const u8) void;
 
 // A field asks whether Enter was taken: `(ctx, draft)`, true = taken, and then the field clears.
-pub const SubmitFn = ?*const fn (?*anyopaque, []const u8) bool;
+pub const SubmitFn = ?*const fn (Ctx, []const u8) bool;
 
 // How much draft a field owns. An app that needs more binds a bigger buffer with `bindTo`.
 pub const max_field_len: usize = 256;
@@ -557,9 +559,9 @@ pub const paste_max: usize = 64 * 1024;
 
 // Where a field's copy, cut and paste go: the system clipboard by default, a scripted one in a test.
 pub const Clipboard = struct {
-    ctx: ?*anyopaque = null,
-    read_fn: *const fn (?*anyopaque, []u8) []const u8 = platformRead,
-    write_fn: *const fn (?*anyopaque, []const u8) void = platformWrite,
+    ctx: Ctx = Ctx.none,
+    read_fn: *const fn (Ctx, []u8) []const u8 = platformRead,
+    write_fn: *const fn (Ctx, []const u8) void = platformWrite,
 
     // The pasteboard's text, copied into `buf`; empty when it holds no text.
     pub fn read(self: Clipboard, buf: []u8) []const u8 {
@@ -572,11 +574,11 @@ pub const Clipboard = struct {
     }
 };
 
-fn platformRead(_: ?*anyopaque, buf: []u8) []const u8 {
+fn platformRead(_: Ctx, buf: []u8) []const u8 {
     return @import("../select.zig").Clipboard.read(buf);
 }
 
-fn platformWrite(_: ?*anyopaque, text: []const u8) void {
+fn platformWrite(_: Ctx, text: []const u8) void {
     @import("../select.zig").Clipboard.write(text);
 }
 
@@ -710,14 +712,14 @@ fn fieldMenu(field: *Field) prop.ContextMenu {
     var menu = field.menu;
     menu.items = field.menu_items[0..n];
     menu.disabled = field.menu_disabled[0..n];
-    menu.on_select = .{ .f = onMenuPick, .ctx = field };
-    menu.on_open = .{ .f = onMenuOpen, .ctx = field };
+    menu.on_select = .{ .f = onMenuPick, .ctx = Ctx.from(field) };
+    menu.on_open = .{ .f = onMenuOpen, .ctx = Ctx.from(field) };
     return menu;
 }
 
 // A row was picked: the field's four are its own, and anything after them is the app's, with the app's own index.
-fn onMenuPick(ctx: ?*anyopaque, index: usize) void {
-    const field: *Field = @ptrCast(@alignCast(ctx.?));
+fn onMenuPick(ctx: Ctx, index: usize) void {
+    const field = ctx.get(Field);
     switch (index) {
         0 => {
             if (!field.readonly) _ = cutSelection(field);
@@ -735,8 +737,8 @@ fn onMenuPick(ctx: ?*anyopaque, index: usize) void {
 }
 
 // A right click takes the caret where it landed, and keeps a selection it landed INSIDE, so Copy has something to copy.
-fn onMenuOpen(ctx: ?*anyopaque) void {
-    const field: *Field = @ptrCast(@alignCast(ctx.?));
+fn onMenuOpen(ctx: Ctx) void {
+    const field = ctx.get(Field);
     if (field.menu.on_open.f) |f| f(field.menu.on_open.ctx);
     if (!pointInField(field, frame_mod.ptr_x, frame_mod.ptr_y)) return;
     const data = cl.getElementData(cl.getElementId(field.name()));
@@ -895,7 +897,7 @@ pub fn textField(field: *Field) void {
             .actions = .{ .set_text = true },
         });
     }
-    registry.registerClickDoubleCursorZ(field.id.clay(), onFieldClick, onFieldDoubleClick, field, .text, field.click_z);
+    registry.registerClickDoubleCursorZ(field.id.clay(), onFieldClick, onFieldDoubleClick, Ctx.from(field), .text, field.click_z);
     // Every field offers its own card, so an input is never a place where a right click does nothing.
     if (!field.disabled and name.len > 0) context_menu.register(field.id.clay(), fieldMenu(field), field.click_z);
 }
@@ -1170,8 +1172,8 @@ fn caretBarInLine(field: *Field, name: []const u8, index: usize, line: []const u
 }
 
 // Select the word under a double click, which is what every text field does.
-fn onFieldDoubleClick(ctx: ?*anyopaque) void {
-    const field: *Field = @ptrCast(@alignCast(ctx.?));
+fn onFieldDoubleClick(ctx: Ctx) void {
+    const field = ctx.get(Field);
     const data = cl.getElementData(cl.getElementId(field.name()));
     if (!data.found) return;
     // The clip slid the text left by `h_scroll`, so the point is measured from where the text now starts.
@@ -1200,8 +1202,8 @@ fn caretBar(field: *Field, text: []const u8) void {
 }
 
 // Place the caret from a click, using the field's own box and the frame's pointer.
-fn onFieldClick(ctx: ?*anyopaque) void {
-    const field: *Field = @ptrCast(@alignCast(ctx.?));
+fn onFieldClick(ctx: Ctx) void {
+    const field = ctx.get(Field);
     if (!pointInField(field, frame_mod.ptr_x, frame_mod.ptr_y)) return;
     const data = cl.getElementData(cl.getElementId(field.name()));
     if (!data.found) return;
@@ -1547,13 +1549,13 @@ var submit_taken: bool = true;
 var submit_buf: [max_field_len]u8 = undefined;
 var submit_len: usize = 0;
 
-fn onTestChange(_: ?*anyopaque, text: []const u8) void {
+fn onTestChange(_: Ctx, text: []const u8) void {
     report_count += 1;
     report_len = @min(text.len, report_buf.len);
     @memcpy(report_buf[0..report_len], text[0..report_len]);
 }
 
-fn onTestSubmit(_: ?*anyopaque, text: []const u8) bool {
+fn onTestSubmit(_: Ctx, text: []const u8) bool {
     submit_len = @min(text.len, submit_buf.len);
     @memcpy(submit_buf[0..submit_len], text[0..submit_len]);
     return submit_taken;
@@ -1652,7 +1654,7 @@ test "Enter in a multiline field starts a new line, and the caret goes onto it" 
 var clip_out: [256]u8 = undefined;
 var clip_out_len: usize = 0;
 
-fn clipCapture(_: ?*anyopaque, text: []const u8) void {
+fn clipCapture(_: Ctx, text: []const u8) void {
     clip_out_len = @min(text.len, clip_out.len);
     @memcpy(clip_out[0..clip_out_len], text[0..clip_out_len]);
 }
@@ -1761,13 +1763,13 @@ test "a click in a multiline field lands on the line and column under the pointe
 var clip_buf: [max_field_len]u8 = undefined;
 var clip_len: usize = 0;
 
-fn fakeClipRead(_: ?*anyopaque, buf: []u8) []const u8 {
+fn fakeClipRead(_: Ctx, buf: []u8) []const u8 {
     const n = @min(clip_len, buf.len);
     @memcpy(buf[0..n], clip_buf[0..n]);
     return buf[0..n];
 }
 
-fn fakeClipWrite(_: ?*anyopaque, text: []const u8) void {
+fn fakeClipWrite(_: Ctx, text: []const u8) void {
     clip_len = @min(text.len, clip_buf.len);
     @memcpy(clip_buf[0..clip_len], text[0..clip_len]);
 }
@@ -1814,7 +1816,7 @@ test "Cmd+V pastes too, and replaces the selection it lands on" {
     try startField("abcdef");
     test_field.clipboard = fakeClipboard();
     // Seed the pasteboard the way a copy from another app would.
-    fakeClipWrite(null, "XY");
+    fakeClipWrite(Ctx.none, "XY");
     selectRange(&test_field, 2, 4);
     try std.testing.expect(dispatchKey(.{ .super = true }, text_editor.KEY_V));
     try std.testing.expectEqualStrings("abXYef", test_field.text());
@@ -1823,7 +1825,7 @@ test "Cmd+V pastes too, and replaces the selection it lands on" {
 test "a copy with nothing selected leaves the pasteboard alone" {
     try startField("abc");
     test_field.clipboard = fakeClipboard();
-    fakeClipWrite(null, "kept");
+    fakeClipWrite(Ctx.none, "kept");
     try std.testing.expect(!dispatchKey(.{ .ctrl = true }, text_editor.KEY_C));
     try std.testing.expectEqualStrings("kept", clip_buf[0..clip_len]);
     // Paste of an empty pasteboard is refused rather than inserting nothing.
@@ -1837,7 +1839,7 @@ test "a paste with newlines lands as lines, and copying across lines keeps them"
     try startField("");
     test_field.multiline = true;
     test_field.clipboard = fakeClipboard();
-    fakeClipWrite(null, "one\ntwo");
+    fakeClipWrite(Ctx.none, "one\ntwo");
     try std.testing.expect(dispatchKey(.{ .ctrl = true }, text_editor.KEY_V));
     try std.testing.expectEqualStrings("one\ntwo", test_field.text());
     try std.testing.expectEqual(@as(usize, 2), test_field.editor.lineCount());
@@ -2467,8 +2469,8 @@ test "a selection in a multiline field leaves every line row where it was" {
 const menu_app_rows = [_][]const u8{ "Clear", "Copy as cURL" };
 var menu_app_pick: struct { calls: usize = 0, index: usize = 0 } = .{};
 
-fn onMenuAppRow(ctx: ?*anyopaque, index: usize) void {
-    const c: *@TypeOf(menu_app_pick) = @ptrCast(@alignCast(ctx.?));
+fn onMenuAppRow(ctx: Ctx, index: usize) void {
+    const c = ctx.get(@TypeOf(menu_app_pick));
     c.calls += 1;
     c.index = index;
 }
@@ -2507,7 +2509,7 @@ fn menuField(value: []const u8, readonly: bool) void {
         .id = .{ .text = "test-field" },
         .value = value,
         .readonly = readonly,
-        .menu = .{ .items = &menu_app_rows, .on_select = .{ .f = onMenuAppRow, .ctx = &menu_app_pick } },
+        .menu = .{ .items = &menu_app_rows, .on_select = .{ .f = onMenuAppRow, .ctx = Ctx.from(&menu_app_pick) } },
     };
     test_field.bind();
     test_field.clipboard = fakeClipboard();

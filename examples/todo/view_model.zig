@@ -3,6 +3,7 @@
 // Every public function here is an INTENT the view may raise: it never draws, never reads a widget, and never knows a window exists.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
+const Ctx = glinlandui.props.Ctx;
 const input_mod = glinlandui.components.input;
 const state_mod = @import("state.zig");
 
@@ -45,8 +46,8 @@ pub const TodoViewModel = struct {
             .pad = glinlandui.props.Pad.axes(8, 10),
             .border = .{ .width = .{ .px = 1 }, .color = t.colors.divider },
             .w = .{ .clamp = .{ .min = 120, .max = 640, .grow = true } },
-            .on_change = .{ .f = onDraft, .ctx = self },
-            .on_submit = .{ .f = onSubmit, .ctx = self },
+            .on_change = glinlandui.props.Change.on(self, onDraft),
+            .on_submit = glinlandui.props.Submit.on(self, onSubmit),
         };
         // The editor points at this field's own buffer, which is stable now that the field is where it will stay.
         self.field.bind();
@@ -58,14 +59,12 @@ pub const TodoViewModel = struct {
     }
 
     // `onValueChange = vm::onInputChange`, in the shape the widget calls it.
-    fn onDraft(raw: ?*anyopaque, text: []const u8) void {
-        const self: *TodoViewModel = @ptrCast(@alignCast(raw.?));
+    fn onDraft(self: *TodoViewModel, text: []const u8) void {
         self.onInputChange(text);
     }
 
     // `KeyboardActions(onDone = { vm.add(field.text()) })`: true = the intent took the draft, so the field clears itself.
-    fn onSubmit(raw: ?*anyopaque, text: []const u8) bool {
-        const self: *TodoViewModel = @ptrCast(@alignCast(raw.?));
+    fn onSubmit(self: *TodoViewModel, text: []const u8) bool {
         return self.add(text);
     }
 

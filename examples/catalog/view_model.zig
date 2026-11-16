@@ -1,6 +1,7 @@
 // The ViewModel and the only writer: every public function here is an intent, and it knows nothing of a window.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
+const Ctx = glinlandui.props.Ctx;
 const frame = glinlandui.frame;
 const input_mod = glinlandui.components.input;
 const state_mod = @import("state.zig");
@@ -47,7 +48,7 @@ pub const CatalogViewModel = struct {
             .sel_bg = glinlandui.theme.selected,
             .caret_fg = t.colors.primary,
             .border = .{ .width = .{ .px = 1 }, .color = t.colors.divider },
-            .on_change = .{ .f = onDraft, .ctx = self },
+            .on_change = glinlandui.props.Change.on(self, onDraft),
         };
         self.field.bind();
 
@@ -56,7 +57,7 @@ pub const CatalogViewModel = struct {
             .id = .{ .text = dd_field_id },
             .sel_bg = glinlandui.theme.selected,
             .caret_fg = t.colors.primary,
-            .on_change = .{ .f = onFilter, .ctx = self },
+            .on_change = glinlandui.props.Change.on(self, onFilter),
         };
         self.dd_field.bind();
 
@@ -80,13 +81,11 @@ pub const CatalogViewModel = struct {
     }
 
     // The field reports an edit as `(ctx, text)`, so the widget's shape and the intent's shape meet here.
-    fn onDraft(raw: ?*anyopaque, text: []const u8) void {
-        const self: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
+    fn onDraft(self: *CatalogViewModel, text: []const u8) void {
         self.setDraft(text);
     }
 
-    fn onFilter(raw: ?*anyopaque, text: []const u8) void {
-        const self: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
+    fn onFilter(self: *CatalogViewModel, text: []const u8) void {
         self.setFilter(text);
     }
 

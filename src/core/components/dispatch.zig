@@ -6,6 +6,8 @@ const button = @import("button.zig");
 const input = @import("input.zig");
 const registry = @import("click_registry.zig");
 const frame_mod = @import("../frame.zig");
+const erased = @import("../erased.zig");
+const Ctx = erased.Ctx;
 
 /// Linux BTN_LEFT (0x110): the only button that dispatches clicks.
 pub const BTN_LEFT: u32 = 272;
@@ -19,9 +21,9 @@ pub const view_cap: usize = 8;
 
 /// One renderable sub-view: `active` gates, `show` declares (receives the owner's close-box props so headers stay uniform).
 pub const ViewEntry = struct {
-    active: *const fn (?*anyopaque) bool,
-    show: *const fn (?*anyopaque, button.ButtonProps) void,
-    ctx: ?*anyopaque,
+    active: *const fn (Ctx) bool,
+    show: *const fn (Ctx, button.ButtonProps) void,
+    ctx: Ctx,
 };
 
 /// Owner-held view table (Host owns one; Shell keeps its switch).
@@ -31,9 +33,9 @@ pub const Views = struct {
 
     pub fn registerView(
         self: *Views,
-        active: *const fn (?*anyopaque) bool,
-        show: *const fn (?*anyopaque, button.ButtonProps) void,
-        ctx: ?*anyopaque,
+        active: *const fn (Ctx) bool,
+        show: *const fn (Ctx, button.ButtonProps) void,
+        ctx: Ctx,
     ) void {
         if (self.n >= view_cap) return;
         self.entries[self.n] = .{ .active = active, .show = show, .ctx = ctx };
@@ -58,16 +60,16 @@ pub const key_cap: usize = 8;
 
 /// One key handler: mods snapshot + raw evdev keycode; true = consumed.
 pub const KeyEntry = struct {
-    handle: *const fn (?*anyopaque, input.Mods, u32) bool,
-    ctx: ?*anyopaque,
+    handle: *const fn (Ctx, input.Mods, u32) bool,
+    ctx: Ctx,
 };
 
 pub const text_cap: usize = 4;
 
 /// One text handler: a UTF-8 run the platform already composed, so Caps Lock, Shift and the layout are the platform's job.
 pub const TextEntry = struct {
-    handle: *const fn (?*anyopaque, []const u8) bool,
-    ctx: ?*anyopaque,
+    handle: *const fn (Ctx, []const u8) bool,
+    ctx: Ctx,
 };
 
 /// Owner-held key chain: modifier latch + ordered handlers, plus the separate text chain typing goes through.
@@ -80,8 +82,8 @@ pub const KeyChain = struct {
 
     pub fn register(
         self: *KeyChain,
-        handle: *const fn (?*anyopaque, input.Mods, u32) bool,
-        ctx: ?*anyopaque,
+        handle: *const fn (Ctx, input.Mods, u32) bool,
+        ctx: Ctx,
     ) void {
         if (self.n >= key_cap) return;
         self.handlers[self.n] = .{ .handle = handle, .ctx = ctx };
@@ -91,8 +93,8 @@ pub const KeyChain = struct {
     /// Register a handler for composed text, which is how a printable key arrives when the backend has a layout.
     pub fn registerText(
         self: *KeyChain,
-        handle: *const fn (?*anyopaque, []const u8) bool,
-        ctx: ?*anyopaque,
+        handle: *const fn (Ctx, []const u8) bool,
+        ctx: Ctx,
     ) void {
         if (self.text_n >= text_cap) return;
         self.text_handlers[self.text_n] = .{ .handle = handle, .ctx = ctx };
@@ -217,16 +219,16 @@ const ShowRec = struct {
     calls: usize = 0,
 };
 
-fn activeYes(_: ?*anyopaque) bool {
+fn activeYes(_: Ctx) bool {
     return true;
 }
 
-fn activeNo(_: ?*anyopaque) bool {
+fn activeNo(_: Ctx) bool {
     return false;
 }
 
-fn showRec(ctx: ?*anyopaque, _: button.ButtonProps) void {
-    const r: *ShowRec = @ptrCast(@alignCast(ctx.?));
+fn showRec(ctx: Ctx, _: button.ButtonProps) void {
+    const r = ctx.get(ShowRec);
     r.calls += 1;
 }
 
@@ -240,14 +242,14 @@ const KeyRec = struct {
     ret: bool = false,
 };
 
-fn keyRec(ctx: ?*anyopaque, _: input.Mods, keycode: u32) bool {
-    const r: *KeyRec = @ptrCast(@alignCast(ctx.?));
+fn keyRec(ctx: Ctx, _: input.Mods, keycode: u32) bool {
+    const r = ctx.get(KeyRec);
     r.calls += 1;
     r.last = keycode;
     return r.ret;
 }
 
-fn escLike(ctx: ?*anyopaque, _: input.Mods, keycode: u32) bool {
+fn escLike(ctx: Ctx, _: input.Mods, keycode: u32) bool {
     _ = ctx;
     return keycode == 1;
 }
@@ -271,8 +273,8 @@ const ClickRec = struct {
     calls: usize = 0,
 };
 
-fn onClick(ctx: ?*anyopaque) void {
-    const r: *ClickRec = @ptrCast(@alignCast(ctx.?));
+fn onClick(ctx: Ctx) void {
+    const r = ctx.get(ClickRec);
     r.calls += 1;
 }
 
@@ -290,8 +292,8 @@ test "views: first active entry renders and wins" {
     var v = Views{};
     var a = ShowRec{};
     var b = ShowRec{};
-    v.registerView(activeYes, showRec, &a);
-    v.registerView(activeYes, showRec, &b);
+    v.registerView(activeYes, showRec, Ctx.from(&a));
+    v.registerView(activeYes, showRec, Ctx.from(&b));
     try std.testing.expect(v.dispatchView(closeProps()));
     try std.testing.expectEqual(@as(usize, 1), a.calls);
     try std.testing.expectEqual(@as(usize, 0), b.calls);
@@ -301,8 +303,8 @@ test "views: inactive first falls through to second" {
     var v = Views{};
     var a = ShowRec{};
     var b = ShowRec{};
-    v.registerView(activeNo, showRec, &a);
-    v.registerView(activeYes, showRec, &b);
+    v.registerView(activeNo, showRec, Ctx.from(&a));
+    v.registerView(activeYes, showRec, Ctx.from(&b));
     try std.testing.expect(v.dispatchView(closeProps()));
     try std.testing.expectEqual(@as(usize, 0), a.calls);
     try std.testing.expectEqual(@as(usize, 1), b.calls);
@@ -311,7 +313,7 @@ test "views: inactive first falls through to second" {
 test "views: none active returns false, nothing renders" {
     var v = Views{};
     var a = ShowRec{};
-    v.registerView(activeNo, showRec, &a);
+    v.registerView(activeNo, showRec, Ctx.from(&a));
     try std.testing.expect(!v.dispatchView(closeProps()));
     try std.testing.expectEqual(@as(usize, 0), a.calls);
 }
@@ -334,7 +336,7 @@ test "keys: shift release unlatches, returns false" {
 test "keys: release of a normal key is ignored, handler not called" {
     var c = KeyChain{};
     var r = KeyRec{ .ret = true };
-    c.register(keyRec, &r);
+    c.register(keyRec, Ctx.from(&r));
     try std.testing.expect(!handleKey(&c, 30, false));
     try std.testing.expectEqual(@as(usize, 0), r.calls);
 }
@@ -343,8 +345,8 @@ test "keys: first handler returning true wins, later ones skipped" {
     var c = KeyChain{};
     var r1 = KeyRec{ .ret = true };
     var r2 = KeyRec{ .ret = true };
-    c.register(keyRec, &r1);
-    c.register(keyRec, &r2);
+    c.register(keyRec, Ctx.from(&r1));
+    c.register(keyRec, Ctx.from(&r2));
     try std.testing.expect(handleKey(&c, 30, true));
     try std.testing.expectEqual(@as(usize, 1), r1.calls);
     try std.testing.expectEqual(@as(usize, 0), r2.calls);
@@ -354,8 +356,8 @@ test "keys: false from first falls through to second" {
     var c = KeyChain{};
     var r1 = KeyRec{ .ret = false };
     var r2 = KeyRec{ .ret = true };
-    c.register(keyRec, &r1);
-    c.register(keyRec, &r2);
+    c.register(keyRec, Ctx.from(&r1));
+    c.register(keyRec, Ctx.from(&r2));
     try std.testing.expect(handleKey(&c, 30, true));
     try std.testing.expectEqual(@as(usize, 1), r1.calls);
     try std.testing.expectEqual(@as(usize, 1), r2.calls);
@@ -364,7 +366,7 @@ test "keys: false from first falls through to second" {
 
 test "keys: Escape-like code routes to the handler" {
     var c = KeyChain{};
-    c.register(escLike, null);
+    c.register(escLike, Ctx.none);
     try std.testing.expect(handleKey(&c, 1, true));
     try std.testing.expect(!handleKey(&c, 30, true));
 }
@@ -376,8 +378,8 @@ pub const TextRec = struct {
     ret: bool = false,
 };
 
-pub fn textRec(ctx: ?*anyopaque, text: []const u8) bool {
-    const r: *TextRec = @ptrCast(@alignCast(ctx.?));
+pub fn textRec(ctx: Ctx, text: []const u8) bool {
+    const r = ctx.get(TextRec);
     r.calls += 1;
     const n = @min(text.len, r.last.len);
     @memcpy(r.last[0..n], text[0..n]);
@@ -388,7 +390,7 @@ pub fn textRec(ctx: ?*anyopaque, text: []const u8) bool {
 test "text: the run reaches the handler verbatim (Caps Lock A, star, e-acute)" {
     var c = KeyChain{};
     var r = TextRec{ .ret = true };
-    c.registerText(textRec, &r);
+    c.registerText(textRec, Ctx.from(&r));
     try std.testing.expect(handleText(&c, "A"));
     try std.testing.expect(handleText(&c, "*"));
     try std.testing.expect(handleText(&c, "\xc3\xa9"));
@@ -399,7 +401,7 @@ test "text: the run reaches the handler verbatim (Caps Lock A, star, e-acute)" {
 test "text: an empty run is not dispatched" {
     var c = KeyChain{};
     var r = TextRec{ .ret = true };
-    c.registerText(textRec, &r);
+    c.registerText(textRec, Ctx.from(&r));
     try std.testing.expect(!handleText(&c, ""));
     try std.testing.expectEqual(@as(usize, 0), r.calls);
 }
@@ -409,9 +411,9 @@ test "text: false falls through to the next handler, true stops the chain" {
     var r1 = TextRec{ .ret = false };
     var r2 = TextRec{ .ret = true };
     var r3 = TextRec{ .ret = true };
-    c.registerText(textRec, &r1);
-    c.registerText(textRec, &r2);
-    c.registerText(textRec, &r3);
+    c.registerText(textRec, Ctx.from(&r1));
+    c.registerText(textRec, Ctx.from(&r2));
+    c.registerText(textRec, Ctx.from(&r3));
     try std.testing.expect(handleText(&c, "("));
     try std.testing.expectEqual(@as(usize, 1), r1.calls);
     try std.testing.expectEqual(@as(usize, 1), r2.calls);
@@ -428,13 +430,13 @@ test "text: no handler means not consumed, key chain untouched" {
 
 const DblRec = struct { singles: usize = 0, doubles: usize = 0 };
 
-fn dblSingle(ctx: ?*anyopaque) void {
-    const r: *DblRec = @ptrCast(@alignCast(ctx.?));
+fn dblSingle(ctx: Ctx) void {
+    const r = ctx.get(DblRec);
     r.singles += 1;
 }
 
-fn dblDouble(ctx: ?*anyopaque) void {
-    const r: *DblRec = @ptrCast(@alignCast(ctx.?));
+fn dblDouble(ctx: Ctx) void {
+    const r = ctx.get(DblRec);
     r.doubles += 1;
 }
 
@@ -448,7 +450,7 @@ test "double click: a second click on the same spot inside the window is a doubl
     try layoutOne();
     registry.beginFrame();
     var rec = DblRec{};
-    registry.registerClickDoubleCursor(rowId(), dblSingle, dblDouble, &rec, .text);
+    registry.registerClickDoubleCursor(rowId(), dblSingle, dblDouble, Ctx.from(&rec), .text);
     const bb = boxCenter();
     const cx = bb.x + bb.width * 0.5;
     const cy = bb.y + bb.height * 0.5;
@@ -468,7 +470,7 @@ test "double click: a slow second click is two singles" {
     try layoutOne();
     registry.beginFrame();
     var rec = DblRec{};
-    registry.registerClickDoubleCursor(rowId(), dblSingle, dblDouble, &rec, .text);
+    registry.registerClickDoubleCursor(rowId(), dblSingle, dblDouble, Ctx.from(&rec), .text);
     const bb = boxCenter();
     const cx = bb.x + bb.width * 0.5;
     const cy = bb.y + bb.height * 0.5;
@@ -485,7 +487,7 @@ test "double click: a second click elsewhere is two singles" {
     try layoutOne();
     registry.beginFrame();
     var rec = DblRec{};
-    registry.registerClickDoubleCursor(rowId(), dblSingle, dblDouble, &rec, .text);
+    registry.registerClickDoubleCursor(rowId(), dblSingle, dblDouble, Ctx.from(&rec), .text);
     const bb = boxCenter();
     const cy = bb.y + bb.height * 0.5;
     var s = PtrState{};
@@ -501,7 +503,7 @@ test "double click: with no clock a second click is still a single" {
     try layoutOne();
     registry.beginFrame();
     var rec = DblRec{};
-    registry.registerClickDoubleCursor(rowId(), dblSingle, dblDouble, &rec, .text);
+    registry.registerClickDoubleCursor(rowId(), dblSingle, dblDouble, Ctx.from(&rec), .text);
     const bb = boxCenter();
     var s = PtrState{};
     clickOnce(&s, bb.x + bb.width * 0.5, bb.y + bb.height * 0.5);
@@ -516,7 +518,7 @@ test "pointer: press alone fires nothing (click deferred to release)" {
     try layoutOne();
     registry.beginFrame();
     var rec = ClickRec{};
-    registry.registerClick(rowId(), onClick, &rec);
+    registry.registerClick(rowId(), onClick, Ctx.from(&rec));
     const bb = boxCenter();
     var s = PtrState{};
     pointerEvent(&s, bb.x + bb.width * 0.5, bb.y + bb.height * 0.5, true, 272, 720, 480);
@@ -528,7 +530,7 @@ test "pointer: press + release without motion fires once" {
     try layoutOne();
     registry.beginFrame();
     var rec = ClickRec{};
-    registry.registerClick(rowId(), onClick, &rec);
+    registry.registerClick(rowId(), onClick, Ctx.from(&rec));
     const bb = boxCenter();
     const cx = bb.x + bb.width * 0.5;
     const cy = bb.y + bb.height * 0.5;
@@ -543,7 +545,7 @@ test "pointer: small jitter under threshold still clicks on release" {
     try layoutOne();
     registry.beginFrame();
     var rec = ClickRec{};
-    registry.registerClick(rowId(), onClick, &rec);
+    registry.registerClick(rowId(), onClick, Ctx.from(&rec));
     const bb = boxCenter();
     const cx = bb.x + bb.width * 0.5;
     const cy = bb.y + bb.height * 0.5;
@@ -560,7 +562,7 @@ test "pointer: drag past threshold suppresses the release click" {
     try layoutOne();
     registry.beginFrame();
     var rec = ClickRec{};
-    registry.registerClick(rowId(), onClick, &rec);
+    registry.registerClick(rowId(), onClick, Ctx.from(&rec));
     const bb = boxCenter();
     const cx = bb.x + bb.width * 0.5;
     const cy = bb.y + bb.height * 0.5;
@@ -580,7 +582,7 @@ test "pointer: out-of-bounds press never clicks, even on release" {
     try layoutOne();
     registry.beginFrame();
     var rec = ClickRec{};
-    registry.registerClick(rowId(), onClick, &rec);
+    registry.registerClick(rowId(), onClick, Ctx.from(&rec));
     var s = PtrState{};
     pointerEvent(&s, 800, 10, true, 272, 720, 480);
     pointerEvent(&s, 100, 100, false, 272, 720, 480);
@@ -591,7 +593,7 @@ test "pointer: in-bounds press + release fires the registered click" {
     try layoutOne();
     registry.beginFrame();
     var rec = ClickRec{};
-    registry.registerClick(rowId(), onClick, &rec);
+    registry.registerClick(rowId(), onClick, Ctx.from(&rec));
     const bb = boxCenter();
     try std.testing.expect(cl.getElementData(rowId()).found);
     var s = PtrState{};
@@ -609,7 +611,7 @@ test "pointer: out-of-bounds press stores pos and down, never fires" {
     try layoutOne();
     registry.beginFrame();
     var rec = ClickRec{};
-    registry.registerClick(rowId(), onClick, &rec);
+    registry.registerClick(rowId(), onClick, Ctx.from(&rec));
     var s = PtrState{};
     pointerEvent(&s, 800, 10, true, 272, 720, 480);
     try std.testing.expectEqual(@as(usize, 0), rec.calls);
@@ -632,7 +634,7 @@ test "pointer: other buttons are ignored" {
     try layoutOne();
     registry.beginFrame();
     var rec = ClickRec{};
-    registry.registerClick(rowId(), onClick, &rec);
+    registry.registerClick(rowId(), onClick, Ctx.from(&rec));
     const bb = boxCenter();
     var s = PtrState{};
     pointerEvent(&s, bb.x + bb.width * 0.5, bb.y + bb.height * 0.5, true, 273, 720, 480);

@@ -10,6 +10,8 @@ const reorder_mod = @import("reorder.zig");
 const context_menu = @import("context_menu.zig");
 const semantics = @import("../semantics.zig");
 const text_fit = @import("../text_backend.zig");
+const erased = @import("../erased.zig");
+const Ctx = erased.Ctx;
 
 /// What a row is, which decides its colour.
 pub const RowKind = enum { group, item, leaf };
@@ -32,7 +34,7 @@ pub const Row = struct {
 };
 
 /// Row click: the index in the slice the tree was given.
-pub const SelectFn = ?*const fn (?*anyopaque, usize) void;
+pub const SelectFn = ?*const fn (Ctx, usize) void;
 
 pub const TreeProps = struct {
     id: prop.Id,
@@ -340,8 +342,8 @@ test "TreeProps needs only an id" {
 
 var extra_ctx: struct { seen: usize = 0, last: usize = 0 } = .{};
 
-fn onExtra(ctx: ?*anyopaque, index: usize) void {
-    const c: *@TypeOf(extra_ctx) = @ptrCast(@alignCast(ctx.?));
+fn onExtra(ctx: Ctx, index: usize) void {
+    const c = ctx.get(@TypeOf(extra_ctx));
     c.seen += 1;
     c.last = index;
 }
@@ -356,7 +358,7 @@ fn declareDecorated() void {
     tree(.{
         .id = .{ .text = "t-decor" },
         .rows = &bar_rows,
-        .row_extra = .{ .f = onExtra, .ctx = &extra_ctx },
+        .row_extra = .{ .f = onExtra, .ctx = Ctx.from(&extra_ctx) },
         .context_menus = &menus,
     });
 }

@@ -5,6 +5,8 @@ const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const frame_mod = @import("../frame.zig");
 const registry = @import("click_registry.zig");
+const erased = @import("../erased.zig");
+const Ctx = erased.Ctx;
 
 // The engine owns the lifecycle: an app declares `props.ContextMenu` on a component and nothing else. No items (the default) = no reaction.
 
@@ -155,12 +157,12 @@ fn pick(index: usize) void {
     if (card.menu.on_select.f) |f| f(card.menu.on_select.ctx, index);
 }
 
-fn onRow(_: ?*anyopaque, index: usize) void {
+fn onRow(_: Ctx, index: usize) void {
     pick(index);
 }
 
 // A dimmed row: the card goes away and nothing else happens.
-fn onDeadRow(_: ?*anyopaque, _: usize) void {
+fn onDeadRow(_: Ctx, _: usize) void {
     close();
 }
 
@@ -209,11 +211,11 @@ fn row(menu: prop.ContextMenu, label: []const u8, index: usize) void {
     });
     if (dead) {
         // A dimmed row still swallows its click, so the widget under the card never takes it, and does nothing.
-        registry.registerZ(id, onDeadRow, null, index, z_index + 1);
+        registry.registerZ(id, onDeadRow, Ctx.none, index, z_index + 1);
         return;
     }
     // The index rides in the entry's own field, so one trampoline serves every row.
-    registry.registerZCursor(id, onRow, null, index, z_index + 1, .pointer);
+    registry.registerZCursor(id, onRow, Ctx.none, index, z_index + 1, .pointer);
 }
 
 const testing = std.testing;
@@ -237,8 +239,8 @@ fn canvasOnce() void {
 
 var pick_ctx: struct { calls: usize = 0, last: usize = 0 } = .{};
 
-fn onPick(ctx: ?*anyopaque, index: usize) void {
-    const c: *@TypeOf(pick_ctx) = @ptrCast(@alignCast(ctx.?));
+fn onPick(ctx: Ctx, index: usize) void {
+    const c = ctx.get(@TypeOf(pick_ctx));
     c.calls += 1;
     c.last = index;
 }
@@ -291,7 +293,7 @@ test "a component with no menu never answers a right click" {
 
 test "a right click opens the menu at the pointer, and a row runs the app's handler" {
     reset();
-    const menu = prop.ContextMenu{ .items = &items, .on_select = .{ .f = onPick, .ctx = &pick_ctx } };
+    const menu = prop.ContextMenu{ .items = &items, .on_select = .{ .f = onPick, .ctx = Ctx.from(&pick_ctx) } };
 
     _ = draw(menu, false);
     const bb = rowBox();
@@ -328,14 +330,14 @@ fn sameColor(a: [4]f32, b: [4]f32) bool {
 
 var open_count: usize = 0;
 
-fn onOpenCount(_: ?*anyopaque) void {
+fn onOpenCount(_: Ctx) void {
     open_count += 1;
 }
 
 test "a component's on_open runs when its card is raised, and not again while it is drawn" {
     reset();
     open_count = 0;
-    const menu = prop.ContextMenu{ .items = &items, .on_select = .{ .f = onPick, .ctx = &pick_ctx }, .on_open = .{ .f = onOpenCount } };
+    const menu = prop.ContextMenu{ .items = &items, .on_select = .{ .f = onPick, .ctx = Ctx.from(&pick_ctx) }, .on_open = .{ .f = onOpenCount } };
     _ = draw(menu, false);
     try testing.expectEqual(@as(usize, 0), open_count);
     const bb = rowBox();
@@ -350,7 +352,7 @@ test "a component's on_open runs when its card is raised, and not again while it
 test "a disabled row draws dim, swallows its click and runs nothing" {
     reset();
     const flags = [_]bool{ false, true, false };
-    const menu = prop.ContextMenu{ .items = &items, .disabled = &flags, .on_select = .{ .f = onPick, .ctx = &pick_ctx } };
+    const menu = prop.ContextMenu{ .items = &items, .disabled = &flags, .on_select = .{ .f = onPick, .ctx = Ctx.from(&pick_ctx) } };
     _ = draw(menu, false);
     const bb = rowBox();
     try testing.expect(secondaryClick(bb.x + 10, bb.y + 10, canvas_w, canvas_h));
@@ -386,7 +388,7 @@ test "a disabled row draws dim, swallows its click and runs nothing" {
 
 test "a right click on nothing closes the card, and a left press outside it dismisses and swallows" {
     reset();
-    const menu = prop.ContextMenu{ .items = &items, .on_select = .{ .f = onPick, .ctx = &pick_ctx } };
+    const menu = prop.ContextMenu{ .items = &items, .on_select = .{ .f = onPick, .ctx = Ctx.from(&pick_ctx) } };
 
     _ = draw(menu, false);
     const bb = rowBox();
@@ -414,7 +416,7 @@ test "a right click on nothing closes the card, and a left press outside it dism
 
 test "a card near the edge of the window is moved back inside" {
     reset();
-    const menu = prop.ContextMenu{ .items = &items, .on_select = .{ .f = onPick, .ctx = &pick_ctx } };
+    const menu = prop.ContextMenu{ .items = &items, .on_select = .{ .f = onPick, .ctx = Ctx.from(&pick_ctx) } };
 
     _ = draw(menu, false);
     // Right-clicked in the very corner: the card must not hang off the right or bottom edge.

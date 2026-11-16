@@ -1,6 +1,7 @@
 // The View: pure declaration from the state.
 // Nothing here writes the model. A widget raises an intent on the ViewModel and the next frame draws whatever the model says.
 const glinlandui = @import("glinlandui");
+const Ctx = glinlandui.props.Ctx;
 const box_mod = glinlandui.components.box;
 const text_mod = glinlandui.components.text;
 const button = glinlandui.components.button;
@@ -73,13 +74,12 @@ fn headerChildren(scope: *Scope) void {
         .hover_bg = t.colors.primary_hover,
         .radius = props.Radius.all(6),
         .pad = props.Pad.axes(8, 16),
-        .on_click = .{ .f = onAdd, .ctx = scope.vm },
+        .on_click = props.Click.on(scope.vm, onAdd),
     });
 }
 
 // The button and Enter are the same intent, and the field owns it: the app raises no submit of its own.
-fn onAdd(raw: ?*anyopaque) void {
-    const vm: *TodoViewModel = @ptrCast(@alignCast(raw.?));
+fn onAdd(vm: *TodoViewModel) void {
     _ = vm.field.submit();
 }
 
@@ -110,12 +110,11 @@ fn listChildren(scope: *Scope) void {
         .row_bg = t.colors.background,
         .hover_bg = t.colors.hover,
         .radius = .{},
-        .on_select = .{ .f = onRow, .ctx = scope.vm },
+        .on_select = props.Select.on(scope.vm, onRow),
     }, scope.state.items(), scope, renderRow);
 }
 
-fn onRow(raw: ?*anyopaque, index: usize) void {
-    const vm: *TodoViewModel = @ptrCast(@alignCast(raw.?));
+fn onRow(vm: *TodoViewModel, index: usize) void {
     vm.toggle(index);
 }
 
@@ -134,7 +133,7 @@ fn renderRow(scope: *Scope, todo: state_mod.Todo, index: usize) void {
         .checked_bg = t.colors.primary,
         .check_color = t.colors.on_primary,
         .border_color = t.colors.divider,
-        .on_click = .{ .f = onToggle, .ctx = &ctxs[index] },
+        .on_click = props.Click.on(&ctxs[index], onToggle),
     });
     // The state is a value and this returns before Clay draws, so the run is copied into the frame's scratch.
     text_mod.label(.{
@@ -149,17 +148,15 @@ fn renderRow(scope: *Scope, todo: state_mod.Todo, index: usize) void {
         .hover_bg = t.colors.surface_variant,
         .radius = props.Radius.all(6),
         .pad = props.Pad.axes(4, 10),
-        .on_click = .{ .f = onDelete, .ctx = &ctxs[index] },
+        .on_click = props.Click.on(&ctxs[index], onDelete),
     });
 }
 
-fn onToggle(raw: ?*anyopaque) void {
-    const row: *TodoViewModel.RowCtx = @ptrCast(@alignCast(raw.?));
+fn onToggle(row: *TodoViewModel.RowCtx) void {
     row.vm.toggle(row.index);
 }
 
-fn onDelete(raw: ?*anyopaque) void {
-    const row: *TodoViewModel.RowCtx = @ptrCast(@alignCast(raw.?));
+fn onDelete(row: *TodoViewModel.RowCtx) void {
     row.vm.remove(row.index);
 }
 

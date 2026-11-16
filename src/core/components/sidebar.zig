@@ -7,6 +7,8 @@ const prop = @import("../props.zig");
 const frame_mod = @import("../frame.zig");
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
+const erased = @import("../erased.zig");
+const Ctx = erased.Ctx;
 
 /// Which side of its grab line the panel sits on: a left sidebar keeps the line on its right edge.
 pub const Side = enum { left, right };
@@ -168,7 +170,7 @@ fn handle(p: Props) void {
         .background_color = (if (active) p.handle_active_bg else if (cl.pointerOver(id)) p.handle_hover_bg else p.handle_bg).toClay(),
     })({});
     // The line is the drag affordance, so it says so with the resize cursor; a click reopens a collapsed panel.
-    registry.registerClickCursor(id, onHandleClick, s, .ew_resize);
+    registry.registerClickCursor(id, onHandleClick, Ctx.from(s), .ew_resize);
     semantics.registerAt(@src(), .{
         .declared = semantics.declaredAt(p.src),
         .id = id,
@@ -181,8 +183,8 @@ fn handle(p: Props) void {
 }
 
 // A click on the line reopens a collapsed panel. A drag is what resizes it, and the registry only fires when the pointer barely moved.
-fn onHandleClick(raw: ?*anyopaque) void {
-    const s: *State = @ptrCast(@alignCast(raw.?));
+fn onHandleClick(raw: Ctx) void {
+    const s = raw.get(State);
     if (!s.collapsed) return;
     s.collapsed = false;
     s.width = s.expanded_width;

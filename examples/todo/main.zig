@@ -2,6 +2,7 @@
 // It creates the App (the Activity's state), opens the window, and hands the window the screen as its root function.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
+const Ctx = glinlandui.props.Ctx;
 const todo = @import("todo");
 
 pub fn main(init: std.process.Init) !void {
@@ -20,7 +21,7 @@ pub fn main(init: std.process.Init) !void {
     });
 
     // `setContent { ... }`: the Host hands the composable the ctx it was built with.
-    var host = try glinlandui.host.Host.init(gpa, &app, todo.app.App.content);
+    var host = try glinlandui.host.Host.init(gpa, Ctx.from(&app), todo.app.App.content);
     defer host.deinit();
     // The devtool: right-click anywhere for this app's component tree. One line, and the app itself is untouched.
     _ = glinlandui.devtools.attach(gpa, &host);

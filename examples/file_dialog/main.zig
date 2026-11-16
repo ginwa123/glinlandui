@@ -1,6 +1,7 @@
 // The entry point: `MainActivity`, the window, and the headless check mode CI runs — nothing else.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
+const Ctx = glinlandui.props.Ctx;
 const file_dialog = @import("file_dialog");
 
 const dialog = glinlandui.file_dialog;
@@ -19,7 +20,7 @@ pub fn main(init: std.process.Init) !void {
     var app = file_dialog.app.App{};
     app.start();
 
-    var host = try glinlandui.host.Host.init(alloc, &app, file_dialog.app.App.content);
+    var host = try glinlandui.host.Host.init(alloc, Ctx.from(&app), file_dialog.app.App.content);
     defer host.deinit();
     // The devtool: right-click anywhere for this app's component tree. One line, and the app itself is untouched.
     _ = glinlandui.devtools.attach(alloc, &host);

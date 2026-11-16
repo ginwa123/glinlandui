@@ -2,18 +2,19 @@
 // It parses the flags, builds the window and the Host, and contains the benchmark nobody can watch.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
+const Ctx = glinlandui.props.Ctx;
 const scroll_mod = glinlandui.components.scroll;
 const lazy = @import("lazy_scroll");
 
 // The pump: ask the window for another frame while an animation is running.
-fn pumpThroughWindow(ctx: ?*anyopaque) void {
-    const window: *glinlandui.Window = @ptrCast(@alignCast(ctx.?));
+fn pumpThroughWindow(ctx: Ctx) void {
+    const window = ctx.get(glinlandui.Window);
     if (@hasDecl(glinlandui.Window, "setAnimating")) window.setAnimating(true);
 }
 
 // Stop asking for frames, so an idle window goes quiet again.
-fn idleThroughWindow(ctx: ?*anyopaque) void {
-    const window: *glinlandui.Window = @ptrCast(@alignCast(ctx.?));
+fn idleThroughWindow(ctx: Ctx) void {
+    const window = ctx.get(glinlandui.Window);
     if (@hasDecl(glinlandui.Window, "setAnimating")) window.setAnimating(false);
 }
 
@@ -77,7 +78,7 @@ pub fn main(init: std.process.Init) !void {
         .min_height = 320,
     });
     // `setContent { ... }`: the Host hands the composable the ctx it was built with.
-    var host = try glinlandui.host.Host.init(gpa, &app, lazy.app.App.content);
+    var host = try glinlandui.host.Host.init(gpa, Ctx.from(&app), lazy.app.App.content);
     defer host.deinit();
     // The devtool: right-click anywhere for this app's component tree. One line, and the app itself is untouched.
     _ = glinlandui.devtools.attach(gpa, &host);
@@ -89,8 +90,8 @@ pub fn main(init: std.process.Init) !void {
     window.delegate = host.delegate();
 
     // Space, Home and End are the screen's intents, so the handler is the model's and the window's events reach it through here.
-    host.keys.register(lazy.view_model.LazyViewModel.onKey, app.vm());
-    app.pump = .{ .ctx = &window, .request = pumpThroughWindow, .idle = idleThroughWindow };
+    host.keys.register(lazy.view_model.LazyViewModel.onKey, Ctx.from(app.vm()));
+    app.pump = .{ .ctx = Ctx.from(&window), .request = pumpThroughWindow, .idle = idleThroughWindow };
     app.start();
 
     if (opts.log) app.vm().log = true;
@@ -105,7 +106,7 @@ fn bench(gpa: std.mem.Allocator, io: std.Io, opts: Opts) !void {
     var app = lazy.app.App{ .io = io };
     // No pump: the driver produces the frames, and no window exists to be asked for one.
     app.start();
-    var driver = try Driver.initOwned(gpa, &app, lazy.app.App.content);
+    var driver = try Driver.initOwned(gpa, Ctx.from(&app), lazy.app.App.content);
     defer driver.deinit();
     try driver.start(.{ .width = opts.width, .height = opts.height });
     // A real window renders at the display's backing scale; 1x hides half the work the screen actually does.

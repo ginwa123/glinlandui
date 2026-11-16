@@ -9,6 +9,8 @@ const text = @import("text_backend.zig");
 const click_registry = @import("components/click_registry.zig");
 const semantics = @import("semantics.zig");
 const text_editor = @import("text_editor.zig");
+const erased = @import("erased.zig");
+const Ctx = erased.Ctx;
 
 // ---- Wayland cursor-shape (wp_cursor_shape_manager_v1) ---- Contract (registry crew owns components/click_registry.zig).
 pub const Cursor = enum { default, pointer, text, ew_resize, ns_resize };
@@ -389,7 +391,7 @@ pub var memo_enabled: bool = false;
 var memo: FrameMemo = .{};
 
 // Declare callback: app builds its Clay tree here (views.zig declareRoot).
-pub const DeclareFn = *const fn (ctx: *anyopaque, w: u32, h: u32) void;
+pub const DeclareFn = *const fn (ctx: Ctx, w: u32, h: u32) void;
 
 fn clayMeasure(text_bytes: []const u8, config: *cl.TextElementConfig, _: void) cl.Dimensions {
     const ext = text.measureText(text_bytes, config.font_size);
@@ -493,12 +495,12 @@ pub fn initClay(alloc: std.mem.Allocator, w: u32, h: u32) ![]u8 {
 pub const MeasureFn = *const fn (
     text: []const u8,
     config: *cl.TextElementConfig,
-    user_data: ?*anyopaque,
+    user_data: Ctx,
 ) cl.Dimensions;
 
 // Called synchronously after Clay finishes layout and before rendering.
 pub const FrameProbeFn = *const fn (
-    user_data: ?*anyopaque,
+    user_data: Ctx,
     commands: []const cl.RenderCommand,
     width: u32,
     height: u32,
@@ -507,9 +509,9 @@ pub const FrameProbeFn = *const fn (
 // Optional seams used by the reusable headless testing module.
 pub const FrameOptions = struct {
     measure: ?MeasureFn = null,
-    measure_user_data: ?*anyopaque = null,
+    measure_user_data: Ctx = Ctx.none,
     probe: ?FrameProbeFn = null,
-    probe_user_data: ?*anyopaque = null,
+    probe_user_data: Ctx = Ctx.none,
     // Resolve the semantics tree (core/semantics.zig) immediately after layout, once Clay has computed every bounding box.
     resolve_semantics: bool = false,
     // Skip the renderer entirely: a headless CLI has no window to present to, and a shipping binary is not under `is_test`.
@@ -550,7 +552,7 @@ pub fn clayFrame(
     w: u32,
     h: u32,
     declare: DeclareFn,
-    ctx: *anyopaque,
+    ctx: Ctx,
 ) u32 {
     return clayFrameWithOptions(
         alloc,
@@ -582,7 +584,7 @@ pub fn clayFrameWithOptions(
     w: u32,
     h: u32,
     declare: DeclareFn,
-    ctx: *anyopaque,
+    ctx: Ctx,
     options: *const FrameOptions,
 ) u32 {
     cl.setPointerState(.{ .x = pointer_x, .y = pointer_y }, pointer_down);

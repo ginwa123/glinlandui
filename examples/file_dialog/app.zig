@@ -1,5 +1,6 @@
 // The Activity: it owns the ViewModelStore and the theme, declares the screen, and wires the model before the first frame.
 const glinlandui = @import("glinlandui");
+const Ctx = glinlandui.props.Ctx;
 
 const view = @import("view.zig");
 const view_model = @import("view_model.zig");
@@ -21,10 +22,10 @@ pub const App = struct {
     }
 
     // `setContent { DialogScreen() }`, as the Host's root function.
-    pub fn content(ctx: ?*anyopaque, w: u32, h: u32) void {
+    pub fn content(ctx: Ctx, w: u32, h: u32) void {
         _ = w;
         _ = h;
-        const self: *App = @ptrCast(@alignCast(ctx.?));
+        const self = ctx.get(App);
         const model = self.vm();
         var scope = view.Scope{
             .theme = self.theme,

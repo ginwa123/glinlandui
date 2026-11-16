@@ -1,6 +1,7 @@
 // The Activity: the store, the theme and the composition — it hands the window a screen and nothing else.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
+const Ctx = glinlandui.props.Ctx;
 
 const view = @import("view.zig");
 const view_model = @import("view_model.zig");
@@ -22,10 +23,10 @@ pub const App = struct {
     }
 
     // `setContent { MaterialTheme { CatalogScreen() } }`: a click dispatches before the repaint, so its intent is drawn.
-    pub fn content(ctx: ?*anyopaque, w: u32, h: u32) void {
+    pub fn content(ctx: Ctx, w: u32, h: u32) void {
         _ = w;
         _ = h;
-        const self: *App = @ptrCast(@alignCast(ctx.?));
+        const self = ctx.get(App);
         const model = self.vm();
         // The toolkit forgets focus when a host starts, so the screen claims the keyboard on the frame that draws it.
         model.claimFocus();
@@ -45,7 +46,7 @@ const Driver = glinlandui.testing.Driver;
 
 fn boot(app: *App) !Driver {
     app.start();
-    var driver = try Driver.initOwned(std.heap.page_allocator, app, App.content);
+    var driver = try Driver.initOwned(std.heap.page_allocator, Ctx.from(app), App.content);
     errdefer driver.deinit();
     try driver.start(.{ .width = 960, .height = 760 });
     // The first frame has no layout yet, so a scroll container's clip is 0x0 until it has painted once.

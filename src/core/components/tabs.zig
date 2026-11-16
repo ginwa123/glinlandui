@@ -7,6 +7,8 @@ const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
+const erased = @import("../erased.zig");
+const Ctx = erased.Ctx;
 
 /// One tab.
 pub const Tab = struct {
@@ -18,7 +20,7 @@ pub const Tab = struct {
 };
 
 /// Tab click: the index in the slice the bar was given.
-pub const SelectFn = ?*const fn (?*anyopaque, usize) void;
+pub const SelectFn = ?*const fn (Ctx, usize) void;
 
 pub const TabsProps = struct {
     id: prop.Id,

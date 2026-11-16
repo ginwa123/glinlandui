@@ -3,6 +3,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const cl = @import("zclay");
 const headless = @import("../testing/headless.zig");
+const erased = @import("../erased.zig");
+const Ctx = erased.Ctx;
 
 /// Every click target of one frame. The devtool overlay claims a slice of this for its own rows, so it sits above an app's own ceiling.
 pub const cap: usize = 384;
@@ -11,13 +13,13 @@ pub const cap: usize = 384;
 pub const Cursor = @import("../props.zig").Cursor;
 
 /// Click callback shapes (same as button.ClickFn / list row fn).
-pub const ClickFn = *const fn (?*anyopaque) void;
-pub const RowFn = *const fn (?*anyopaque, usize) void;
+pub const ClickFn = *const fn (Ctx) void;
+pub const RowFn = *const fn (Ctx, usize) void;
 
 /// Per-row click target: distinct fn+ctx per row (Stage B).
 pub const RowClick = struct {
-    on_click: *const fn (?*anyopaque, usize) void,
-    ctx: ?*anyopaque,
+    on_click: *const fn (Ctx, usize) void,
+    ctx: Ctx,
 };
 
 /// The viewports a target is clipped to, as ELEMENT IDS resolved at hit-test time, never as rects captured while declaring: a container's box is only known when its own layout closes, so such a rect is always the previous frame's, and the frame after a pane grows is the one the next click lands in.
@@ -44,11 +46,11 @@ pub fn insideClip(c: ?Clip, x: f32, y: f32) bool {
 
 const Entry = struct {
     id: cl.ElementId,
-    cb_row: ?*const fn (?*anyopaque, usize) void = null,
-    cb_click: ?*const fn (?*anyopaque) void = null,
+    cb_row: ?*const fn (Ctx, usize) void = null,
+    cb_click: ?*const fn (Ctx) void = null,
     /// Second click on the same spot; a target with one costs a single entry, not two.
-    cb_double: ?*const fn (?*anyopaque) void = null,
-    ctx: ?*anyopaque = null,
+    cb_double: ?*const fn (Ctx) void = null,
+    ctx: Ctx = Ctx.none,
     index: usize = 0,
     /// Dispatch priority: highest-z containing match wins (overlay cards register above in-flow rows).
     z: i16 = 0,
@@ -101,46 +103,46 @@ pub fn currentClip() ?Clip {
 }
 
 /// Register a row hit-target (list/dropdown rows) at default priority 0.
-pub fn register(id: cl.ElementId, cb: *const fn (?*anyopaque, usize) void, ctx: ?*anyopaque, index: usize) void {
+pub fn register(id: cl.ElementId, cb: *const fn (Ctx, usize) void, ctx: Ctx, index: usize) void {
     registerZ(id, cb, ctx, index, 0);
 }
 
 /// Register a row hit-target with dispatch priority (overlay rows pass their float z so they win over covered in-flow rows at shared points).
-pub fn registerZ(id: cl.ElementId, cb: *const fn (?*anyopaque, usize) void, ctx: ?*anyopaque, index: usize, z: i16) void {
+pub fn registerZ(id: cl.ElementId, cb: *const fn (Ctx, usize) void, ctx: Ctx, index: usize, z: i16) void {
     registerZCursor(id, cb, ctx, index, z, .default);
 }
 
 /// Full row version storing cursor (list rows pass .pointer).
-pub fn registerZCursor(id: cl.ElementId, cb: *const fn (?*anyopaque, usize) void, ctx: ?*anyopaque, index: usize, z: i16, cursor: Cursor) void {
+pub fn registerZCursor(id: cl.ElementId, cb: *const fn (Ctx, usize) void, ctx: Ctx, index: usize, z: i16, cursor: Cursor) void {
     if (count >= cap) return;
     entries[count] = .{ .id = id, .cb_row = cb, .ctx = ctx, .index = index, .z = z, .cursor = cursor, .clip = clip };
     count += 1;
 }
 
 /// Register a button hit-target (index-free click).
-pub fn registerClick(id: cl.ElementId, cb: ClickFn, ctx: ?*anyopaque) void {
+pub fn registerClick(id: cl.ElementId, cb: ClickFn, ctx: Ctx) void {
     registerClickCursor(id, cb, ctx, .default);
 }
 
 /// Full click version storing cursor (button/toggle/checkbox/radio pass .pointer, slider passes .ew_resize, image on_click passes .pointer).
-pub fn registerClickCursor(id: cl.ElementId, cb: ClickFn, ctx: ?*anyopaque, cursor: Cursor) void {
+pub fn registerClickCursor(id: cl.ElementId, cb: ClickFn, ctx: Ctx, cursor: Cursor) void {
     registerClickCursorZ(id, cb, ctx, cursor, 0);
 }
 
 /// The same, with a dispatch priority: a field inside an overlay that swallows clicks must register ABOVE it, or the overlay eats the click.
-pub fn registerClickCursorZ(id: cl.ElementId, cb: ClickFn, ctx: ?*anyopaque, cursor: Cursor, z: i16) void {
+pub fn registerClickCursorZ(id: cl.ElementId, cb: ClickFn, ctx: Ctx, cursor: Cursor, z: i16) void {
     if (count >= cap) return;
     entries[count] = .{ .id = id, .cb_click = cb, .ctx = ctx, .z = z, .cursor = cursor, .clip = clip };
     count += 1;
 }
 
 /// Register a click target that also answers a double click (word select). One entry, two callbacks.
-pub fn registerClickDoubleCursor(id: cl.ElementId, cb: ClickFn, cb_double: ClickFn, ctx: ?*anyopaque, cursor: Cursor) void {
+pub fn registerClickDoubleCursor(id: cl.ElementId, cb: ClickFn, cb_double: ClickFn, ctx: Ctx, cursor: Cursor) void {
     registerClickDoubleCursorZ(id, cb, cb_double, ctx, cursor, 0);
 }
 
 /// The same, with a dispatch priority (see `registerClickCursorZ`).
-pub fn registerClickDoubleCursorZ(id: cl.ElementId, cb: ClickFn, cb_double: ClickFn, ctx: ?*anyopaque, cursor: Cursor, z: i16) void {
+pub fn registerClickDoubleCursorZ(id: cl.ElementId, cb: ClickFn, cb_double: ClickFn, ctx: Ctx, cursor: Cursor, z: i16) void {
     const before = count;
     registerClickCursorZ(id, cb, ctx, cursor, z);
     // Only when it actually landed: a full registry must not rewrite somebody else's entry.
@@ -334,8 +336,8 @@ const Rec = struct {
     last: ?usize = null,
 };
 
-fn onRow(ctx: ?*anyopaque, i: usize) void {
-    const c: *Rec = @ptrCast(@alignCast(ctx.?));
+fn onRow(ctx: Ctx, i: usize) void {
+    const c = ctx.get(Rec);
     c.calls += 1;
     c.last = i;
 }
@@ -344,7 +346,7 @@ test "dispatchClick inside row-1 box fires index 1 exactly once" {
     try layoutThree();
     beginFrame();
     var c = Rec{};
-    for (0..3) |i| register(rowId("cr-list", i), onRow, &c, i);
+    for (0..3) |i| register(rowId("cr-list", i), onRow, Ctx.from(&c), i);
     const bb = cl.getElementData(rowId("cr-list", 1)).bounding_box;
     try std.testing.expect(cl.getElementData(rowId("cr-list", 1)).found);
     try std.testing.expect(dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
@@ -356,7 +358,7 @@ test "dispatchClick outside any box fires nothing" {
     try layoutThree();
     beginFrame();
     var c = Rec{};
-    for (0..3) |i| register(rowId("cr-list", i), onRow, &c, i);
+    for (0..3) |i| register(rowId("cr-list", i), onRow, Ctx.from(&c), i);
     try std.testing.expect(!dispatchClick(700, 460));
     try std.testing.expectEqual(@as(usize, 0), c.calls);
 }
@@ -366,8 +368,8 @@ test "overlap: last-registered callback wins at shared point" {
     beginFrame();
     var first = Rec{};
     var second = Rec{};
-    register(rowId("cr-list", 1), onRow, &first, 111);
-    register(rowId("cr-list", 1), onRow, &second, 222);
+    register(rowId("cr-list", 1), onRow, Ctx.from(&first), 111);
+    register(rowId("cr-list", 1), onRow, Ctx.from(&second), 222);
     const bb = cl.getElementData(rowId("cr-list", 1)).bounding_box;
     try std.testing.expect(cl.getElementData(rowId("cr-list", 1)).found);
     try std.testing.expect(dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
@@ -382,8 +384,8 @@ test "overlap: higher-z wins even when registered first (overlay over rows)" {
     var under = Rec{};
     var over = Rec{};
     // Overlay registers first (declared mid-loop), covered row after — visual stacking (z), not declare order, decides.
-    registerZ(rowId("cr-list", 1), onRow, &over, 111, 10);
-    register(rowId("cr-list", 1), onRow, &under, 222);
+    registerZ(rowId("cr-list", 1), onRow, Ctx.from(&over), 111, 10);
+    register(rowId("cr-list", 1), onRow, Ctx.from(&under), 222);
     const bb = cl.getElementData(rowId("cr-list", 1)).bounding_box;
     try std.testing.expect(cl.getElementData(rowId("cr-list", 1)).found);
     try std.testing.expect(dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
@@ -398,7 +400,7 @@ test "registry caps entries without crashing; last-within-cap wins" {
     beginFrame();
     var c = Rec{};
     var i: usize = 0;
-    while (i < cap + 6) : (i += 1) register(rowId("cr-list", 1), onRow, &c, i);
+    while (i < cap + 6) : (i += 1) register(rowId("cr-list", 1), onRow, Ctx.from(&c), i);
     const bb = cl.getElementData(rowId("cr-list", 1)).bounding_box;
     try std.testing.expect(cl.getElementData(rowId("cr-list", 1)).found);
     try std.testing.expect(dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
@@ -406,7 +408,7 @@ test "registry caps entries without crashing; last-within-cap wins" {
     try std.testing.expectEqual(@as(?usize, cap - 1), c.last);
 }
 
-fn onClickStub(_: ?*anyopaque) void {}
+fn onClickStub(_: Ctx) void {}
 
 test "hoverCursorAt empty registry reports default" {
     try layoutThree();
@@ -418,7 +420,7 @@ test "hoverCursorAt outside any box reports default" {
     try layoutThree();
     beginFrame();
     var c = Rec{};
-    for (0..3) |i| register(rowId("cr-list", i), onRow, &c, i);
+    for (0..3) |i| register(rowId("cr-list", i), onRow, Ctx.from(&c), i);
     try std.testing.expectEqual(Cursor.default, hoverCursorAt(700, 460));
 }
 
@@ -434,7 +436,7 @@ test "hoverCursorAt not-registered box reports default (disabled parity)" {
 test "hoverCursorAt click entry reports its cursor" {
     try layoutThree();
     beginFrame();
-    registerClickCursor(rowId("cr-list", 1), onClickStub, null, .pointer);
+    registerClickCursor(rowId("cr-list", 1), onClickStub, Ctx.none, .pointer);
     const bb = cl.getElementData(rowId("cr-list", 1)).bounding_box;
     try std.testing.expectEqual(Cursor.pointer, hoverCursorAt(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
     try std.testing.expectEqual(Cursor.default, hoverCursorAt(700, 460));
@@ -444,8 +446,8 @@ test "hoverCursorAt topmost wins: higher-z beats earlier, ties last wins" {
     try layoutThree();
     beginFrame();
     // Higher-z wins even when registered first (overlay over rows).
-    registerZCursor(rowId("cr-list", 1), onRow, null, 0, 10, .text);
-    registerZCursor(rowId("cr-list", 1), onRow, null, 1, 0, .pointer);
+    registerZCursor(rowId("cr-list", 1), onRow, Ctx.none, 0, 10, .text);
+    registerZCursor(rowId("cr-list", 1), onRow, Ctx.none, 1, 0, .pointer);
     const bb = cl.getElementData(rowId("cr-list", 1)).bounding_box;
     const cx = bb.x + bb.width * 0.5;
     const cy = bb.y + bb.height * 0.5;
@@ -453,8 +455,8 @@ test "hoverCursorAt topmost wins: higher-z beats earlier, ties last wins" {
 
     // Ties: last-registered wins (mirror dispatchClick).
     beginFrame();
-    registerClickCursor(rowId("cr-list", 1), onClickStub, null, .pointer);
-    registerClickCursor(rowId("cr-list", 1), onClickStub, null, .ew_resize);
+    registerClickCursor(rowId("cr-list", 1), onClickStub, Ctx.none, .pointer);
+    registerClickCursor(rowId("cr-list", 1), onClickStub, Ctx.none, .ew_resize);
     try std.testing.expectEqual(Cursor.ew_resize, hoverCursorAt(cx, cy));
 }
 
@@ -473,7 +475,7 @@ test "legacy registerClick wrapper still stores default cursor" {
     try layoutThree();
     beginFrame();
     var c = Rec{};
-    register(rowId("cr-list", 1), onRow, &c, 7);
+    register(rowId("cr-list", 1), onRow, Ctx.from(&c), 7);
     const bb = cl.getElementData(rowId("cr-list", 1)).bounding_box;
     try std.testing.expectEqual(Cursor.default, hoverCursorAt(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
     try std.testing.expect(dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
@@ -492,13 +494,13 @@ const ClipClick = struct {
     calls: usize = 0,
 };
 
-fn onClipClick(ctx: ?*anyopaque) void {
-    const r: *ClipClick = @ptrCast(@alignCast(ctx.?));
+fn onClipClick(ctx: Ctx) void {
+    const r = ctx.get(ClipClick);
     r.calls += 1;
 }
 
-fn onClipRow(ctx: ?*anyopaque, i: usize) void {
-    const r: *ClipRec = @ptrCast(@alignCast(ctx.?));
+fn onClipRow(ctx: Ctx, i: usize) void {
+    const r = ctx.get(ClipRec);
     r.calls += 1;
     r.last = i;
 }
@@ -523,7 +525,7 @@ fn declareScrolled(rows: usize, viewport_h: f32, rec: *ClipRec) void {
                     .id = .IDI("cr-inner", @as(u32, @intCast(i + 1))),
                     .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(20) } },
                 })({});
-                registerZCursor(clipRowId(i), onClipRow, rec, i, 0, .pointer);
+                registerZCursor(clipRowId(i), onClipRow, Ctx.from(rec), i, 0, .pointer);
             }
         });
         popClip();
@@ -578,12 +580,12 @@ test "nested scroll containers both clip, and the chain unwinds for a sibling" {
         cl.UI()(.{ .id = .ID("cr-inner-scroll"), .layout = .{ .sizing = .{ .w = .fixed(100), .h = .fixed(40) } } })({
             pushClip(cl.ElementId.ID("cr-inner-scroll"));
             cl.UI()(.{ .id = .ID("cr-leaf"), .layout = .{ .sizing = .{ .w = .grow, .h = .grow } } })({});
-            registerClick(.ID("cr-leaf"), onClipClick, &rec);
+            registerClick(.ID("cr-leaf"), onClipClick, Ctx.from(&rec));
             popClip();
         });
         // A sibling declared after the pop: it is not inside the inner viewport, so only its own ancestry bounds it.
         cl.UI()(.{ .id = .ID("cr-sibling"), .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(40) } } })({});
-        registerClick(.ID("cr-sibling"), onClipClick, &rec);
+        registerClick(.ID("cr-sibling"), onClipClick, Ctx.from(&rec));
     });
     _ = cl.endLayout();
 

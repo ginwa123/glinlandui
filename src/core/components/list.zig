@@ -10,9 +10,11 @@ const reorder_mod = @import("reorder.zig");
 /// Drag-to-reorder: what a list hands in to make its rows draggable. Null (the default) = not draggable.
 pub const Reorder = reorder_mod.Reorder;
 const semantics = @import("../semantics.zig");
+const erased = @import("../erased.zig");
+const Ctx = erased.Ctx;
 
 /// Selection callback: plain fn pointer + opaque ctx (no closures).
-pub const ListSelectFn = ?*const fn (?*anyopaque, usize) void;
+pub const ListSelectFn = ?*const fn (Ctx, usize) void;
 
 /// Per-row click target (re-exported from the click registry so pages import list only).
 pub const RowClick = registry.RowClick;
@@ -418,7 +420,7 @@ test "ListProps carries neutral dark defaults + null selection/callbacks" {
     try std.testing.expectEqual(@as(f32, 0), p.gap.pts());
     try std.testing.expect(p.selected == null);
     try std.testing.expect(p.on_select.f == null);
-    try std.testing.expect(p.on_select.ctx == null);
+    try std.testing.expect(p.on_select.ctx.isNone());
 }
 
 const SelectCtx = struct {
@@ -426,8 +428,8 @@ const SelectCtx = struct {
     last: ?usize = null,
 };
 
-fn testOnSelect(ctx: ?*anyopaque, i: usize) void {
-    const c: *SelectCtx = @ptrCast(@alignCast(ctx.?));
+fn testOnSelect(ctx: Ctx, i: usize) void {
+    const c = ctx.get(SelectCtx);
     c.calls += 1;
     c.last = i;
 }
@@ -437,11 +439,11 @@ test "ListProps stores on_select/ctx; direct invocation delivers index" {
     const p = ListProps{
         .id = .{ .text = "x" },
         .selected = 1,
-        .on_select = .{ .f = testOnSelect, .ctx = &c },
+        .on_select = .{ .f = testOnSelect, .ctx = Ctx.from(&c) },
     };
     try std.testing.expectEqual(@as(?usize, 1), p.selected);
     try std.testing.expect(p.on_select.f != null);
-    try std.testing.expect(p.on_select.ctx != null);
+    try std.testing.expect(!p.on_select.ctx.isNone());
     p.on_select.f.?(p.on_select.ctx, 2);
     try std.testing.expectEqual(@as(usize, 1), c.calls);
     try std.testing.expectEqual(@as(?usize, 2), c.last);
@@ -601,7 +603,7 @@ test "list indexed rows declare IDI identities under the list id" {
 var select_rec = SelectCtx{};
 
 fn declareSelectList() void {
-    list(.{ .id = .{ .text = "test-select-list" }, .on_select = .{ .f = testOnSelect, .ctx = &select_rec } }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-select-list" }, .on_select = .{ .f = testOnSelect, .ctx = Ctx.from(&select_rec) } }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 test "list self-registers on_select per row; dispatchClick fires index" {
@@ -627,11 +629,11 @@ test "list self-registers on_select per row; dispatchClick fires index" {
 var inner_hits: usize = 0;
 var outer_hits: usize = 0;
 
-fn onInnerClick(_: ?*anyopaque) void {
+fn onInnerClick(_: Ctx) void {
     inner_hits += 1;
 }
 
-fn onOuterClick(_: ?*anyopaque, _: usize) void {
+fn onOuterClick(_: Ctx, _: usize) void {
     outer_hits += 1;
 }
 
@@ -642,7 +644,7 @@ fn renderWithInner(_: CtxA, _: TitleItem, index: usize) void {
         .id = .ID("test-inner-target"),
         .layout = .{ .sizing = .{ .w = .fixed(24), .h = .fixed(24) } },
     })({});
-    registry.registerClickCursor(cl.getElementId("test-inner-target"), onInnerClick, null, .pointer);
+    registry.registerClickCursor(cl.getElementId("test-inner-target"), onInnerClick, Ctx.none, .pointer);
 }
 
 fn declareInnerList() void {
@@ -704,29 +706,29 @@ const ClickRec = struct {
 var clicks_a = ClickRec{};
 var clicks_b = ClickRec{};
 
-fn onClickA(ctx: ?*anyopaque, i: usize) void {
-    const c: *ClickRec = @ptrCast(@alignCast(ctx.?));
+fn onClickA(ctx: Ctx, i: usize) void {
+    const c = ctx.get(ClickRec);
     c.calls += 1;
     c.last = i;
 }
 
-fn onClickB(ctx: ?*anyopaque, i: usize) void {
-    const c: *ClickRec = @ptrCast(@alignCast(ctx.?));
+fn onClickB(ctx: Ctx, i: usize) void {
+    const c = ctx.get(ClickRec);
     c.calls += 1;
     c.last = i;
 }
 
 fn declareClicksList() void {
     const clicks = [_]registry.RowClick{
-        .{ .on_click = onClickA, .ctx = &clicks_a },
-        .{ .on_click = onClickB, .ctx = &clicks_b },
+        .{ .on_click = onClickA, .ctx = Ctx.from(&clicks_a) },
+        .{ .on_click = onClickB, .ctx = Ctx.from(&clicks_b) },
     };
     list(.{ .id = .{ .text = "test-clicks-list" }, .clicks = &clicks }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 fn declareShortClicksList() void {
     const clicks = [_]registry.RowClick{
-        .{ .on_click = onClickA, .ctx = &clicks_a },
+        .{ .on_click = onClickA, .ctx = Ctx.from(&clicks_a) },
     };
     list(.{ .id = .{ .text = "test-short-clicks-list" }, .clicks = &clicks }, gap_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
@@ -778,7 +780,7 @@ test "list clicks short slice leaves extra rows without entry" {
 }
 
 fn declareDisabledList() void {
-    list(.{ .id = .{ .text = "test-disabled-list" }, .disabled = true, .on_select = .{ .f = testOnSelect, .ctx = &disabled_rec } }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
+    list(.{ .id = .{ .text = "test-disabled-list" }, .disabled = true, .on_select = .{ .f = testOnSelect, .ctx = Ctx.from(&disabled_rec) } }, demo_slice, CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) }, renderA);
 }
 
 var disabled_rec = SelectCtx{};
@@ -989,7 +991,7 @@ var grid_click_rec = SelectCtx{};
 
 fn declareClickGrid() void {
     list(
-        .{ .id = .{ .text = "test-click-grid" }, .direction = .grid, .cols = 3, .cell_w = .{ .px = 100 }, .cell_h = .{ .px = 60 }, .on_select = .{ .f = testOnSelect, .ctx = &grid_click_rec } },
+        .{ .id = .{ .text = "test-click-grid" }, .direction = .grid, .cols = 3, .cell_w = .{ .px = 100 }, .cell_h = .{ .px = 60 }, .on_select = .{ .f = testOnSelect, .ctx = Ctx.from(&grid_click_rec) } },
         g_slice,
         CtxA{ .fg = Color.rgb(0xe8, 0xe8, 0xe8) },
         renderA,

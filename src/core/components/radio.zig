@@ -6,9 +6,11 @@ const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
+const erased = @import("../erased.zig");
+const Ctx = erased.Ctx;
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
-pub const ClickFn = ?*const fn (?*anyopaque) void;
+pub const ClickFn = ?*const fn (Ctx) void;
 
 /// Toolkit-style radio button props.
 pub const RadioProps = struct {
@@ -109,7 +111,7 @@ test "RadioProps carries neutral defaults" {
     try std.testing.expect(!p.disabled);
     try std.testing.expectEqual(Color.rgb(0x2a, 0x2a, 0x2a), p.disabled_bg);
     try std.testing.expect(p.on_click.f == null);
-    try std.testing.expect(p.on_click.ctx == null);
+    try std.testing.expect(p.on_click.ctx.isNone());
 }
 
 fn borderColorForSelected(selected: bool) !cl.Color {
@@ -136,15 +138,15 @@ const ClickCtx = struct {
     calls: usize = 0,
 };
 
-fn testOnClick(ctx: ?*anyopaque) void {
-    const c: *ClickCtx = @ptrCast(@alignCast(ctx.?));
+fn testOnClick(ctx: Ctx) void {
+    const c = ctx.get(ClickCtx);
     c.calls += 1;
 }
 
 var click_rec = ClickCtx{};
 
 fn declareClickRadio() void {
-    radio(.{ .id = .{ .text = "test-click-radio" }, .on_click = .{ .f = testOnClick, .ctx = &click_rec } });
+    radio(.{ .id = .{ .text = "test-click-radio" }, .on_click = .{ .f = testOnClick, .ctx = Ctx.from(&click_rec) } });
 }
 
 test "radio self-registers on_click; dispatchClick at center fires once" {
@@ -174,7 +176,7 @@ fn rectColorForId(cmds: []cl.RenderCommand, id: u32) ?cl.Color {
 }
 
 fn declareDisabledRadio() void {
-    radio(.{ .id = .{ .text = "test-disabled-radio" }, .disabled = true, .on_click = .{ .f = testOnClick, .ctx = &click_rec } });
+    radio(.{ .id = .{ .text = "test-disabled-radio" }, .disabled = true, .on_click = .{ .f = testOnClick, .ctx = Ctx.from(&click_rec) } });
 }
 
 test "disabled radio uses disabled_bg and registers no click" {
