@@ -394,16 +394,16 @@ pub const Window = struct {
     }
 
     // Asked before the window closes: the app may hold it open to ask its own question.
-    fn onShouldClose(p: ?*anyopaque) callconv(.c) bool {
+    fn onShouldClose(p: ?*anyopaque) callconv(.c) c_int {
         const self = ctx(p);
-        const d = self.delegate orelse return true;
-        if (self.state.quit) return true;
+        const d = self.delegate orelse return 1;
+        if (self.state.quit) return 1;
         d.on_close(d.ptr);
-        if (d.is_quit(d.ptr)) return true;
+        if (d.is_quit(d.ptr)) return 1;
         // Vetoed: redraw, because the answer is a card the app has to put on screen.
         self.state.needs_draw = true;
         c.glin_cocoa_invalidate(self.handle);
-        return false;
+        return 0;
     }
 
     fn onClose(p: ?*anyopaque) callconv(.c) void {

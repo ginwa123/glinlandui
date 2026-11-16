@@ -75,8 +75,9 @@ typedef void (*GlinCocoaOnResize)(void *user, int w, int h);
 /// The window's close button was pressed.
 typedef void (*GlinCocoaOnClose)(void *user);
 
-// Asked before the window closes: false keeps it open, which is how an app holds a question on screen.
-typedef bool (*GlinCocoaShouldClose)(void *user);
+// Asked before the window closes: 0 keeps it open, which is how an app holds a question on screen.
+// `int`, not `bool`: this header is translated by a C compiler that need not have `<stdbool.h>`.
+typedef int (*GlinCocoaShouldClose)(void *user);
 
 /// Create the window and its view. Returns NULL on failure (e.g. no window
 /// server, which is what a headless CI runner looks like).
