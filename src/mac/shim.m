@@ -62,6 +62,7 @@ struct GlinCocoaWindow {
     GlinCocoaOnKey on_key;
     GlinCocoaOnResize on_resize;
     GlinCocoaOnClose on_close;
+    GlinCocoaShouldClose should_close;
     void *user;
 
     /// Owned pixel buffer + a bitmap context over it. Both are reallocated
@@ -363,6 +364,11 @@ static void glin_frame_drawn(GlinCocoaWindow *win) {
     return self;
 }
 
+- (BOOL)windowShouldClose:(NSWindow *)sender {
+    if (_owner && _owner->should_close) return _owner->should_close(_owner->user) ? YES : NO;
+    return YES;
+}
+
 - (void)windowWillClose:(NSNotification *)note {
     if (_owner && _owner->on_close) _owner->on_close(_owner->user);
 }
@@ -493,6 +499,7 @@ void glin_cocoa_window_set_callbacks(GlinCocoaWindow *win,
                                      GlinCocoaOnKey on_key,
                                      GlinCocoaOnResize on_resize,
                                      GlinCocoaOnClose on_close,
+                                     GlinCocoaShouldClose should_close,
                                      void *user) {
     if (!win) return;
     win->on_frame = on_frame;
@@ -501,6 +508,7 @@ void glin_cocoa_window_set_callbacks(GlinCocoaWindow *win,
     win->on_key = on_key;
     win->on_resize = on_resize;
     win->on_close = on_close;
+    win->should_close = should_close;
     win->user = user;
 }
 

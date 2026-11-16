@@ -75,6 +75,9 @@ typedef void (*GlinCocoaOnResize)(void *user, int w, int h);
 /// The window's close button was pressed.
 typedef void (*GlinCocoaOnClose)(void *user);
 
+// Asked before the window closes: false keeps it open, which is how an app holds a question on screen.
+typedef bool (*GlinCocoaShouldClose)(void *user);
+
 /// Create the window and its view. Returns NULL on failure (e.g. no window
 /// server, which is what a headless CI runner looks like).
 /// `min_w`/`min_h` of 0 disable the minimum size.
@@ -91,6 +94,7 @@ void glin_cocoa_window_set_callbacks(GlinCocoaWindow *win,
                                      GlinCocoaOnKey on_key,
                                      GlinCocoaOnResize on_resize,
                                      GlinCocoaOnClose on_close,
+                                     GlinCocoaShouldClose should_close,
                                      void *user);
 
 /// Start the AppKit event loop; blocks until the app quits.

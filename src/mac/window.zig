@@ -124,6 +124,7 @@ pub const Window = struct {
             onKey,
             onResize,
             onClose,
+            onShouldClose,
             self,
         );
 
@@ -390,6 +391,19 @@ pub const Window = struct {
         if (w <= 0 or h <= 0) return;
         // Record only: the delegate is notified from applyPendingResize, once per drawn frame.
         _ = adapter.noteResize(&self.state, @intCast(w), @intCast(h));
+    }
+
+    // Asked before the window closes: the app may hold it open to ask its own question.
+    fn onShouldClose(p: ?*anyopaque) callconv(.c) bool {
+        const self = ctx(p);
+        const d = self.delegate orelse return true;
+        if (self.state.quit) return true;
+        d.on_close(d.ptr);
+        if (d.is_quit(d.ptr)) return true;
+        // Vetoed: redraw, because the answer is a card the app has to put on screen.
+        self.state.needs_draw = true;
+        c.glin_cocoa_invalidate(self.handle);
+        return false;
     }
 
     fn onClose(p: ?*anyopaque) callconv(.c) void {
