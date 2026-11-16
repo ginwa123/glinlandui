@@ -1,9 +1,4 @@
-//! Windows renderer — D3D11 on the GPU, with the shared CPU rasteriser as the
-//! fallback. The mirror of `src/mac/renderer.zig`: this half turns Clay's
-//! command stream into vertices and segments, and `src/windows/shim.c` owns the
-//! device and the draws. Everything that decides WHERE a pixel goes is here, so
-//! it is testable without a GPU; everything that talks to Direct3D is behind
-//! `src/windows/d3d11.zig`, which is the only file that `@cImport`s the shim.
+//! Windows renderer — D3D11 on the GPU, with the shared CPU rasteriser as the fallback. The mirror of `src/mac/renderer.zig`: this half turns Clay's command stream into vertices and segments, and `src/windows/shim.c` owns the device and the draws. Everything that decides WHERE a pixel goes is here, so it is testable without a GPU; everything that talks to Direct3D is behind `src/windows/d3d11.zig`, which is the only file that `@cImport`s the shim.
 const std = @import("std");
 const builtin = @import("builtin");
 const cl = @import("zclay");
@@ -25,9 +20,7 @@ const atlas_h: u32 = 1024;
 /// Must match `GLIN_MAX_IMAGES` in shim.h.
 const max_images: u32 = 32;
 
-/// One vertex. Byte-for-byte `GlinVertex` in shim.h: 17 floats, 68 bytes, and
-/// every field is an f32 ARRAY rather than a vector so no compiler gets to
-/// disagree about alignment.
+/// One vertex. Byte-for-byte `GlinVertex` in shim.h: 17 floats, 68 bytes, and every field is an f32 ARRAY rather than a vector so no compiler gets to disagree about alignment.
 pub const Vertex = extern struct {
     pos: [2]f32,
     local: [2]f32,
@@ -53,9 +46,7 @@ const Segment = extern struct {
 
 const GlyphKey = struct { cp: u21, size: u16 };
 
-// Module-level, like `mac/renderer.zig`'s `attachView`: the window hands itself over before `run()`, and
-// the frame asks whether the last draw went to the GPU. The Renderer instance lives in frame.zig, which
-// the window cannot reach.
+// Module-level, like `mac/renderer.zig`'s `attachView`: the window hands itself over before `run()`, and the frame asks whether the last draw went to the GPU. The Renderer instance lives in frame.zig, which the window cannot reach.
 var pending_window: ?*anyopaque = null;
 var last_frame_gpu: bool = false;
 
@@ -64,8 +55,7 @@ pub fn attachWindow(win: ?*anyopaque) void {
     pending_window = win;
 }
 
-/// True when the last frame's pixels reached the screen through D3D11, so the window must NOT blit the
-/// (stale) CPU surface on top of it.
+/// True when the last frame's pixels reached the screen through D3D11, so the window must NOT blit the (stale) CPU surface on top of it.
 pub fn drewOnGpu() bool {
     return last_frame_gpu;
 }
@@ -78,15 +68,12 @@ pub const Renderer = struct {
     /// `*gpu.c.GlinWinGpu` on Windows, opaque so this struct compiles anywhere.
     handle: ?*anyopaque = null,
     attach_tried: bool = false,
-    /// The window to attach to, handed over before the first frame (the window
-    /// pointer, not a view: D3D11 renders into the swap chain the window owns).
+    /// The window to attach to, handed over before the first frame (the window pointer, not a view: D3D11 renders into the swap chain the window owns).
     window: ?*anyopaque = null,
-    /// True when the last drawCommands put its pixels on screen through D3D11,
-    /// so the window knows not to blit the (stale) CPU surface over it.
+    /// True when the last drawCommands put its pixels on screen through D3D11, so the window knows not to blit the (stale) CPU surface over it.
     gpu_presented: bool = false,
 
-    /// The CPU path: used when there is no device, when a frame carries an
-    /// image (the GPU path does not decode images yet), and for `renderHeadless`.
+    /// The CPU path: used when there is no device, when a frame carries an image (the GPU path does not decode images yet), and for `renderHeadless`.
     cpu: ?soft.Renderer = null,
 
     verts: std.ArrayList(Vertex) = .empty,
@@ -124,8 +111,7 @@ pub const Renderer = struct {
         self.atlas = &.{};
     }
 
-    /// The window hands itself over before `run()`; the device only exists after
-    /// the window opened, so the attach is lazy (on the first frame).
+    /// The window hands itself over before `run()`; the device only exists after the window opened, so the attach is lazy (on the first frame).
     pub fn attachWindow(self: *Renderer, win: ?*anyopaque) void {
         self.window = win;
     }
@@ -148,9 +134,7 @@ pub const Renderer = struct {
                 }
             }
         }
-        // The fallback: no device, `GLIN_NO_D3D11`, a frame this path cannot draw yet, or a device that
-        // just failed. The CPU rasteriser is the reference implementation, so a frame it draws is never
-        // wrong — only slower.
+        // The fallback: no device, `GLIN_NO_D3D11`, a frame this path cannot draw yet, or a device that just failed. The CPU rasteriser is the reference implementation, so a frame it draws is never wrong — only slower.
         const cpu = self.cpuRenderer() orelse return;
         cpu.drawCommands(commands, win_w, win_h);
     }
@@ -160,8 +144,7 @@ pub const Renderer = struct {
         return &self.cpu.?;
     }
 
-    /// Attach to a live window's device. `GLIN_NO_D3D11` forces the CPU path, so an A/B on the same
-    /// window needs no rebuild.
+    /// Attach to a live window's device. `GLIN_NO_D3D11` forces the CPU path, so an A/B on the same window needs no rebuild.
     fn attach(self: *Renderer, win: ?*anyopaque) void {
         self.attach_tried = true;
         if (!on_windows) return;
@@ -170,8 +153,7 @@ pub const Renderer = struct {
         self.handle = @ptrCast(gpu.c.glin_win_gpu_create(@ptrCast(@alignCast(win.?))));
     }
 
-    /// True when D3D11 is usable on this machine right now — the parity test's
-    /// skip condition, and the window's "should I even try" question.
+    /// True when D3D11 is usable on this machine right now — the parity test's skip condition, and the window's "should I even try" question.
     pub fn gpuUsable() bool {
         return on_windows;
     }
@@ -212,8 +194,7 @@ pub const Renderer = struct {
                 },
                 .scissor_start => self.setScissor(bb.x * k, bb.y * k, bb.width * k, bb.height * k),
                 .scissor_end => self.setScissor(0, 0, 0, 0),
-                // Images need an RGBA texture per slot and a decode; the GPU path does not do that yet,
-                // so the whole frame goes to the CPU rather than dropping the image silently.
+                // Images need an RGBA texture per slot and a decode; the GPU path does not do that yet, so the whole frame goes to the CPU rather than dropping the image silently.
                 .image => return false,
                 else => {},
             }
@@ -247,15 +228,13 @@ pub const Renderer = struct {
         return presented;
     }
 
-    /// Build a device with no window, for the offscreen parity test. False when this machine has no
-    /// D3D11 device at all — the test then skips rather than fails.
+    /// Build a device with no window, for the offscreen parity test. False when this machine has no D3D11 device at all — the test then skips rather than fails.
     pub fn attachOffscreen(self: *Renderer) bool {
         _ = self;
         return on_windows;
     }
 
-    /// Render a command list offscreen and return the DISPLAYED bytes (R,G,B,A,
-    /// `w * h * 4`, owned by the caller). Null when the GPU could not draw.
+    /// Render a command list offscreen and return the DISPLAYED bytes (R,G,B,A, `w * h * 4`, owned by the caller). Null when the GPU could not draw.
     pub fn renderOffscreen(self: *Renderer, commands: []const cl.RenderCommand, w: i32, h: i32) ?[]u8 {
         if (!on_windows) return null;
         if (w <= 0 or h <= 0) return null;
@@ -433,10 +412,7 @@ pub const Renderer = struct {
 
     const Slot = struct { x: u32, y: u32, w: u32, h: u32, xoff: f32, yoff: f32 };
 
-    /// Place one glyph mask in the atlas (shelf packing) and return its slot, in
-    /// DEVICE pixels. The mask bytes and the offsets come from the same
-    /// process-wide cache the CPU path blits from, which is what makes the two
-    /// agree.
+    /// Place one glyph mask in the atlas (shelf packing) and return its slot, in DEVICE pixels. The mask bytes and the offsets come from the same process-wide cache the CPU path blits from, which is what makes the two agree.
     fn glyphSlot(self: *Renderer, face: *const glyphs.Font, cp: u21, fs: u16) ?Slot {
         const key = GlyphKey{ .cp = cp, .size = fs };
         if (self.glyph_map.get(key)) |s| {

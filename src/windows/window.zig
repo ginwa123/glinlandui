@@ -141,8 +141,7 @@ pub const Window = struct {
         self.handle = handle;
         defer self.handle = null;
         defer c.glin_win_window_destroy(handle);
-        // Hand the window over before the first frame; the renderer builds its D3D11 pipeline on this
-        // window's device lazily, exactly as the macOS backend hands over its view.
+        // Hand the window over before the first frame; the renderer builds its D3D11 pipeline on this window's device lazily, exactly as the macOS backend hands over its view.
         renderer.attachWindow(handle);
 
         // The client area may differ from what was asked for; adopt the real size so the first frame lays out in it.
@@ -206,8 +205,7 @@ pub const Window = struct {
         // Record the space those boxes were laid out in, so a pointer event that arrives before the next frame translates in it.
         self.layout_w = w;
         self.layout_h = h;
-        // When the renderer drew this frame on the GPU it has already presented it; uploading the CPU
-        // surface now would paint the previous frame back over it.
+        // When the renderer drew this frame on the GPU it has already presented it; uploading the CPU surface now would paint the previous frame back over it.
         if (renderer.drewOnGpu()) return;
         self.presentFrame();
     }
