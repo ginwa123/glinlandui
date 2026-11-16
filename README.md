@@ -121,8 +121,8 @@ const App = struct {
     clicks: usize = 0,
 
     /// The declare callback: everything the app draws happens here.
-    fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
-        const self: *App = @ptrCast(@alignCast(ctx.?));
+    fn root(ctx: glinlandui.Ctx, _: u32, _: u32) void {
+        const self = ctx.get(App);
         components.box.box(.{
             .id = .{ .text = "hello.root" },
             .w = .grow,
@@ -137,12 +137,11 @@ const App = struct {
         components.button.button(.{
             .id = .{ .text = "hello.button" },   // the element id IS the E2E test tag
             .label = .{ .text = if (self.clicks == 0) "Click me" else "Clicked!" },
-            .on_click = .{ .f = onClick, .ctx = self },
+            .on_click = glinlandui.props.Click.on(self, onClick),   // typed: no cast anywhere
         });
     }
 
-    fn onClick(ctx: ?*anyopaque) void {
-        const self: *App = @ptrCast(@alignCast(ctx.?));
+    fn onClick(self: *App) void {
         self.clicks += 1;
     }
 };
@@ -217,8 +216,8 @@ const Vm = struct {
 const App = struct {
     store: glinlandui.view_model.Store(Vm) = .{},
 
-    fn content(ctx: ?*anyopaque, w: u32, h: u32) void {
-        const self: *App = @ptrCast(@alignCast(ctx.?));
+    fn content(ctx: glinlandui.Ctx, w: u32, h: u32) void {
+        const self = ctx.get(App);
         const vm = self.store.getOrCreate(Vm.init);     // `viewModel()`
         // ... declare the screen from `vm.state`
     }

@@ -56,6 +56,7 @@ The three rules it enforces:
 | `zginlint/max-comment-lines` | a comment block is at most **1** line |
 | `zginlint/no-catch-unreachable` | banned — use `catch @panic("what failed")` or `try` |
 | `zginlint/no-std-log-warn` | no bare `std.log.warn`; go through `core/log.zig` |
+| `zginlint/no-anyopaque` | no `anyopaque` under `src/core`; `core/erased.zig` is the one allowed file |
 
 `core/log.zig` is the sink the last rule asks for: `log.warn` / `log.err` route to a sink the
 application installs with `setSink`, defaulting to stderr in production and **nothing at all**
