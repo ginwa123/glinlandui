@@ -119,6 +119,8 @@ fn pressBeganOn(p: Props) bool {
 fn panel(p: Props, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void) void {
     const w = width(p);
     if (w <= 0) return;
+    // The height this panel had last frame: a child that grows taller than the panel has to scroll inside it, not push the panel open.
+    const prev = cl.getElementData(p.id.clay());
     cl.UI()(.{
         .id = p.id.clay(),
         .layout = .{
@@ -129,7 +131,21 @@ fn panel(p: Props, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void) void
         // Narrower than its content: clip at the edge rather than paint over the area beside it.
         .clip = .{ .horizontal = true, .vertical = true },
     })({
-        children(ctx);
+        // One bounded box, because a clipping parent never compresses its children: without this an app's `.h = .grow` column takes its content's height.
+        cl.UI()(.{
+            .layout = .{
+                .direction = .top_to_bottom,
+                .sizing = .{
+                    .w = .grow,
+                    .h = if (prev.found and prev.bounding_box.height > 0)
+                        prop.Size.growing(0, prev.bounding_box.height).clay()
+                    else
+                        .grow,
+                },
+            },
+        })({
+            children(ctx);
+        });
     });
     semantics.registerAt(@src(), .{
         .declared = semantics.declaredAt(p.src),
