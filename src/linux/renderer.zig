@@ -1049,9 +1049,28 @@ test "containBox letterboxes inside the box" {
 
 test "rect shader keeps a 1px coverage band (crisp borders, true radius)" {
     // Regression: the 2px smoothstep(-1,1,d) band spread a 1px border over two pixels (~0.7 + ~0.16 alpha) and eroded rounded corners, so row outlines.
-    try std.testing.expect(std.mem.indexOf(u8, rect_frag_src, "clamp(0.5 - d, 0.0, 1.0)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rect_frag_src, "clamp(0.5 - d * u_scale, 0.0, 1.0)") != null);
     try std.testing.expect(std.mem.indexOf(u8, rect_frag_src, "smoothstep(-1.0, 1.0,") == null);
     // Both the outer shape and the border's inner cut use it.
     try std.testing.expect(std.mem.indexOf(u8, rect_frag_src, "float a = cov(d);") != null);
     try std.testing.expect(std.mem.indexOf(u8, rect_frag_src, "float a2 = cov(d2);") != null);
+    // The band is one DEVICE pixel: a logical-unit band leaves a quarter-transparent column on every edge of a 2x window.
+    try std.testing.expect(std.mem.indexOf(u8, rect_frag_src, "uniform float u_scale;") != null);
+}
+
+test "the AA band is a device pixel, so 2x does not soften a rect edge" {
+    // The shader's dead-zone is 0.5 units wide in the space `d` is measured in, and `d * u_scale` puts it in device pixels.
+    const band_at = struct {
+        fn f(d: f32, applied: f32) f32 {
+            return std.math.clamp(0.5 - d * applied, 0.0, 1.0);
+        }
+    }.f;
+    // A device pixel one unit inside a 1x edge is fully covered; at 2x the same pixel is half a point inside, and must still be fully covered.
+    try std.testing.expectEqual(@as(f32, 1.0), band_at(-1.0, 1.0));
+    try std.testing.expectEqual(@as(f32, 1.0), band_at(-0.5, 2.0));
+    // Half a device pixel outside is empty at either density.
+    try std.testing.expectEqual(@as(f32, 0.0), band_at(0.5, 1.0));
+    try std.testing.expectEqual(@as(f32, 0.0), band_at(0.25, 2.0));
+    // And a logical-unit band (the bug) leaves the 2x edge pixel 75% covered.
+    try std.testing.expectApproxEqAbs(@as(f32, 0.75), band_at(-0.25, 1.0), 1e-6);
 }
