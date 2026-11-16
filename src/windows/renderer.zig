@@ -195,8 +195,13 @@ pub const Renderer = struct {
                 },
                 .scissor_start => self.setScissor(bb.x * k, bb.y * k, bb.width * k, bb.height * k),
                 .scissor_end => self.setScissor(0, 0, 0, 0),
-                // Images need an RGBA texture per slot and a decode; the GPU path does not do that yet, so the whole frame goes to the CPU rather than dropping the image silently.
-                .image => return false,
+                .image => {
+                    const im = cmd.render_data.image;
+                    if (im.image_data) |ptr| {
+                        const ref: *const common.ImageRef = @ptrCast(@alignCast(ptr));
+                        self.pushImage(h, bb.x * k, bb.y * k, bb.width * k, bb.height * k, ref);
+                    }
+                },
                 else => {},
             }
         }
@@ -409,6 +414,72 @@ pub const Renderer = struct {
             }
             pen += gm.advance;
         }
+    }
+
+    /// Upload an image once per (path, max_dim) into a fixed texture slot and draw its quad, in DEVICE pixels.
+    fn pushImage(self: *Renderer, g: *gpu.c.GlinWinGpu, x: f32, y: f32, bw: f32, bh: f32, ref: *const common.ImageRef) void {
+        if (bw <= 0 or bh <= 0) return;
+        const path = ref.path_ptr[0..ref.path_len];
+        const max_dim: u16 = if (ref.max_dim == 0) 256 else ref.max_dim;
+        const placeholder = soft.img_placeholder.toClay();
+        const tex = self.imageTex(g, path, max_dim) orelse {
+            self.pushRect(x, y, bw, bh, .{ 0, 0, 0, 0 }, 0, 0, placeholder);
+            return;
+        };
+        const iw: f32 = @floatFromInt(tex.w);
+        const ih: f32 = @floatFromInt(tex.h);
+        var qx = x;
+        var qy = y;
+        var qw = bw;
+        var qh = bh;
+        var uv = [4]f32{ 0, 0, 1, 1 };
+        switch (ref.fit) {
+            .cover => uv = common.coverUv(iw, ih, bw, bh),
+            .contain => {
+                self.pushRect(x, y, bw, bh, .{ 0, 0, 0, 0 }, 0, 0, placeholder);
+                const b = common.containBox(iw, ih, bw, bh);
+                qx = x + b[0];
+                qy = y + b[1];
+                qw = b[2];
+                qh = b[3];
+            },
+            .stretch => {},
+        }
+        if (qw <= 0 or qh <= 0) return;
+
+        // Its own segment, because the texture changes: the encoder binds one texture per segment.
+        self.closeSegment();
+        self.seg_texture = @intCast(tex.id);
+        const white = [4]f32{ 1, 1, 1, 1 };
+        const a = Vertex{ .pos = .{ qx, qy }, .local = .{ uv[0], uv[1] }, .size = .{ 0, 0 }, .radius = .{ 0, 0, 0, 0 }, .color = white, .mode = 0, .border = 0, .kind = 2 };
+        var b2 = a;
+        var c2 = a;
+        var d2 = a;
+        b2.pos = .{ qx + qw, qy };
+        b2.local = .{ uv[2], uv[1] };
+        c2.pos = .{ qx + qw, qy + qh };
+        c2.local = .{ uv[2], uv[3] };
+        d2.pos = .{ qx, qy + qh };
+        d2.local = .{ uv[0], uv[3] };
+        self.verts.appendSlice(self.alloc, &.{ a, b2, c2, a, c2, d2 }) catch {};
+        self.closeSegment();
+        self.seg_texture = 0;
+    }
+
+    /// The pixels come from the CPU surface's own decode cache, so the GPU and the reference cannot disagree about the bitmap.
+    fn imageTex(self: *Renderer, g: *gpu.c.GlinWinGpu, path: []const u8, max_dim: u16) ?ImageTex {
+        if (path.len == 0) return null;
+        const key = common.hashImageKey(path, max_dim);
+        if (self.images.get(key)) |t| return t;
+        const cpu = self.cpuRenderer() orelse return null;
+        const img = cpu.imageFor(path, max_dim) orelse return null;
+        const id = self.next_image_id;
+        // The shader's slot table is fixed (GLIN_MAX_IMAGES, 0 is the glyph atlas), so wrap rather than grow.
+        if (self.next_image_id + 1 >= max_images) self.next_image_id = 1 else self.next_image_id += 1;
+        gpu.c.glin_win_gpu_set_image(g, @intCast(id), img.pixels.ptr, @intCast(img.width), @intCast(img.height));
+        const tex = ImageTex{ .id = id, .w = img.width, .h = img.height };
+        self.images.put(self.alloc, key, tex) catch {};
+        return tex;
     }
 
     const Slot = struct { x: u32, y: u32, w: u32, h: u32, xoff: f32, yoff: f32 };
