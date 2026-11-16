@@ -69,8 +69,9 @@ pub fn button(p: ButtonProps) void {
     }
 }
 
-/// Declare a button whose click is a TYPED pair — `click(.{ .label = .{ .text = "Send" } }, self, App.onSend)` — checked here.
-pub fn click(look: ButtonProps, model: anytype, comptime handler: anytype) void {
+/// Declare a button whose click is a TYPED pair — `onClick(.{ .label = .{ .text = "Send" } }, self, App.onSend)`.
+/// The same shape as the field's `onChange`/`onSubmit`/`onFocus`: the model and the handler travel together.
+pub fn onClick(look: ButtonProps, model: anytype, comptime handler: anytype) void {
     const Model = erased.pointeeOf(@TypeOf(model));
     var p = look;
     p.on_click = .{ .f = erased.call0(Model, handler), .ctx = Ctx.from(model) };
@@ -242,10 +243,10 @@ fn onTypedClick(model: *TypedModel) void {
 var typed_rec = TypedModel{};
 
 fn declareTypedButton() void {
-    click(.{ .id = .{ .text = "test-typed-button" }, .label = .{ .text = "OK" } }, &typed_rec, onTypedClick);
+    onClick(.{ .id = .{ .text = "test-typed-button" }, .label = .{ .text = "OK" } }, &typed_rec, onTypedClick);
 }
 
-test "click pairs the model and the handler with no cast; a click reaches THAT model" {
+test "onClick pairs the model and the handler with no cast; a click reaches THAT model" {
     typed_rec = .{};
     registry.beginFrame();
     _ = try headless.frameCommands(declareTypedButton);
