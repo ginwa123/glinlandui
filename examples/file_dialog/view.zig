@@ -1,8 +1,9 @@
 // The View: pure declaration from the state. Nothing here writes the model — a button raises an intent and the next frame draws what it says.
 const glinlandui = @import("glinlandui");
-const box_mod = glinlandui.components.box;
-const button = glinlandui.components.button;
-const text_mod = glinlandui.components.text;
+const box = glinlandui.components.box.box;
+const row = glinlandui.components.box.row;
+const button = glinlandui.components.button.button;
+const label = glinlandui.components.text.label;
 const Color = glinlandui.Color;
 const props = glinlandui.props;
 
@@ -28,7 +29,7 @@ pub const Scope = struct {
 
 // `@Composable fun DialogScreen(vm: DialogViewModel = viewModel())`
 pub fn DialogScreen(scope: *Scope) void {
-    box_mod.box(.{
+    box(.{
         .id = .{ .text = "dlg-root" },
         .direction = .column,
         .w = .grow,
@@ -41,20 +42,20 @@ pub fn DialogScreen(scope: *Scope) void {
 
 fn body(scope: *Scope) void {
     const t = scope.theme;
-    text_mod.label(.{
+    label(.{
         .label = .{ .text = "glinlandui.file_dialog — the system file picker", .size = t.type_scale.body, .color = t.colors.text },
     });
 
     // Gated on `available()`: a button that cannot work is worse than no button, because the user finds out by clicking it.
     if (dialog.available()) {
-        box_mod.row(.{
+        row(.{
             .id = .{ .text = "dlg-actions" },
             .w = .grow,
             .h = .{ .fixed = 40 },
             .gap = .{ .px = 8 },
         }, scope, actionRow);
     } else {
-        box_mod.box(.{
+        box(.{
             .id = .{ .text = "dlg-unavailable" },
             .w = .grow,
             .h = .{ .fixed = 40 },
@@ -65,7 +66,7 @@ fn body(scope: *Scope) void {
         }, scope, unavailableChild);
     }
 
-    box_mod.box(.{
+    box(.{
         .id = .{ .text = "dlg-status" },
         .w = .grow,
         .h = .{ .fixed = 76 },
@@ -78,7 +79,7 @@ fn body(scope: *Scope) void {
 
 fn unavailableChild(scope: *Scope) void {
     const t = scope.theme;
-    text_mod.label(.{
+    label(.{
         .label = .{ .text = "No file dialog on this platform (the browser has none).", .size = t.type_scale.label, .color = COLOR_WARN },
     });
 }
@@ -90,7 +91,7 @@ fn actionRow(scope: *Scope) void {
     var i: usize = 0;
     while (i < state_mod.ACTIONS.len) : (i += 1) {
         ctxs[i] = .{ .vm = scope.vm, .index = i };
-        button.button(.{
+        button(.{
             .id = .{ .text = state_mod.ACTIONS[i].id },
             .label = .{ .text = state_mod.ACTIONS[i].label, .size = t.type_scale.body, .color = t.colors.on_primary },
             .h = .{ .fixed = 40 },
@@ -109,11 +110,11 @@ fn onAction(raw: ?*anyopaque) void {
 fn statusChildren(scope: *Scope) void {
     const t = scope.theme;
     const state = scope.state;
-    text_mod.label(.{
+    label(.{
         .label = .{ .text = "Last answer", .size = t.type_scale.caption, .color = t.colors.text_dim },
     });
     // Red for a problem and NOT red for a cancellation: `isProblem` is the same predicate the tests hold the line on, so the two cannot drift.
-    text_mod.label(.{
+    label(.{
         .label = .{ .text = state.line(), .size = t.type_scale.body, .color = if (state.outcome.isProblem()) COLOR_ERR else COLOR_OK },
     });
 }

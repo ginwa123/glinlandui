@@ -2,7 +2,7 @@
 const std = @import("std");
 const glinlandui = @import("glinlandui");
 const frame = glinlandui.frame;
-const input_mod = glinlandui.components.input;
+const input = glinlandui.components.input;
 const state_mod = @import("state.zig");
 
 const CatalogUiState = state_mod.CatalogUiState;
@@ -18,8 +18,8 @@ pub const CatalogViewModel = struct {
     state: CatalogUiState = .{},
 
     // Compose keeps these in `remember`: a field owns a buffer, a caret and a draft, and every one of them outlives a frame.
-    field: input_mod.Field = .{ .id = .{ .text = field_id } },
-    dd_field: input_mod.Field = .{ .id = .{ .text = dd_field_id } },
+    field: input.Field = .{ .id = .{ .text = field_id } },
+    dd_field: input.Field = .{ .id = .{ .text = dd_field_id } },
 
     // A radio's click carries only a context, so each one gets a context the model owns.
     radio_ctxs: [state_mod.radio_count]RadioCtx = undefined,

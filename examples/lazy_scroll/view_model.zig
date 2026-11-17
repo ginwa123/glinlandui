@@ -3,7 +3,7 @@
 // Every public function here is an INTENT: it never draws, never reads a widget, and never knows a window exists.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
-const scroll_mod = glinlandui.components.scroll;
+const scroll = glinlandui.components.scroll;
 const input_mod = glinlandui.components.input;
 const table = glinlandui.table;
 
@@ -55,7 +55,7 @@ pub const LazyViewModel = struct {
     // The auto-scroll: one step of the animation BEFORE the frame declares, and another frame while it runs.
     pub fn advance(self: *LazyViewModel) void {
         if (!self.ui.auto) return;
-        scroll_mod.scrollBy(scroll_id, 0, self.ui.speed);
+        scroll.scrollBy(scroll_id, 0, self.ui.speed);
         self.requestFrame();
     }
 
@@ -68,12 +68,12 @@ pub const LazyViewModel = struct {
     // `onJumpBottom`: End, or the header's button. The list clamps the offset to its own content, so no arithmetic here can overshoot.
     pub fn jumpToBottom(self: *LazyViewModel) void {
         _ = self;
-        scroll_mod.scrollBy(scroll_id, 0, span());
+        scroll.scrollBy(scroll_id, 0, span());
     }
 
     pub fn jumpToTop(self: *LazyViewModel) void {
         _ = self;
-        scroll_mod.scrollBy(scroll_id, 0, -span());
+        scroll.scrollBy(scroll_id, 0, -span());
     }
 
     // The bench's knob: how fast the animation moves, in points per frame. Speed is state, so it is set through the model.
@@ -84,7 +84,7 @@ pub const LazyViewModel = struct {
     // Which rows this frame must declare, and the record of how many that was. The viewport is only readable once the list is declared, which is why
     // this is called from inside it — and the header, declared before it, draws the count the PREVIOUS frame left behind.
     pub fn visibleRows(self: *LazyViewModel) table.Visible {
-        const v = scroll_mod.view(scroll_id);
+        const v = scroll.view(scroll_id);
         const view_h: f32 = if (v.found) v.height else 600;
         const vis = table.visible(.{
             .total_rows = state_mod.row_count,
