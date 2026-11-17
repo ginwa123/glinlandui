@@ -762,7 +762,7 @@ test "a target declared INSIDE the covering surface answers as usual" {
     // The pane claims its area, then its own child registers: paint order decides, and the child is later.
     oc_rec = ClipClick{};
     beginFrame();
-    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    ocBegin();
     cl.beginLayout();
     cl.UI()(.{ .id = .ID("oc-card"), .layout = .{ .sizing = .{ .w = .fixed(200), .h = .fixed(120) } } })({
         occludeFill(.ID("oc-card"), @import("../color.zig").Color.rgb(0x1e, 0x1e, 0x1e));
@@ -780,7 +780,7 @@ test "a surface painted BEFORE a target does not hide it" {
     // A card drawn first, the target on top of it: the later target is what the user sees.
     oc_rec = ClipClick{};
     beginFrame();
-    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    ocBegin();
     cl.beginLayout();
     cl.UI()(.{
         .id = .ID("oc-behind"),
@@ -801,7 +801,7 @@ test "an overlay above the covering surface still answers" {
     // An in-flow pane claims at z 0; a dropdown card floating at z 10 is painted over it, so its row must win.
     oc_rec = ClipClick{};
     beginFrame();
-    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    ocBegin();
     cl.beginLayout();
     cl.UI()(.{
         .id = .ID("oc-pane"),
@@ -823,12 +823,22 @@ test "an overlay above the covering surface still answers" {
     try std.testing.expectEqual(@as(usize, 1), oc_rec.calls);
 }
 
-test "the hover cursor of a covered field is not an I-beam" {
-    layOutOcclusion(false, false);
-    const p = underCentre();
-    try std.testing.expectEqual(Cursor.text, hoverCursorAt(p.x, p.y));
+test "a surface claimed over a target takes the hover cursor with the click" {
+    // One box, its target registered first and the surface claimed after: exactly what a pane does to the row it covers.
+    beginFrame();
+    ocBegin();
+    cl.beginLayout();
+    cl.UI()(.{ .id = .ID("oc-hover"), .layout = .{ .sizing = .{ .w = .fixed(120), .h = .fixed(40) } } })({});
+    registerClickCursor(.ID("oc-hover"), onOcClick, &oc_rec, .text);
+    _ = cl.endLayout();
 
-    // The pane's claim covers it, so the pointer is the pane's own shape.
-    layOutOcclusion(true, false);
-    try std.testing.expectEqual(Cursor.default, hoverCursorAt(p.x, p.y));
+    const bb = cl.getElementData(cl.ElementId.ID("oc-hover")).bounding_box;
+    const cx = bb.x + bb.width * 0.5;
+    const cy = bb.y + bb.height * 0.5;
+    try std.testing.expectEqual(Cursor.text, hoverCursorAt(cx, cy));
+
+    // The claim comes after the target, so it is painted over it: the pointer is no longer an I-beam there.
+    occlude(.ID("oc-hover"));
+    try std.testing.expectEqual(Cursor.default, hoverCursorAt(cx, cy));
+    try std.testing.expect(!dispatchClick(cx, cy));
 }
