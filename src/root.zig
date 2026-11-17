@@ -236,6 +236,8 @@ test {
     _ = @import("core/components/icon.zig");
     _ = @import("core/components/image.zig");
     _ = @import("core/components/input.zig");
+    // The tab order every focusable component shares.
+    _ = @import("core/components/focus.zig");
     _ = @import("core/components/list.zig");
     _ = @import("core/components/radio.zig");
     _ = @import("core/components/scroll.zig");
