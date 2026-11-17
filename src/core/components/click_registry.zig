@@ -723,17 +723,19 @@ fn underCentre() cl.Vector2 {
 
 test "a filled surface over a target stops the click reaching it" {
     oc_rec = ClipClick{};
-    // Without a claim the target answers, which is the defect this rule exists to remove.
+    // Without a claim the target answers — and its cursor is the one it registered — which is the defect this rule removes.
     layOutOcclusion(false, false);
     const p = underCentre();
     try std.testing.expect(dispatchClick(p.x, p.y));
     try std.testing.expectEqual(@as(usize, 1), oc_rec.calls);
+    try std.testing.expectEqual(Cursor.text, hoverCursorAt(p.x, p.y));
 
-    // With the pane's fill claiming the area, the same point answers nothing.
+    // With the pane's fill claiming the area, the same point answers nothing, and the pointer is no longer an I-beam.
     layOutOcclusion(true, false);
     try std.testing.expectEqual(@as(usize, 1), surfaceCount());
     try std.testing.expect(!dispatchClick(p.x, p.y));
     try std.testing.expectEqual(@as(usize, 1), oc_rec.calls);
+    try std.testing.expectEqual(Cursor.default, hoverCursorAt(p.x, p.y));
 }
 
 test "a translucent fill hides nothing, so the target underneath still answers" {
@@ -807,24 +809,4 @@ test "an overlay above the covering surface still answers" {
     const bb = cl.getElementData(cl.ElementId.ID("oc-popup")).bounding_box;
     try std.testing.expect(dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
     try std.testing.expectEqual(@as(usize, 1), oc_rec.calls);
-}
-
-test "a surface claimed over a target takes the hover cursor with the click" {
-    // One box, its target registered first and the surface claimed after: exactly what a pane does to the row it covers.
-    beginFrame();
-    headless.begin(.{ .x = 99999, .y = 99999 }, false);
-    cl.beginLayout();
-    cl.UI()(.{ .id = .ID("oc-hover"), .layout = .{ .sizing = .{ .w = .fixed(120), .h = .fixed(40) } } })({});
-    registerClickCursor(.ID("oc-hover"), onOcClick, &oc_rec, .text);
-    _ = cl.endLayout();
-
-    const bb = cl.getElementData(cl.ElementId.ID("oc-hover")).bounding_box;
-    const cx = bb.x + bb.width * 0.5;
-    const cy = bb.y + bb.height * 0.5;
-    try std.testing.expectEqual(Cursor.text, hoverCursorAt(cx, cy));
-
-    // The claim comes after the target, so it is painted over it: the pointer is no longer an I-beam there.
-    occlude(.ID("oc-hover"));
-    try std.testing.expectEqual(Cursor.default, hoverCursorAt(cx, cy));
-    try std.testing.expect(!dispatchClick(cx, cy));
 }
