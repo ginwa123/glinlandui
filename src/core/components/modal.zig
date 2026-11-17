@@ -2,6 +2,7 @@
 const std = @import("std");
 const cl = @import("zclay");
 const prop = @import("../props.zig");
+const theme_mod = @import("../theme.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
@@ -32,16 +33,17 @@ pub const Props = struct {
     window_w: f32 = 0,
     window_h: f32 = 0,
     card_w: f32 = 420,
-    pad: u16 = 18,
-    gap: u16 = 12,
-    radius: f32 = 8,
+    // The card's padding, gap and corner are the theme's (`card_pad`, `row_gap`, `corner(.lg)`) unless the app does.
+    pad: prop.Pad = prop.Pad.themed,
+    gap: prop.Len = prop.Len.themed,
+    radius: prop.Radius = prop.Radius.themed,
     title_size: u16 = 16,
     message_size: u16 = 13,
     action_size: u16 = 13,
     action_h: f32 = 28,
-    action_pad: u16 = 14,
-    action_gap: u16 = 8,
-    action_radius: f32 = 6,
+    action_pad: prop.Pad = prop.Pad.themed,
+    action_gap: prop.Len = prop.Len.themed,
+    action_radius: prop.Radius = prop.Radius.themed,
     scrim: Color = Color.rgba(0x08, 0x08, 0x0a, 170),
     bg: Color = Color.rgb(0x1e, 0x1e, 0x22),
     border: Color = Color.rgb(0x3a, 0x3a, 0x42),
@@ -74,6 +76,7 @@ pub fn actionId(index: usize) cl.ElementId {
 /// Draw the scrim and the card. Called by the app, inside its own tree, while the question is up.
 pub fn modal(p: Props) void {
     shown = p.on_action;
+    const m = theme_mod.current().metrics;
     semantics.registerAt(@src(), .{
         .declared = semantics.declaredAt(p.src),
         .id = p.id.clay(),
@@ -105,8 +108,8 @@ pub fn modal(p: Props) void {
         .layout = .{
             .direction = .top_to_bottom,
             .sizing = .{ .w = .fixed(p.card_w), .h = .fit },
-            .padding = .all(p.pad),
-            .child_gap = p.gap,
+            .padding = p.pad.resolve(m.card_pad).clay(),
+            .child_gap = p.gap.resolve(m.row_gap).whole(),
         },
         .floating = .{
             .attach_to = .to_root,
@@ -114,8 +117,8 @@ pub fn modal(p: Props) void {
             .z_index = z_index + 1,
         },
         .background_color = p.bg.toClay(),
-        .corner_radius = .all(p.radius),
-        .border = .{ .color = p.border.toClay(), .width = .outside(1) },
+        .corner_radius = p.radius.resolve(m.corner(.lg)).clay(),
+        .border = .{ .color = p.border.toClay(), .width = .outside(m.hairline.whole()) },
     })({
         if (p.title.len > 0) cl.text(p.title, .{ .font_size = p.title_size, .color = p.title_fg.toClay() });
         if (p.message.len > 0) cl.text(p.message, .{ .font_size = p.message_size, .color = p.fg.toClay(), .wrap_mode = .words });
@@ -125,12 +128,13 @@ pub fn modal(p: Props) void {
 
 // The actions sit at the card's right edge, the primary one last: the order a person reads them in.
 fn actionRow(p: Props) void {
+    const m = theme_mod.current().metrics;
     cl.UI()(.{
         .id = .IDI(p.id.str(), 1),
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{ .w = .grow, .h = .fit },
-            .child_gap = p.action_gap,
+            .child_gap = p.action_gap.resolve(m.action_gap).whole(),
             .child_alignment = .{ .x = .right, .y = .center },
         },
     })({
@@ -139,20 +143,21 @@ fn actionRow(p: Props) void {
 }
 
 fn actionButton(p: Props, action: Action, index: usize) void {
+    const m = theme_mod.current().metrics;
     const id = actionId(index);
     const hovered = cl.pointerOver(id);
     cl.UI()(.{
         .id = id,
         .layout = .{
             .sizing = .{ .w = .fit, .h = .fixed(p.action_h) },
-            .padding = .{ .left = p.action_pad, .right = p.action_pad },
+            .padding = p.action_pad.resolve(m.action_pad).clay(),
             .child_alignment = .center,
         },
         .background_color = (if (hovered)
             (if (action.primary) p.primary_hover else p.action_hover)
         else
             (if (action.primary) p.primary else p.action_bg)).toClay(),
-        .corner_radius = .all(p.action_radius),
+        .corner_radius = p.action_radius.resolve(m.corner(.md)).clay(),
     })({
         cl.text(action.label, .{
             .font_size = p.action_size,

@@ -29,6 +29,8 @@ pub const CatalogUiState = struct {
     tab: usize = 0,
     row: ?usize = 1,
     tree_row: usize = 2,
+    // The question card is up, so the modal demo owns the window while it is.
+    modal: bool = false,
     draft: Text = .{0} ** max_text,
     filter: Filter = .{0} ** max_filter,
     last: Note = .{0} ** max_note,
@@ -63,6 +65,12 @@ pub const CatalogUiState = struct {
     pub fn withLast(self: CatalogUiState, text: []const u8) CatalogUiState {
         var next = self;
         setText(max_note, &next.last, text);
+        return next;
+    }
+
+    pub fn withModal(self: CatalogUiState, on: bool) CatalogUiState {
+        var next = self;
+        next.modal = on;
         return next;
     }
 
@@ -112,7 +120,7 @@ pub const CatalogUiState = struct {
 // ---- the catalog's content, as values -------------------------------------------------------------------------
 
 // Which demo a section draws. A tag, not a function pointer: the data stays a value and the view owns the drawing.
-pub const Body = enum { buttons, text_field, selection, roles, type_scale, badges, tabs, list, tree, dropdown, images };
+pub const Body = enum { buttons, text_field, selection, roles, type_scale, spacing, badges, tabs, list, tree, dropdown, scroll, split, sidebar_panel, modal, images };
 
 // One card on the page: its element id, its heading, and the note that says what to look at.
 pub const Section = struct {
@@ -134,6 +142,11 @@ pub const sections = [_]Section{
     .{ .id = "catalog.list.section", .title = "List", .note = "rows with ids, hover and a click each", .body = .list },
     .{ .id = "catalog.tree.section", .title = "Tree", .note = "26px rows, a 17px indent, selection is a fill and a bar", .body = .tree },
     .{ .id = "catalog.dropdown.section", .title = "Dropdown", .note = "a field and its rows, owned by the caller", .body = .dropdown },
+    .{ .id = "catalog.spacing.section", .title = "Theme metrics", .note = "padding, gaps and corners: a prop left unset takes the theme's", .body = .spacing },
+    .{ .id = "catalog.scroll.section", .title = "Scroll", .note = "a clip, a thumb, and a wheel that reaches the deepest box that can move", .body = .scroll },
+    .{ .id = "catalog.split.section", .title = "Split", .note = "two panes and a line the pointer drags; the app owns the size", .body = .split },
+    .{ .id = "catalog.sidebar.section", .title = "Sidebar", .note = "a panel whose width the pointer owns, collapsible past its floor", .body = .sidebar_panel },
+    .{ .id = "catalog.modal.section", .title = "Modal", .note = "a scrim over the window and a card that centres itself", .body = .modal },
     .{ .id = "catalog.images.section", .title = "Images", .note = "cover, contain and stretch — decoded once, drawn on the GPU", .body = .images },
 };
 

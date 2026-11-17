@@ -4,6 +4,7 @@ const cl = @import("zclay");
 const headless = @import("../testing/headless.zig");
 const Color = @import("../color.zig").Color;
 const prop = @import("../props.zig");
+const theme_mod = @import("../theme.zig");
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
 
@@ -24,9 +25,10 @@ pub const ButtonProps = struct {
     disabled_fg: Color = Color.rgb(0x77, 0x77, 0x77),
     w: prop.Size = .fit,
     h: prop.Size = .fit,
-    pad: prop.Pad = prop.Pad.axes(6, 12),
+    // The theme decides the padding and the corner unless the app does: `Metrics.control_pad` and `corner(.md)`.
+    pad: prop.Pad = prop.Pad.themed,
     border: prop.Border = .{},
-    radius: prop.Radius = prop.Radius.all(6),
+    radius: prop.Radius = prop.Radius.themed,
     on_click: prop.Click = .{},
 };
 
@@ -34,15 +36,16 @@ pub const ButtonProps = struct {
 pub fn button(p: ButtonProps) void {
     // NOTE: cl.hovered() must be evaluated INSIDE the UI() config literal (after Clay__OpenElement runs, while this element is open) so it queries this.
     const fg: Color = if (p.disabled) p.disabled_fg else p.fg;
+    const m = theme_mod.current().metrics;
     cl.UI()(.{
         .id = p.id.clay(),
         .layout = .{
             .sizing = .{ .w = p.w.clay(), .h = p.h.clay() },
-            .padding = p.pad.clay(),
+            .padding = p.pad.resolve(m.control_pad).clay(),
             .child_alignment = .center,
         },
         .background_color = (if (p.disabled) p.disabled_bg else if (cl.hovered()) p.hover_bg else p.bg).toClay(),
-        .corner_radius = p.radius.clay(),
+        .corner_radius = p.radius.resolve(m.corner(.md)).clay(),
         .border = p.border.clay(),
     })({
         cl.text(p.label.text, .{
@@ -147,15 +150,17 @@ test "ButtonProps carries neutral dark defaults, and needs only an id" {
     try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.bg);
     try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.fg);
     try std.testing.expectEqual(Color.rgb(0x2d, 0x2d, 0x2d), p.hover_bg);
-    try std.testing.expectEqual(@as(f32, 6), p.radius.top_left.pts());
+    // The padding and the corner are the theme's: the props leave them unset, and `Metrics.defaults` supplies today's numbers.
+    const m = theme_mod.Metrics.defaults;
+    try std.testing.expectEqual(@as(f32, 6), p.radius.resolve(m.corner(.md)).top_left.pts());
     try std.testing.expect(std.meta.activeTag(p.w) == .fit);
     try std.testing.expect(std.meta.activeTag(p.h) == .fit);
     try std.testing.expectEqual(@as(f32, 0), p.border.width.pts());
     try std.testing.expect(!p.disabled);
     try std.testing.expectEqual(Color.rgb(0x1a, 0x1a, 0x1a), p.disabled_bg);
     try std.testing.expectEqual(Color.rgb(0x77, 0x77, 0x77), p.disabled_fg);
-    try std.testing.expectEqual(@as(f32, 6), p.pad.top.pts());
-    try std.testing.expectEqual(@as(f32, 12), p.pad.left.pts());
+    try std.testing.expectEqual(@as(f32, 6), p.pad.resolve(m.control_pad).top.pts());
+    try std.testing.expectEqual(@as(f32, 12), p.pad.resolve(m.control_pad).left.pts());
     try std.testing.expect(p.on_click.f == null);
     try std.testing.expect(p.on_click.ctx == null);
 }

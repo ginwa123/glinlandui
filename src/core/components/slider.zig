@@ -3,6 +3,7 @@ const std = @import("std");
 const cl = @import("zclay");
 const headless = @import("../testing/headless.zig");
 const prop = @import("../props.zig");
+const theme_mod = @import("../theme.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
@@ -26,7 +27,8 @@ pub const SliderProps = struct {
     w: prop.Size = .{ .fixed = 160 },
     h: prop.Size = .{ .fixed = 18 },
     track_h: prop.Len = .{ .px = 3 },
-    radius: prop.Len = .{ .px = 2 },
+    // The theme's thinnest corner unless the app says otherwise.
+    radius: prop.Len = prop.Len.themed,
     track_bg: Color = Color.rgb(0x3a, 0x3a, 0x3a),
     fill_bg: Color = Color.rgb(0x4c, 0xaf, 0x50),
     thumb_size: prop.Len = .{ .px = 12 },
@@ -75,7 +77,7 @@ pub fn slider(props: SliderProps) void {
                 .child_alignment = .{ .x = .left, .y = .center },
             },
             .background_color = (if (props.disabled) props.disabled_bg else props.track_bg).toClay(),
-            .corner_radius = .all(props.radius.pts()),
+            .corner_radius = .all(props.radius.resolve(theme_mod.current().metrics.radius_xs).pts()),
         })({
             cl.UI()(.{
                 .id = .IDI(props.id.str(), fill_index),
@@ -89,7 +91,7 @@ pub fn slider(props: SliderProps) void {
                 },
                 // NOTE: cl.hovered() stays INSIDE this UI() literal (while the fill is open) — hoisting it above would query the track/outer instead.
                 .background_color = (if (props.disabled) props.disabled_bg else if (cl.hovered()) (props.hover_fill orelse props.fill_bg) else props.fill_bg).toClay(),
-                .corner_radius = .all(props.radius.pts()),
+                .corner_radius = .all(props.radius.resolve(theme_mod.current().metrics.radius_xs).pts()),
             })({
                 cl.UI()(.{
                     .id = .IDI(props.id.str(), thumb_index),
@@ -143,7 +145,8 @@ test "SliderProps carries neutral defaults" {
     try std.testing.expectEqual(@as(f32, 160), p.w.clay().size.minmax.min);
     try std.testing.expectEqual(@as(f32, 18), p.h.clay().size.minmax.min);
     try std.testing.expectEqual(@as(f32, 3), p.track_h.pts());
-    try std.testing.expectEqual(@as(f32, 2), p.radius.pts());
+    // The corner is the theme's thinnest now.
+    try std.testing.expectEqual(@as(f32, 2), p.radius.resolve(theme_mod.Metrics.defaults.radius_xs).pts());
     try std.testing.expectEqual(Color.rgb(0x3a, 0x3a, 0x3a), p.track_bg);
     try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50), p.fill_bg);
     try std.testing.expectEqual(@as(f32, 12), p.thumb_size.pts());

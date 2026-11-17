@@ -62,21 +62,34 @@ pub const Id = union(enum) {
 // The literal spelling is `.{ .px = 8 }`, and `.{}` (or `Len.none`) is no length at all — a gap of none, a border that draws nothing.
 pub const Len = struct {
     px: f32 = 0,
+    // This length is the theme's, not the caller's: a component fills it in from `theme.current().metrics` when it draws.
+    from_theme: bool = false,
 
     pub const none: Len = .{};
+
+    // The theme decides: the component that draws this field resolves it against the metric that belongs to it.
+    pub const themed: Len = .{ .from_theme = true };
 
     // The same length, spelled where an expression is wanted instead of a field literal.
     pub fn of(v: f32) Len {
         return .{ .px = v };
     }
 
+    // The caller's length when it gave one, the theme's otherwise: the ONE step a component takes before it draws.
+    pub fn resolve(self: Len, theme_len: Len) Len {
+        return if (self.from_theme) theme_len else self;
+    }
+
     // The length a consumer draws or measures with: points, fractional, unscaled.
     pub fn pts(self: Len) f32 {
+        // A themed length that reached a consumer was never resolved: that is a component bug, and a silent 0 is the worst way to find it.
+        std.debug.assert(!self.from_theme);
         return self.px;
     }
 
     // The length Clay's spacing fields take: whole points, rounded, never negative.
     pub fn whole(self: Len) u16 {
+        std.debug.assert(!self.from_theme);
         return @intFromFloat(@round(@max(self.px, 0)));
     }
 
@@ -90,7 +103,7 @@ pub const Len = struct {
     }
 
     pub fn isNone(self: Len) bool {
-        return self.px == 0;
+        return !self.from_theme and self.px == 0;
     }
 };
 
@@ -196,6 +209,9 @@ pub const Pad = struct {
     bottom: Len = .{},
     left: Len = .{},
 
+    // The theme's padding for the surface this component is: a control, a chip, a card.
+    pub const themed: Pad = .{ .top = Len.themed, .right = Len.themed, .bottom = Len.themed, .left = Len.themed };
+
     pub fn all(v: f32) Pad {
         const l = Len.of(v);
         return .{ .top = l, .right = l, .bottom = l, .left = l };
@@ -209,8 +225,29 @@ pub const Pad = struct {
         return .{ .top = Len.of(top), .right = Len.of(right), .bottom = Len.of(bottom), .left = Len.of(left) };
     }
 
+    // Each side on its own: a caller may set the horizontal padding and leave the vertical to the theme.
+    pub fn resolve(self: Pad, theme_pad: Pad) Pad {
+        return .{
+            .top = self.top.resolve(theme_pad.top),
+            .right = self.right.resolve(theme_pad.right),
+            .bottom = self.bottom.resolve(theme_pad.bottom),
+            .left = self.left.resolve(theme_pad.left),
+        };
+    }
+
+    // Resolving is what a component does before it hands the pad to Clay, so this takes the theme's pad, not a raw one.
     pub fn clay(self: Pad) cl.Padding {
         return .{ .top = self.top.whole(), .right = self.right.whole(), .bottom = self.bottom.whole(), .left = self.left.whole() };
+    }
+};
+
+// Whether a container cuts the children that do not fit. Neither axis by default: a box draws what it was given.
+pub const Clip = struct {
+    horizontal: bool = false,
+    vertical: bool = false,
+
+    pub fn any(self: Clip) bool {
+        return self.horizontal or self.vertical;
     }
 };
 
@@ -236,9 +273,21 @@ pub const Radius = struct {
     bottom_left: Len = .{},
     bottom_right: Len = .{},
 
+    // The theme's corner for the surface this component is: a chip, a control, a card.
+    pub const themed: Radius = .{ .top_left = Len.themed, .top_right = Len.themed, .bottom_left = Len.themed, .bottom_right = Len.themed };
+
     pub fn all(v: f32) Radius {
         const l = Len.of(v);
         return .{ .top_left = l, .top_right = l, .bottom_left = l, .bottom_right = l };
+    }
+
+    pub fn resolve(self: Radius, theme_radius: Radius) Radius {
+        return .{
+            .top_left = self.top_left.resolve(theme_radius.top_left),
+            .top_right = self.top_right.resolve(theme_radius.top_right),
+            .bottom_left = self.bottom_left.resolve(theme_radius.bottom_left),
+            .bottom_right = self.bottom_right.resolve(theme_radius.bottom_right),
+        };
     }
 
     pub fn clay(self: Radius) cl.CornerRadius {
@@ -295,6 +344,27 @@ pub const Size = union(enum) {
 };
 
 // ---- tests ---------------------------------------------------------------------------------------------------
+
+test "a themed pad takes the theme's number per side, and what the caller set never moves" {
+    const theme_pad = Pad.axes(6, 12);
+    const all_themed = Pad.themed.resolve(theme_pad);
+    try std.testing.expectEqual(@as(f32, 6), all_themed.top.pts());
+    try std.testing.expectEqual(@as(f32, 12), all_themed.left.pts());
+    // A mixed pad resolves per side: the two the caller set keep their number, the two it left take the theme's.
+    const mixed = Pad{ .top = Len.of(0), .right = Len.themed, .bottom = Len.of(2), .left = Len.themed };
+    const given = mixed.resolve(theme_pad);
+    try std.testing.expectEqual(@as(f32, 0), given.top.pts());
+    try std.testing.expectEqual(@as(f32, 12), given.right.pts());
+    try std.testing.expectEqual(@as(f32, 2), given.bottom.pts());
+    // An explicit zero is a decision, not an omission: `Pad.all(0)` survives any theme.
+    try std.testing.expectEqual(@as(f32, 0), Pad.all(0).resolve(theme_pad).top.pts());
+    // A themed corner resolves corner by corner, the same way.
+    const corners = Radius{ .top_left = Len.themed, .top_right = Len.of(0), .bottom_left = Len.themed, .bottom_right = Len.of(1) };
+    const r = corners.resolve(Radius.all(8));
+    try std.testing.expectEqual(@as(f32, 8), r.top_left.pts());
+    try std.testing.expectEqual(@as(f32, 0), r.top_right.pts());
+    try std.testing.expectEqual(@as(f32, 1), r.bottom_right.pts());
+}
 
 test "a Len is points, and rounds to the whole points Clay's spacing takes" {
     try std.testing.expectEqual(@as(f32, 0), Len.none.pts());

@@ -3,6 +3,7 @@ const std = @import("std");
 const cl = @import("zclay");
 const headless = @import("../testing/headless.zig");
 const prop = @import("../props.zig");
+const theme_mod = @import("../theme.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
@@ -18,7 +19,8 @@ pub const ToggleProps = struct {
     on: bool = false,
     w: prop.Len = .{ .px = 32 },
     h: prop.Len = .{ .px = 18 },
-    radius: prop.Len = .{ .px = 9 },
+    // A pill: the theme's pill corner unless the app says otherwise.
+    radius: prop.Len = prop.Len.themed,
     on_bg: Color = Color.rgb(0x4c, 0xaf, 0x50),
     off_bg: Color = Color.rgb(0x3a, 0x3a, 0x3a),
     knob_color: Color = Color.rgb(0xff, 0xff, 0xff),
@@ -44,7 +46,7 @@ pub fn toggle(props: ToggleProps) void {
             .child_alignment = .{ .x = if (props.on) .right else .left, .y = .center },
         },
         .background_color = (if (props.disabled) props.disabled_bg else if (cl.hovered()) (props.hover_bg orelse (if (props.on) props.on_bg else props.off_bg)) else (if (props.on) props.on_bg else props.off_bg)).toClay(),
-        .corner_radius = .all(props.radius.pts()),
+        .corner_radius = .all(props.radius.resolve(theme_mod.current().metrics.radius_pill).pts()),
     })({
         cl.UI()(.{
             .layout = .{
@@ -90,7 +92,8 @@ test "ToggleProps carries neutral defaults" {
     try std.testing.expect(!p.on);
     try std.testing.expectEqual(@as(f32, 32), p.w.pts());
     try std.testing.expectEqual(@as(f32, 18), p.h.pts());
-    try std.testing.expectEqual(@as(f32, 9), p.radius.pts());
+    // The corner is the theme's pill now.
+    try std.testing.expectEqual(@as(f32, 9), p.radius.resolve(theme_mod.Metrics.defaults.radius_pill).pts());
     try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50), p.on_bg);
     try std.testing.expectEqual(Color.rgb(0x3a, 0x3a, 0x3a), p.off_bg);
     try std.testing.expectEqual(Color.rgb(0xff, 0xff, 0xff), p.knob_color);

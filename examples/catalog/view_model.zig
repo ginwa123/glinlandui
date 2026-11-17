@@ -3,6 +3,8 @@ const std = @import("std");
 const glinlandui = @import("glinlandui");
 const frame = glinlandui.frame;
 const input = glinlandui.components.input;
+const split_mod = glinlandui.components.split;
+const sidebar_mod = glinlandui.components.sidebar;
 const state_mod = @import("state.zig");
 
 const CatalogUiState = state_mod.CatalogUiState;
@@ -24,8 +26,15 @@ pub const CatalogViewModel = struct {
     // A radio's click carries only a context, so each one gets a context the model owns.
     radio_ctxs: [state_mod.radio_count]RadioCtx = undefined,
 
+    // The two surfaces whose size the pointer owns: the widget keeps the gesture, the model keeps the number.
+    split_state: split_mod.State = .{ .size = 150 },
+    sidebar_state: sidebar_mod.State = .{ .width = 240, .expanded_width = 240 },
+
     // The toolkit forgets focus when a host starts, so the screen claims the keyboard once, on its first frame.
     focus_claimed: bool = false,
+
+    // Which spacing kit the window is drawn with: the Activity reads this and hands the Host one theme or the other.
+    dense: bool = false,
 
     pub const RadioCtx = struct {
         vm: *CatalogViewModel,
@@ -142,6 +151,55 @@ pub const CatalogViewModel = struct {
     }
 
     // The button demos differ only in what they say, and a demo that says nothing would be a demo of nothing.
+    // The modal demo: a button raises the card, an action answers it, and the answer is what the header reports.
+    pub fn openModal(self: *CatalogViewModel) void {
+        self.state = self.state.withModal(true);
+    }
+
+    pub fn answerModal(self: *CatalogViewModel, index: usize) void {
+        self.state = self.state.withModal(false).withLast(switch (index) {
+            0 => "modal: cancel",
+            1 => "modal: discard",
+            else => "modal: saved",
+        });
+    }
+
+    // What the view hands the split and the sidebar: the props carry the model's state, so the drag writes home.
+    pub fn splitProps(self: *CatalogViewModel, t: Theme) split_mod.Props {
+        return .{
+            .id = .{ .text = "catalog.split" },
+            .state = &self.split_state,
+            .axis = .horizontal,
+            .side = .after,
+            .min = 60,
+            .thickness = 6,
+            // The line reads as a divider before the pointer touches it, like every other rule in the kit.
+            .bg = t.colors.divider,
+            .hover_bg = t.colors.hover,
+            .active_bg = t.colors.primary,
+        };
+    }
+
+    pub fn sidebarProps(self: *CatalogViewModel, t: Theme) sidebar_mod.Props {
+        return .{
+            .id = .{ .text = "catalog.sidebar" },
+            .state = &self.sidebar_state,
+            .h = .{ .fixed = 190 },
+            .min_width = 120,
+            .max_width = 320,
+            .bg = t.colors.surface,
+            .handle_bg = t.colors.surface_variant,
+            .handle_hover_bg = t.colors.hover,
+            .handle_active_bg = t.colors.primary,
+        };
+    }
+
+    // The theme switch: one boolean, and every widget that left a spacing prop unset follows it.
+    pub fn toggleDense(self: *CatalogViewModel) void {
+        self.dense = !self.dense;
+        self.state = self.state.withLast(if (self.dense) "compact theme" else "roomy theme");
+    }
+
     pub fn pressPrimary(self: *CatalogViewModel) void {
         self.state = self.state.withLast("primary button");
     }

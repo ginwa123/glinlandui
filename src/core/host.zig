@@ -3,6 +3,7 @@ const std = @import("std");
 const contract = @import("window_contract.zig");
 const render = @import("render.zig");
 const frame_mod = @import("frame.zig");
+const theme_mod = @import("theme.zig");
 const dispatch = @import("component.zig").dispatch;
 
 /// Escape under the xkb/Wayland evdev numbering, which every backend this engine runs on reports.
@@ -53,6 +54,8 @@ pub const Host = struct {
     clay_ready: bool = false,
     /// The smallest content box this app can lay out in: the Host caps the zoom there, so a window cannot squeeze the layout past it.
     min_content: MinContent = .{},
+    /// The window's theme: the Activity hands its own here once, and every component that left a prop to the theme follows it.
+    theme: theme_mod.Theme = theme_mod.dark,
 
     /// The window's own size, before the zoom divided it: what the cap above is computed from.
     window_w: u32 = 720,
@@ -181,6 +184,8 @@ pub const Host = struct {
         var effective: frame_mod.FrameOptions = if (options) |opts| opts.* else .{};
         // A devtool reads the resolved tree, so attaching one turns the resolve on: the app never has to know its frames are being watched.
         if (self.inspect != null or self.service != null) effective.resolve_semantics = true;
+        // The theme in force for this frame: a component resolves the props its app left unset against it.
+        theme_mod.setCurrent(self.theme);
         const shape = frame_mod.clayFrameWithOptions(
             self.alloc,
             &self.renderer,
