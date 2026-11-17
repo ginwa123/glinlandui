@@ -11,11 +11,14 @@ pub fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimens
     };
 }
 
+// ONE canvas for the whole test binary, re-initialised per layout: Clay holds a process-global context pointer, so handing it a brand new arena per call is what the platform's own tests avoid (it segfaults inside Clay_Initialize once enough canvases have been handed out).
+var canvas: ?[]u8 = null;
+
 /// Start a 720x480 headless frame with the stub measurer and `pointer` already installed. Call `cl.endLayout()` to finish it.
 pub fn begin(pointer: cl.Vector2, pressed: bool) void {
     // The ONLY `page_allocator` in the tree: Clay holds a process-global pointer into this arena and never releases it, so a leak-checking allocator would fail a correct test.
-    const buf = std.heap.page_allocator.alloc(u8, cl.minMemorySize()) catch @panic("headless Clay arena");
-    const arena = cl.Arena.init(buf);
+    if (canvas == null) canvas = std.heap.page_allocator.alloc(u8, cl.minMemorySize()) catch @panic("headless Clay arena");
+    const arena = cl.Arena.init(canvas.?);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
     // The frame's viewport is what a widget reads instead of being handed the window: a harness says it too.
     frame_mod.setViewport(frame_mod.viewportOf(720, 480));

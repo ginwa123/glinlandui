@@ -708,23 +708,9 @@ fn declareOcclusion(claim: bool, translucent: bool) void {
     if (translucent) occludeFill(.ID("oc-over"), @import("../color.zig").Color.rgba(0, 0, 0, 80)) else occludeFill(.ID("oc-over"), @import("../color.zig").Color.rgb(0x1e, 0x1e, 0x1e));
 }
 
-// ONE canvas for this file's occlusion tests: Clay keeps a process-global context pointer, so the same arena is re-initialised instead of a new one being handed out per test.
-var oc_canvas: ?[]u8 = null;
-
-fn ocBegin() void {
-    if (oc_canvas == null) {
-        oc_canvas = std.heap.page_allocator.alloc(u8, cl.minMemorySize()) catch @panic("occlusion Clay arena");
-    }
-    _ = cl.initialize(cl.Arena.init(oc_canvas.?), .{ .w = 720, .h = 480 }, .{});
-    const fm = @import("../frame.zig");
-    fm.setViewport(fm.viewportOf(720, 480));
-    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
-    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
-}
-
 fn layOutOcclusion(claim: bool, translucent: bool) void {
     beginFrame();
-    ocBegin();
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     declareOcclusion(claim, translucent);
     _ = cl.endLayout();
@@ -762,7 +748,7 @@ test "a target declared INSIDE the covering surface answers as usual" {
     // The pane claims its area, then its own child registers: paint order decides, and the child is later.
     oc_rec = ClipClick{};
     beginFrame();
-    ocBegin();
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     cl.UI()(.{ .id = .ID("oc-card"), .layout = .{ .sizing = .{ .w = .fixed(200), .h = .fixed(120) } } })({
         occludeFill(.ID("oc-card"), @import("../color.zig").Color.rgb(0x1e, 0x1e, 0x1e));
@@ -780,7 +766,7 @@ test "a surface painted BEFORE a target does not hide it" {
     // A card drawn first, the target on top of it: the later target is what the user sees.
     oc_rec = ClipClick{};
     beginFrame();
-    ocBegin();
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     cl.UI()(.{
         .id = .ID("oc-behind"),
@@ -801,7 +787,7 @@ test "an overlay above the covering surface still answers" {
     // An in-flow pane claims at z 0; a dropdown card floating at z 10 is painted over it, so its row must win.
     oc_rec = ClipClick{};
     beginFrame();
-    ocBegin();
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     cl.UI()(.{
         .id = .ID("oc-pane"),
@@ -826,7 +812,7 @@ test "an overlay above the covering surface still answers" {
 test "a surface claimed over a target takes the hover cursor with the click" {
     // One box, its target registered first and the surface claimed after: exactly what a pane does to the row it covers.
     beginFrame();
-    ocBegin();
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
     cl.UI()(.{ .id = .ID("oc-hover"), .layout = .{ .sizing = .{ .w = .fixed(120), .h = .fixed(40) } } })({});
     registerClickCursor(.ID("oc-hover"), onOcClick, &oc_rec, .text);
