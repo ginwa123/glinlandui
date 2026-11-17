@@ -104,6 +104,15 @@ fn dividerId(base: []const u8) cl.ElementId {
     return cl.ElementId.IDI(base, 0xF002);
 }
 
+/// The copy of a picked-up tab that follows the pointer, and the gap it leaves: ids no tab index can reach.
+fn ghostId(base: []const u8) cl.ElementId {
+    return cl.ElementId.IDI(base, 0xF003);
+}
+
+fn holeId(base: []const u8, slot: usize) cl.ElementId {
+    return cl.ElementId.IDI(base, 0xE000 + @as(u32, @intCast(slot)));
+}
+
 /// The most bars one app may keep a scroll position for, and the most tabs one bar may offer a card for.
 const bar_cap: usize = 16;
 const tab_cap: usize = 64;
@@ -117,6 +126,9 @@ const Strip = struct {
     inner_w: f32 = 0,
     // The active index the reveal last ran for: a strip nobody navigated must not undo a wheel scroll every frame.
     followed: ?usize = null,
+    // The tab this bar is dragging, and where it was picked up inside its own box: the floating copy keeps that offset.
+    drag_from: ?usize = null,
+    grab_dx: f32 = 0,
     // Where this bar's cards live in `menu_slots`: one slot per tab, never shared with another bar.
     menu_base: usize = 0,
 };
@@ -170,6 +182,9 @@ pub fn tabs(props: TabsProps) void {
         .flags = .{ .enabled = true },
     });
 
+    const preview = previewOf(props, strip);
+    if (preview == null) strip.drag_from = null;
+
     cl.UI()(.{
         .id = props.id.clay(),
         .layout = .{
@@ -200,10 +215,19 @@ pub fn tabs(props: TabsProps) void {
             })({
                 // A tab scrolled out of the strip must not answer a click where it used to be.
                 registry.pushClip(stripId(name));
-                for (props.tabs, 0..) |tab, i| tabUi(props, strip, tab, i);
+                if (preview) |p| {
+                    // The strip makes room where the tab would land, so the gap IS the answer to "where will it go".
+                    for (p.order[0..p.count], 0..) |source, slot| {
+                        if (source == no_slot) holeUi(props, slot) else tabUi(props, strip, props.tabs[source], source);
+                    }
+                } else {
+                    for (props.tabs, 0..) |tab, i| tabUi(props, strip, tab, i);
+                }
                 registry.popClip();
             });
         });
+        // The picked-up tab follows the pointer: a copy above everything, so it reads as lifted out of the strip.
+        if (preview) |p| ghostUi(props, p.from, strip);
         // The seam between the bar and the pane it opens: a strip with no rule under it floats over the editor.
         if (props.divider) |d| cl.UI()(.{
             .id = dividerId(name),
@@ -245,6 +269,95 @@ fn wheelScroll(strip: *Strip, clip: cl.ElementId, content_w: f32) void {
     const delta = if (@abs(frame_mod.scroll_dx) > 0.01) frame_mod.scroll_dx else frame_mod.scroll_dy;
     if (delta == 0) return;
     strip.h_scroll += delta;
+}
+
+// The slot the picked-up tab left: the strip draws a gap there instead of a tab.
+const no_slot: usize = std.math.maxInt(usize);
+
+// A drag in flight over this bar: which tab was picked up, and the slot the strip makes room at.
+const Preview = struct {
+    from: usize,
+    hole: usize,
+    // Which tab each slot shows, `no_slot` for the gap.
+    order: [tab_cap]usize = @splat(no_slot),
+    count: usize = 0,
+};
+
+// The preview for a drag this bar owns: the picked-up tab leaves its slot and a gap opens where it would land.
+fn previewOf(props: TabsProps, strip: *Strip) ?Preview {
+    const owner = reorder_mod.draggingList() orelse return null;
+    if (!std.mem.eql(u8, owner, props.id.str())) return null;
+    const from = reorder_mod.draggingIndex() orelse return null;
+    const boundary = reorder_mod.dropIndex(props.id.str()) orelse return null;
+    // A bar of more tabs than the module tracks keeps its plain order rather than a wrong preview.
+    if (from >= props.tabs.len or props.tabs.len > tab_cap) return null;
+
+    // Where the pick-up started inside the tab, so the floating copy keeps its label under the pointer.
+    if (strip.drag_from == null or strip.drag_from.? != from) {
+        // The press point, not the pointer: by the frame a drag is noticed the pointer has already left it.
+        const grab_x = if (frame_mod.ptr_down) frame_mod.ptr_press_x else frame_mod.ptr_x;
+        if (frame_mod.bounds(tabId(props.id.str(), from))) |box| strip.grab_dx = grab_x - box.x;
+        strip.drag_from = from;
+    }
+
+    var out = Preview{ .from = from, .hole = 0, .count = props.tabs.len };
+    // The boundary is asked in the picked-up tab's own index space: past it, the slot comes back one once it leaves.
+    out.hole = @min(if (boundary > from) boundary - 1 else boundary, props.tabs.len - 1);
+    var source: usize = 0;
+    var slot: usize = 0;
+    while (slot < out.count) : (slot += 1) {
+        if (slot == out.hole) continue;
+        if (source == from) source += 1;
+        out.order[slot] = source;
+        source += 1;
+    }
+    return out;
+}
+
+// The gap a picked-up tab leaves: the width it would take, tinted with the drop colour, so the landing is visible.
+fn holeUi(props: TabsProps, slot: usize) void {
+    cl.UI()(.{
+        .id = holeId(props.id.str(), slot),
+        .layout = .{ .sizing = .{ .w = .fixed(props.tab_w.pts()), .h = .grow } },
+        .background_color = Color.withAlpha(props.drop_line, 28).toClay(),
+        .corner_radius = props.tab_radius.clay(),
+        .border = .{ .color = Color.withAlpha(props.drop_line, 120).toClay(), .width = .outside(1) },
+    })({});
+}
+
+// The picked-up tab itself, floating under the pointer at the offset it was grabbed by, above everything else.
+fn ghostUi(props: TabsProps, from: usize, strip: *Strip) void {
+    const tab = props.tabs[from];
+    const bar = frame_mod.bounds(props.id.clay()) orelse return;
+    const name = props.id.str();
+    const size = props.label_size.whole();
+    const rule: f32 = if (props.divider == null) 0 else 1;
+    cl.UI()(.{
+        .id = ghostId(name),
+        .layout = .{
+            .direction = .left_to_right,
+            .sizing = .{ .w = .fixed(props.tab_w.pts()), .h = .fixed(@max(bar.height - rule, 20)) },
+            .padding = .{ .left = props.pad_lr.whole(), .right = props.pad_lr.whole() },
+            .child_alignment = .{ .x = .left, .y = .center },
+            .child_gap = 8,
+        },
+        .floating = .{
+            .attach_to = .to_root,
+            .offset = .{ .x = frame_mod.ptr_x - strip.grab_dx, .y = bar.y },
+            .z_index = reorder_mod.z_index,
+            // Nothing under the copy loses its hover or its click: the drag keeps owning the pointer.
+            .pointer_capture_mode = .passthrough,
+        },
+        .background_color = props.active_bg.toClay(),
+        .corner_radius = props.tab_radius.clay(),
+        .border = .{ .color = props.drop_line.toClay(), .width = .outside(1) },
+    })({
+        // The copy has no close box, so its label may spend what that box would have taken.
+        const budget = props.tab_w.pts() - props.pad_lr.pts() * 2;
+        const fitted = text_fit.fit(tab.label, size, budget);
+        cl.text(tab.label[0..fitted.keep], .{ .font_size = size, .color = props.active_fg.toClay() });
+        if (fitted.dots) cl.text(text_fit.dots, .{ .font_size = size, .color = props.active_fg.toClay() });
+    });
 }
 
 fn tabUi(props: TabsProps, strip: *Strip, tab: Tab, i: usize) void {
@@ -767,4 +880,57 @@ test "the active tab wears its line, and the bar its rule along the bottom" {
     try std.testing.expectApproxEqAbs(bar.y + bar.height, divider.y + divider.height, 0.5);
     try std.testing.expectApproxEqAbs(bar.width, divider.width, 0.5);
     try std.testing.expectApproxEqAbs(divider.y, boxOf(tabId("tabs-line", 1)).y + boxOf(tabId("tabs-line", 1)).height, 0.5);
+}
+
+test "a dragged tab leaves its gap where it would land, and a copy floats at the pointer" {
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.setLayoutDimensions(.{ .w = 480, .h = 200 });
+    reorder_mod.cancel();
+    move_ctx = .{};
+    fx = .{
+        .id = .{ .text = "tabs-preview" },
+        .tabs = &four_tabs,
+        .tab_w = .{ .px = 100 },
+        .h = .{ .fixed = 30 },
+        .on_move = onMove,
+        .ctx = &move_ctx,
+    };
+    _ = frame(99999, 99999);
+    const first = boxOf(tabId("tabs-preview", 0));
+    const last = boxOf(tabId("tabs-preview", 3));
+    // Pick up the first tab and carry it past the end of the strip, a little at a time as a hand would.
+    reorder_mod.press(first.x + 20, first.y + 10);
+    frame_mod.setPointerButton(true, first.x + 20, first.y + 10);
+    const end = last.x + last.width - 4;
+    var x = first.x + 20;
+    while (x < end) : (x += 12) {
+        const at = @min(x, end);
+        frame_mod.setPointer(at, first.y + 10);
+        reorder_mod.move(at, first.y + 10);
+    }
+    try std.testing.expect(reorder_mod.isDragging());
+    // One frame lays the preview out; the next one has boxes to read.
+    _ = frame(end, first.y + 10);
+    _ = frame(end, first.y + 10);
+
+    // The strip closed ranks and left the gap at the end: it is where the release would put the tab.
+    try std.testing.expectApproxEqAbs(first.x, boxOf(tabId("tabs-preview", 1)).x, 0.5);
+    try std.testing.expectApproxEqAbs(first.x + 101, boxOf(tabId("tabs-preview", 2)).x, 0.5);
+    try std.testing.expectApproxEqAbs(first.x + 202, boxOf(tabId("tabs-preview", 3)).x, 0.5);
+    const hole = boxOf(holeId("tabs-preview", 3));
+    try std.testing.expectEqual(@as(f32, 100), hole.width);
+    try std.testing.expectApproxEqAbs(first.x + 303, hole.x, 0.5);
+
+    // The picked-up tab floats over the bar at the pointer, wearing the drop colour.
+    const ghost = boxOf(ghostId("tabs-preview"));
+    try std.testing.expectEqual(@as(f32, 100), ghost.width);
+    try std.testing.expect(ghost.x > first.x + 100);
+
+    // Releasing reports the move the preview promised, and the bar goes back to plain order.
+    _ = reorder_mod.release(end, first.y + 10);
+    try std.testing.expectEqual(@as(usize, 1), move_ctx.calls);
+    try std.testing.expectEqual(@as(usize, 0), move_ctx.from);
+    try std.testing.expectEqual(@as(usize, 3), move_ctx.to);
+    _ = frame(99999, 99999);
+    try std.testing.expect(rectColorOf(frame(99999, 99999), ghostId("tabs-preview").id) == null);
 }
