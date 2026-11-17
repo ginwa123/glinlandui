@@ -2,7 +2,7 @@
 const std = @import("std");
 const cl = @import("zclay");
 const headless = @import("testing/headless.zig");
-const registry = @import("components/click_registry.zig");
+const registry = @import("component.zig").click_registry;
 
 /// Node capacity. Containers register a node too (a component tree without them is a flat list), so the cap covers a whole screen's worth.
 pub const cap: usize = 512;

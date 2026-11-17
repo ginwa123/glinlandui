@@ -3,8 +3,8 @@ const std = @import("std");
 const cl = @import("zclay");
 const Color = @import("../color.zig").Color;
 const frame = @import("../frame.zig");
-const registry = @import("../components/click_registry.zig");
-const input_mod = @import("../components/input.zig");
+const registry = @import("../component.zig").click_registry;
+const input_mod = @import("../component.zig").input;
 const semantics = @import("../semantics.zig");
 const prop = @import("../props.zig");
 const snapshot_mod = @import("snapshot.zig");
@@ -922,9 +922,9 @@ fn swallow(_: ?*anyopaque, _: usize) void {}
 
 const host_mod = @import("../host.zig");
 const frame_mod = @import("../frame.zig");
-const button_mod = @import("../components/button.zig");
-const box_mod = @import("../components/box.zig");
-const dispatch = @import("../components/dispatch.zig");
+const button_mod = @import("../component.zig").button;
+const box_mod = @import("../component.zig").box;
+const dispatch = @import("../component.zig").dispatch;
 
 const TestApp = struct {
     clicks: u32 = 0,

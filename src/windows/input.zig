@@ -59,7 +59,7 @@ pub fn translate(w: u32, h: u32, raw: Raw, held: bool) Translated {
 
 // ===================== tests (parity suite — every platform) =====================
 
-const dispatch = @import("../core/components/dispatch.zig");
+const dispatch = @import("../core/component.zig").dispatch;
 
 test "a press carries BTN_LEFT, which is the code dispatch requires" {
     // THE regression guard. Passing 0 here is what made every click a no-op.
@@ -182,7 +182,7 @@ test "a press that starts outside the client area is not fired on release" {
 // ---- end-to-end: the real backend path, against a real Clay layout ---- Everything above is a unit test of the translation.
 
 const host_mod = @import("../core/host.zig");
-const box_widget = @import("../core/components/box.zig");
+const box_widget = @import("../core/component.zig").box;
 const cl = @import("zclay");
 const Color = @import("../core/color.zig").Color;
 
@@ -223,7 +223,7 @@ test "a Windows click reaches a real laid-out button's handler" {
     var host = try host_mod.Host.init(std.heap.page_allocator, &app, App.root);
     host.frame(w, h);
 
-    const reg = @import("../core/components/click_registry.zig");
+    const reg = @import("../core/component.zig").click_registry;
     reg.registerZCursor(cl.getElementId("test-hit-box"), App.onClick, &app, 0, 0, .pointer);
 
     // The button fills the window, so its centre is the window's centre.

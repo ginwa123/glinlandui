@@ -74,7 +74,7 @@ pub fn cancelRelease(held: bool, w: u32, h: u32, x: f32, y: f32) ?Translated {
 
 // ===================== tests (parity suite — every platform) =====================
 
-const dispatch = @import("../core/components/dispatch.zig");
+const dispatch = @import("../core/component.zig").dispatch;
 
 test "a press carries BTN_LEFT, which is the code dispatch requires" {
     // THE regression guard.
@@ -201,7 +201,7 @@ test "a cancel with nothing held produces no event at all" {
 // ---- end-to-end: the real backend path, against a real Clay layout ---- Everything above is a unit test of the translation.
 
 const host_mod = @import("../core/host.zig");
-const box_widget = @import("../core/components/box.zig");
+const box_widget = @import("../core/component.zig").box;
 const cl = @import("zclay");
 
 const Hit = struct {
@@ -241,7 +241,7 @@ test "a browser click reaches a real laid-out button's handler" {
     var host = try host_mod.Host.init(std.heap.page_allocator, &app, App.root);
     host.frame(w, h);
 
-    const reg = @import("../core/components/click_registry.zig");
+    const reg = @import("../core/component.zig").click_registry;
     reg.registerZCursor(cl.getElementId("test-hit-box"), App.onClick, &app, 0, 0, .pointer);
 
     // The box fills the window, so its centre is the window's centre in toolkit (top-left) space — which is ALSO DOM space, with no conversion at all.

@@ -69,6 +69,29 @@ it is what the two weight tests in `input.zig` pin down.
 Clay cannot weight siblings by RATIO: `grow` distributes the remainder equally, so `.grow` twice
 is 50/50 and there is no `weight(2f)`.
 
+## Reaching a component
+
+Everything here is private to the toolkit: an app imports `glinlandui.components`, which is
+`src/core/component.zig`, and that file re-exports every widget in this folder. A file outside
+this folder may not write `@import("…/components/button.zig")`, and a component added here must be
+added to the façade or no app can reach it. `ci/check_component_imports.sh` enforces both
+directions.
+
+At the call site the entry function is the widget's name, so an app aliases the function:
+
+```zig
+const components = glinlandui.components;
+const box = components.box.box;
+const button = components.button.button;
+const label = components.text.label;
+
+box(.{ .id = .{ .text = "root" }, .direction = .row }, scope, children);
+button(.{ .id = .{ .text = "send" }, .label = .{ .text = "Send" }, .on_click = .{ .f = onSend, .ctx = scope.vm } });
+```
+
+Component types still come from the same module (`components.split.State`, `components.modal.Action`),
+so a file that needs both aliases the module too and qualifies only the entry call.
+
 ## The catalogue
 
 | file | what it declares |

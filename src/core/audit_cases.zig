@@ -11,11 +11,11 @@ const audit = @import("audit.zig");
 const frame_mod = @import("frame.zig");
 const Host = @import("host.zig");
 const Driver = @import("testing/root.zig").Driver;
-const box_mod = @import("components/box.zig");
-const button = @import("components/button.zig");
+const box_mod = @import("component.zig").box;
+const button = @import("component.zig").button;
 const props = @import("props.zig");
-const text_mod = @import("components/text.zig");
-const registry = @import("components/click_registry.zig");
+const text_mod = @import("component.zig").text;
+const registry = @import("component.zig").click_registry;
 
 // Records every finding the audit reports during one frame.
 const Findings = struct {

@@ -2,8 +2,8 @@
 const std = @import("std");
 const host_mod = @import("../host.zig");
 const frame_mod = @import("../frame.zig");
-const dispatch = @import("../components/dispatch.zig");
-const scroll_mod = @import("../components/scroll.zig");
+const dispatch = @import("../component.zig").dispatch;
+const scroll_mod = @import("../component.zig").scroll;
 const semantics = @import("../semantics.zig");
 const finders = @import("finders.zig");
 const assertions = @import("assertions.zig");
@@ -617,7 +617,7 @@ pub fn keyForAscii(byte: u8) ?KeyStroke {
 }
 
 test "the typing table types what the field decodes" {
-    const input_mod = @import("../components/input.zig");
+    const input_mod = @import("../component.zig").input;
     var b: u8 = 'a';
     while (b <= 'z') : (b += 1) {
         const k = keyForAscii(b) orelse return error.TestUnexpectedResult;
@@ -688,7 +688,7 @@ test "driver exposes deterministic viewport and empty root" {
 }
 
 test "driver captures a real component frame" {
-    const button = @import("../components/button.zig");
+    const button = @import("../component.zig").button;
     const Rec = struct { clicks: usize = 0 };
     const App = struct {
         state: Rec = .{},
@@ -719,7 +719,7 @@ test "driver captures a real component frame" {
 }
 
 test "driver follows pointer press/release and keyboard routes" {
-    const input = @import("../components/input.zig");
+    const input = @import("../component.zig").input;
     const App = struct {
         key_hits: usize = 0,
         fn root(_: ?*anyopaque, _: u32, _: u32) void {}
@@ -745,9 +745,9 @@ test "driver follows pointer press/release and keyboard routes" {
 
 // ---- E2E: the Compose-style surface ----------------------------------------- These exercise the whole stack: component semantics registration, the.
 
-const box_mod = @import("../components/box.zig");
-const button_mod = @import("../components/button.zig");
-const registry = @import("../components/click_registry.zig");
+const box_mod = @import("../component.zig").box;
+const button_mod = @import("../component.zig").button;
+const registry = @import("../component.zig").click_registry;
 
 /// Stable ids for the synthetic list.
 const e2e_rows = [_][]const u8{

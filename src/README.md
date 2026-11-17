@@ -329,6 +329,26 @@ would create a second module instance, and Clay types crossing the boundary
 (`Color`, `RenderCommandArray`) would stop being the same type. This failure looks
 like a confusing type mismatch, not a missing import.
 
+### I6 — Every component is reached through `core/component.zig`
+
+That file is the façade AND the list: it re-exports every widget, so an app writes
+`@import("glinlandui").components.button` and the engine's own core writes
+`@import("core/component.zig").input`. Nothing outside `src/core/components/` names a
+file in that folder. `ci/check_component_imports.sh` holds it in three directions — no
+bypassing import (C1), no component missing from the façade (C2), and no component
+importing the façade back (C3, a loop).
+
+The reason is that the façade is the toolkit's public API. `root.zig` exports it as
+`components`, so a file that reaches into the folder makes some widget public by
+accident and leaves another one unreachable, and neither shows up as a compile error in
+the app that would have wanted it.
+
+At a call site the entry function carries the widget's name —
+`components.button.button`, `components.text.label`, `components.input.textField` — so an
+app aliases the function, not the module: `const button = components.button.button;` then
+`button(.{ … })`. A component also passes back its own types (`Props`, `State`) through the
+same module when the app needs them.
+
 ---
 
 ## 3. Verify your change
@@ -339,6 +359,7 @@ zig fmt --check build.zig src examples    # formatting is gate 1 in CI
 zig build test --summary all              # expect: 443/458 (15 skipped)  ← see I1 + §5
 ./ci/check_test_parity.sh                 # expect: parity: 458 tests (matches tests.lock)
 ./ci/check_layering.sh                    # expect: layering: ok
+./ci/check_component_imports.sh           # expect: component-imports: ok (25 component(s) through the façade)
 
 # Linux native backends (Wayland/EGL/GLES3). NOT part of the parity count.
 zig build native-test --summary all       # expect: 99/99

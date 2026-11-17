@@ -200,7 +200,7 @@ pub const Service = struct {
     }
 };
 
-const left_button = @import("../components/dispatch.zig").BTN_LEFT;
+const left_button = @import("../component.zig").dispatch.BTN_LEFT;
 
 test "a tree request answers with the app's own nodes" {
     var service = Service{};
@@ -284,9 +284,9 @@ test "quit is the app's own quit, so the window loop ends it" {
 
 // ---- An app to drive ----
 
-const box_mod = @import("../components/box.zig");
-const button_mod = @import("../components/button.zig");
-const toggle_mod = @import("../components/toggle.zig");
+const box_mod = @import("../component.zig").box;
+const button_mod = @import("../component.zig").button;
+const toggle_mod = @import("../component.zig").toggle;
 
 const App = struct {
     on: bool = false,

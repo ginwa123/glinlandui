@@ -9,7 +9,7 @@
 // and asserts), and to the log otherwise.
 const std = @import("std");
 const cl = @import("zclay");
-const registry = @import("components/click_registry.zig");
+const registry = @import("component.zig").click_registry;
 
 pub const Kind = enum {
     // A rectangle thinner than a device pixel is not on the device grid, so it renders as two half-lit columns.
