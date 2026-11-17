@@ -708,9 +708,23 @@ fn declareOcclusion(claim: bool, translucent: bool) void {
     if (translucent) occludeFill(.ID("oc-over"), @import("../color.zig").Color.rgba(0, 0, 0, 80)) else occludeFill(.ID("oc-over"), @import("../color.zig").Color.rgb(0x1e, 0x1e, 0x1e));
 }
 
+// ONE canvas for this file's occlusion tests: Clay keeps a process-global context pointer, so the same arena is re-initialised instead of a new one being handed out per test.
+var oc_canvas: ?[]u8 = null;
+
+fn ocBegin() void {
+    if (oc_canvas == null) {
+        oc_canvas = std.heap.page_allocator.alloc(u8, cl.minMemorySize()) catch @panic("occlusion Clay arena");
+    }
+    _ = cl.initialize(cl.Arena.init(oc_canvas.?), .{ .w = 720, .h = 480 }, .{});
+    const fm = @import("../frame.zig");
+    fm.setViewport(fm.viewportOf(720, 480));
+    cl.setMeasureTextFunction(void, {}, headless.stubMeasure);
+    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
+}
+
 fn layOutOcclusion(claim: bool, translucent: bool) void {
     beginFrame();
-    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    ocBegin();
     cl.beginLayout();
     declareOcclusion(claim, translucent);
     _ = cl.endLayout();
