@@ -334,8 +334,8 @@ pub const Editor = struct {
 
     // Insert a run of bytes. `s` must not be a slice of this editor's own buffer: growth can move it mid-run.
     pub fn insertSlice(self: *Editor, s: []const u8) usize {
-        // A paste is one step however long it is, and it closes the run the caret was in.
-        self.capture(false);
+        // A composed run is typing, so it joins the run the last keystroke opened instead of costing a step of its own.
+        self.capture(true);
         if (self.caret.hasSelection()) _ = self.deleteSelectionQuietly();
         // One growth for the whole run, so a pasted megabyte is copied in a handful of steps and not one byte at a time.
         _ = self.reserve(self.len + s.len);
@@ -344,7 +344,13 @@ pub const Editor = struct {
             if (!self.insertByteQuietly(c)) break;
             written += 1;
         }
+        if (written > 0 and s[s.len - 1] == ' ') self.endRun();
         return written;
+    }
+
+    // Close the typing run: the next edit starts a step of its own. A paste or a scripted insert is one step, not a continuation.
+    pub fn endRun(self: *Editor) void {
+        self.run_open = false;
     }
 
     // Delete the selection, if any. Returns true if something was removed.

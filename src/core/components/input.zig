@@ -501,6 +501,8 @@ pub fn pasteClipboard(field: *Field) bool {
 // Put a run from the pasteboard into the field, and report it when a byte landed.
 fn pasteInto(field: *Field, text: []const u8) bool {
     if (text_editor.handleText(&field.editor, text) == .ignored) return false;
+    // A paste is one step of its own: the next keystroke does not join it.
+    field.editor.endRun();
     field.report();
     return true;
 }
@@ -2443,6 +2445,25 @@ test "a field bound before the engine had an allocator takes it once there is on
 
     // And the history works from there, which is the whole point of having the allocator.
     try std.testing.expect(dispatchText("abc"));
+    try std.testing.expect(dispatchKey(.{ .ctrl = true }, text_editor.KEY_Z));
+    try std.testing.expectEqualStrings("", test_field.text());
+}
+
+test "typing a word with a frame between the keystrokes is still one step" {
+    setTextAllocator(std.testing.allocator);
+    defer setTextAllocator(null);
+    try startField("");
+    defer test_field.deinit();
+
+    // What a real window does: one frame per keystroke, and the app echoing the value back.
+    for ("hello") |c| {
+        var one = [_]u8{c};
+        try std.testing.expect(dispatchText(&one));
+        test_field.value = test_field.text();
+        _ = try layoutCommands(declareTestField);
+    }
+    try std.testing.expectEqualStrings("hello", test_field.text());
+    try std.testing.expectEqual(@as(usize, 1), test_field.editor.hist.undo.items.len);
     try std.testing.expect(dispatchKey(.{ .ctrl = true }, text_editor.KEY_Z));
     try std.testing.expectEqualStrings("", test_field.text());
 }
