@@ -66,11 +66,16 @@ pub fn codepointLen(buf: []const u8, offset: usize) usize {
     return @min(n, buf.len - offset);
 }
 
-// Edit operations on a caller-owned buffer.
+// Edit operations on a buffer the caller owns, or on one this editor grows when it runs out.
 pub const Editor = struct {
     buf: []u8,
     len: usize = 0,
     caret: Caret = .{},
+
+    // Where a run longer than `buf` comes from. Null (the default) means `buf` is the whole story and an insert past it is refused.
+    alloc: ?std.mem.Allocator = null,
+    // True once `buf` came from `alloc`: only then may it be grown, and only then must `deinit` free it.
+    owned: bool = false,
 
     // Seconds since the caret last moved, which is what a view blinks on.
     idle: f32 = 0,
@@ -79,8 +84,41 @@ pub const Editor = struct {
     // Horizontal scroll in pixels, for a line wider than the field.
     scroll_x: f32 = 0,
 
+    // Bind an editor to storage it does not own: a run that does not fit is refused.
     pub fn init(buf: []u8) Editor {
         return .{ .buf = buf };
+    }
+
+    // The same, with room to grow: past the caller's buffer this editor asks `alloc` for more, so the text has no limit.
+    pub fn initWithRoom(buf: []u8, alloc: std.mem.Allocator) Editor {
+        return .{ .buf = buf, .alloc = alloc };
+    }
+
+    // Free the storage this editor grew into. The buffer it started with belongs to the caller and is left alone.
+    pub fn deinit(self: *Editor) void {
+        if (!self.owned) return;
+        if (self.alloc) |a| a.free(self.buf);
+        self.buf = &.{};
+        self.len = 0;
+        self.owned = false;
+    }
+
+    // Room for `need` bytes, doubling so a pasted megabyte costs a handful of copies. False when there is no allocator.
+    fn reserve(self: *Editor, need: usize) bool {
+        if (need <= self.buf.len) return true;
+        const a = self.alloc orelse return false;
+        var cap: usize = @max(self.buf.len, 64);
+        while (cap < need) cap *= 2;
+        if (self.owned) {
+            self.buf = a.realloc(self.buf, cap) catch return false;
+            return true;
+        }
+        // The first growth copies out of the buffer the caller declared, which stays the caller's.
+        const fresh = a.alloc(u8, cap) catch return false;
+        @memcpy(fresh[0..self.buf.len], self.buf);
+        self.buf = fresh;
+        self.owned = true;
+        return true;
     }
 
     pub fn text(self: *const Editor) []const u8 {
@@ -102,9 +140,15 @@ pub const Editor = struct {
 
     // Replace the whole contents.
     pub fn setText(self: *Editor, new_text: []const u8) void {
-        const n = @min(new_text.len, self.buf.len);
-        // @memmove, not @memcpy: the caller may hand this a slice of the buffer being set.
-        @memmove(self.buf[0..n], new_text[0..n]);
+        // A caller may hand this a slice of the buffer being replaced, so remember where it sits before any growth moves it.
+        const base = @intFromPtr(self.buf.ptr);
+        const at = @intFromPtr(new_text.ptr) -% base;
+        const from_self = at < self.buf.len;
+        _ = self.reserve(new_text.len);
+        const run = if (from_self) self.buf[at..][0..new_text.len] else new_text;
+        const n = @min(run.len, self.buf.len);
+        // @memmove, not @memcpy: the run may overlap the destination it is being written to.
+        @memmove(self.buf[0..n], run[0..n]);
         self.len = n;
         self.caret = .{};
         // A model edit puts the caret back on screen, solid, whatever the blink clock said.
@@ -116,7 +160,8 @@ pub const Editor = struct {
         if (self.caret.hasSelection()) {
             _ = self.deleteSelection();
         }
-        if (self.len >= self.buf.len) return false;
+        // A field with an allocator has no length limit: it asks for more room instead of refusing the keystroke.
+        if (!self.reserve(self.len + 1)) return false;
 
         // Shift the tail right by one byte, from the back so the copy does not overlap.
         var i = self.len;
@@ -132,9 +177,11 @@ pub const Editor = struct {
         return true;
     }
 
-    // Insert a run of bytes.
+    // Insert a run of bytes. `s` must not be a slice of this editor's own buffer: growth can move it mid-run.
     pub fn insertSlice(self: *Editor, s: []const u8) usize {
         if (self.caret.hasSelection()) _ = self.deleteSelection();
+        // One growth for the whole run, so a pasted megabyte is copied in a handful of steps and not one byte at a time.
+        _ = self.reserve(self.len + s.len);
         var written: usize = 0;
         for (s) |c| {
             if (!self.insertByte(c)) break;
@@ -722,6 +769,17 @@ test "insert respects the buffer capacity" {
     // A further insert must not corrupt anything.
     _ = e.insertByte('!');
     try testing.expectEqualStrings("hell", e.text());
+}
+
+test "an editor with an allocator grows past its buffer instead of refusing the run" {
+    var buf: [4]u8 = undefined;
+    var e = Editor.initWithRoom(&buf, testing.allocator);
+    defer e.deinit();
+    try testing.expectEqual(@as(usize, 20), e.insertSlice("well past four bytes"));
+    try testing.expectEqualStrings("well past four bytes", e.text());
+    // It grew once, so the buffer it started with is untouched and the text lives past it.
+    try testing.expect(e.owned);
+    try testing.expect(e.buf.len >= 20);
 }
 
 test "backspace and delete" {

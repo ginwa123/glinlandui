@@ -71,6 +71,8 @@ pub const Host = struct {
         // The glyph cache and the measured face spend the app's allocator, not a page-per-glyph one of their own.
         glyphs.initCache(alloc);
         text_face.setAllocator(alloc);
+        // Text fields grow past their inline buffer with the same allocator, so no field has a length limit.
+        input_mod.setTextAllocator(alloc);
         self.clay_mem = try frame_mod.initClay(alloc, self.win_w, self.win_h);
         self.clay_ready = true;
         // Nothing is on screen yet, so the first frame of this host is never "the same as the last", and no field owns the keyboard.
