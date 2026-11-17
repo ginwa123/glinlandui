@@ -17,6 +17,8 @@ pub const Delegate = platform.Delegate;
 pub const render = @import("core/render.zig");
 pub const text = @import("core/text_backend.zig");
 pub const frame = @import("core/frame.zig");
+// The browser-style zoom ladder the Host applies: `Ctrl/Cmd +` / `-` / `0`.
+pub const zoom = @import("core/zoom.zig");
 pub const host = @import("core/host.zig");
 // The library's color type.
 pub const Color = @import("core/color.zig").Color;
@@ -246,5 +248,6 @@ test {
     _ = @import("core/components/toggle.zig");
     _ = @import("core/components/tree.zig");
     _ = @import("core/components/tabs.zig");
+    _ = @import("core/zoom.zig");
     _ = @import("core/components/badge.zig");
 }

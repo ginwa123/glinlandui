@@ -122,6 +122,9 @@ pub const Driver = struct {
         self.frame();
     }
 
+    // Ctrl on the evdev numbering every backend reports; Cmd arrives as 125, which the mods latch treats the same.
+    const key_ctrl: u32 = 29;
+
     /// Render one frame through the normal Host/Clay frame path.
     pub fn frame(self: *Driver) void {
         self.last_command_len = 0;
@@ -207,6 +210,15 @@ pub const Driver = struct {
     pub fn key(self: *Driver, keycode: u32) !bool {
         const consumed = self.host.onKeyEvent(keycode, true);
         _ = self.host.onKeyEvent(keycode, false);
+        self.frame();
+        return consumed;
+    }
+
+    /// A `Ctrl/Cmd` shortcut as a keyboard sends it: the modifier goes down, the key is typed, the modifier comes up.
+    pub fn shortcut(self: *Driver, keycode: u32) !bool {
+        _ = self.host.onKeyEvent(key_ctrl, true);
+        const consumed = try self.key(keycode);
+        _ = self.host.onKeyEvent(key_ctrl, false);
         self.frame();
         return consumed;
     }
