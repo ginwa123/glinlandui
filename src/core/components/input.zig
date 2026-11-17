@@ -1192,8 +1192,8 @@ fn caretBar(field: *Field, text: []const u8) void {
         .id = .IDI(field.name(), 2),
         // The parent is the text's own clip, which already sits past the field's padding and border: adding the pad again leaves a gap after the last glyph.
         .x = .{ .px = @max(field.measure(text[0..at], field.font_size.whole()) - field.h_scroll, 0) },
-        // The field's own x is what the bar lands on, and a field between two pixels is what makes a caret look smeared.
-        .parent_x = if (frame_mod.bounds(field.id.clay())) |b| b.x else null,
+        // The CLIP's x, never the field's: the bar is the clip's child, so that is where it lands, and snapping an offset counted from another origin puts it on a half pixel at 125%.
+        .parent_x = if (frame_mod.bounds(textClipId(field.name()))) |b| b.x else null,
         .height = .{ .px = field.font_size.pts() + 4 },
         .color = field.caret_fg orelse Color.rgb(0xd8, 0xd8, 0xdc),
         .anchor = .center,
@@ -2609,10 +2609,10 @@ test "a single-line caret sits on the glyph boundary, with the field's padding c
     const box = frame_mod.bounds(caret_field.id.clay()) orelse return error.FieldMissing;
     const caret = frame_mod.bounds(.IDI("test-caret-field", 2)) orelse return error.CaretMissing;
     const advance = caret_field.measure("sss", caret_field.font_size.whole());
-    // The text starts at the field's padding, and the caret at the end of the run: the gap after "sss" is nothing.
-    try std.testing.expectApproxEqAbs(box.x + caret_field.pad.left.pts() + advance, caret.x, 1.5);
+    // The text starts at the field's padding, and the caret at the run's end: half a device pixel is the whole budget.
+    try std.testing.expectApproxEqAbs(box.x + caret_field.pad.left.pts() + advance, caret.x, half_pixel());
 
-    // One more glyph moves the bar by exactly one advance, so the gap cannot grow with the text.
+    // One more glyph moves the bar by one advance, so the gap cannot grow with the text; the snap may cost a pixel.
     caret_field.setText("ssss");
     caret_field.editor.setCaret(4, false);
     headless.begin(.{ .x = 99999, .y = 99999 }, false);
@@ -2621,7 +2621,57 @@ test "a single-line caret sits on the glyph boundary, with the field's padding c
     declareCaretField();
     _ = cl.endLayout();
     const longer = frame_mod.bounds(.IDI("test-caret-field", 2)) orelse return error.CaretMissing;
-    try std.testing.expectApproxEqAbs(caret_field.measure("s", caret_field.font_size.whole()), longer.x - caret.x, 1.5);
+    try std.testing.expectApproxEqAbs(caret_field.measure("s", caret_field.font_size.whole()), longer.x - caret.x, device_pixel());
+}
+
+// Half a device pixel, in points: the most a bar snapped to the grid can sit from the boundary it marks.
+fn half_pixel() f32 {
+    return 0.5 / frame_mod.pixel_scale;
+}
+
+// One device pixel, in points: the step a snapped bar is allowed to move by.
+fn device_pixel() f32 {
+    return 1 / frame_mod.pixel_scale;
+}
+
+var grid_field: Field = .{ .id = .{ .text = "test-grid-field" }, .w = .{ .fixed = 400 }, .h = .{ .fixed = 30 } };
+
+fn declareGridField() void {
+    // The field starts at 37.5 pt, which is between two device pixels on a 125% display: a sidebar width lands there.
+    cl.UI()(.{ .layout = .{ .direction = .left_to_right, .sizing = .{ .w = .grow, .h = .fit } } })({
+        cl.UI()(.{ .layout = .{ .sizing = .{ .w = .fixed(37.5), .h = .fixed(30) } } })({});
+        textField(&grid_field);
+    });
+}
+
+test "a caret lands on a whole device pixel at 125%, wherever its field starts" {
+    grid_field.bind();
+    grid_field.setText("abcdefghij");
+    frame_mod.ptr_down = false;
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.setPixelScale(1.25);
+    defer frame_mod.setPixelScale(1);
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    frame_mod.setFocus("test-grid-field");
+    cl.beginLayout();
+    declareGridField();
+    _ = cl.endLayout();
+    const size = grid_field.font_size.whole();
+    for ([_]usize{ 0, 5, 10 }) |at| {
+        grid_field.editor.setCaret(at, false);
+        cl.beginLayout();
+        declareGridField();
+        _ = cl.endLayout();
+        const box = frame_mod.bounds(grid_field.id.clay()) orelse return error.FieldMissing;
+        const caret = frame_mod.bounds(.IDI("test-grid-field", 2)) orelse return error.CaretMissing;
+        // A 1 px bar between two device pixels is smeared across both: the snap must be counted from its real parent.
+        const device = caret.x * frame_mod.pixel_scale;
+        try std.testing.expectApproxEqAbs(@round(device), device, 0.01);
+        // And it is the glyph boundary's own pixel, never a whole glyph away.
+        const want = box.x + grid_field.pad.left.pts() + grid_field.measure(grid_field.editor.text()[0..at], size);
+        try std.testing.expect(@abs(caret.x - want) <= half_pixel() + 0.01);
+    }
 }
 
 var scrolled_field: Field = .{ .id = .{ .text = "test-scrolled-field" }, .w = .{ .fixed = 120 } };
@@ -2646,7 +2696,7 @@ test "a scrolled single-line caret slides with the text, and the scroll is count
     const box = frame_mod.bounds(scrolled_field.id.clay()) orelse return error.FieldMissing;
     const caret = frame_mod.bounds(.IDI("test-scrolled-field", 2)) orelse return error.CaretMissing;
     const advance = scrolled_field.measure(long_value, scrolled_field.font_size.whole());
-    try std.testing.expectApproxEqAbs(box.x + scrolled_field.pad.left.pts() + advance - scrolled_field.h_scroll, caret.x, 1.5);
+    try std.testing.expectApproxEqAbs(box.x + scrolled_field.pad.left.pts() + advance - scrolled_field.h_scroll, caret.x, half_pixel());
 }
 
 var shrink_field: Field = .{ .id = .{ .text = "test-shrink-field" }, .w = .{ .fixed = 200 } };
