@@ -215,8 +215,8 @@ pub const Host = struct {
         const thumb_moved = scroll_mod.moveThumb(x, y);
         if (button == dispatch.BTN_LEFT and !pressed) scroll_mod.endThumbGrab();
         if (thumb_moved) return;
-        // Slider-style drag: a press that is HELD and moved nudges the scroll container under the pointer 1:1 — never the press itself.
-        if (!pressed and self.ptr.down and self.ptr.dragging and (x != last_x or y != last_y)) {
+        // Slider-style drag: a press that is HELD and moved nudges the pane 1:1 — a move is button 0, whatever `pressed` the backend calls it.
+        if (button == 0 and self.ptr.down and self.ptr.dragging and (x != last_x or y != last_y)) {
             if (!self.drag_selecting_text and !frame_mod.dragClaimed()) scroll_mod.dragScroll(x, y, x - last_x, y - last_y);
             reorder_mod.move(x, y);
         }
@@ -575,6 +575,24 @@ test "host: press-drag down scrolls down slider-style (no click)" {
     h.frame(720, 480);
     const y1 = cl.getElementData(cl.getElementId("host-scroll-probe")).bounding_box.y;
     // Slider-style 1:1: pointer down 40 = content up 40.
+    try std.testing.expectApproxEqAbs(y0 - 40, y1, 0.5);
+}
+
+test "host: a drag move counts as a move whatever `pressed` the backend calls it" {
+    var h: Host = undefined;
+    try testHost(&h, null, hostScrollProbeRoot);
+    h.frame(720, 480);
+    const y0 = cl.getElementData(cl.getElementId("host-scroll-probe")).bounding_box.y;
+    const box = cl.getElementData(cl.getElementId("host-scroll")).bounding_box;
+    const cx = box.x + box.width * 0.5;
+    const cy = box.y + box.height * 0.5;
+    // macOS and Wayland send a motion with the button still down as pressed=true, button 0: the drag used to test `!pressed` and dropped every one of them.
+    h.onPointerEvent(cx, cy, true, 272);
+    h.onPointerEvent(cx, cy + 20, true, 0);
+    h.onPointerEvent(cx, cy + 40, true, 0);
+    try std.testing.expect(h.ptr.dragging);
+    h.frame(720, 480);
+    const y1 = cl.getElementData(cl.getElementId("host-scroll-probe")).bounding_box.y;
     try std.testing.expectApproxEqAbs(y0 - 40, y1, 0.5);
 }
 
