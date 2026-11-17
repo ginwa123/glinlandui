@@ -12,6 +12,7 @@
 
 const std = @import("std");
 const glyphs = @import("glyphs.zig");
+const font_io = @import("font_io.zig");
 const estimator = @import("text_estimator.zig");
 
 pub const TextExtent = estimator.TextExtent;
@@ -23,10 +24,27 @@ var face_owned: bool = false;
 var load_tried: bool = false;
 // The allocator the application's `main` supplied. `Host.init` sets it before the first frame.
 var face_alloc: ?std.mem.Allocator = null;
+// The bytes of a face the APPLICATION handed over: copied so the caller's buffer may go, and given back by `deinitFace`.
+var app_face: ?[]u8 = null;
+var app_face_alloc: ?std.mem.Allocator = null;
 
 /// Point the face at the allocator the application's `main` gave the toolkit.
 pub fn setAllocator(alloc: std.mem.Allocator) void {
     face_alloc = alloc;
+}
+
+/// Adopt a face the APPLICATION supplies — an embedded `.ttf`, say — as the one this process measures and paints with.
+pub fn installFaceBytes(alloc: std.mem.Allocator, bytes: []const u8) !void {
+    // The face points into these bytes for the rest of the process, so the copy is not politeness: the caller's buffer may be a literal.
+    const owned = try alloc.dupe(u8, bytes);
+    errdefer alloc.free(owned);
+    const f = try glyphs.Font.fromBytes(alloc, owned);
+    // Drops the face and the widths this module held: those widths were measured with the pen that is being replaced.
+    reset();
+    // Installed after the reset, so nothing above can clear the new face out of the slot `font()` consults first.
+    glyphs.installFont(f);
+    app_face = owned;
+    app_face_alloc = alloc;
 }
 
 // The face this process measures and draws with, or null when no font file could be parsed.
@@ -107,6 +125,11 @@ pub fn deinitFace() void {
     releaseFace();
     face = null;
     load_tried = false;
+    // An application's face is this module's to give back, and the slot that points into its bytes has to go with them.
+    if (app_face) |bytes| if (app_face_alloc) |a| a.free(bytes);
+    app_face = null;
+    app_face_alloc = null;
+    glyphs.clearInstalledFont();
 }
 
 // Device pixels per point, as the window reported it: the rasteriser draws a run at round(size * this), not at size.
@@ -188,4 +211,20 @@ test "deinitFace returns the face's bytes to the allocator that was handed in" {
     deinitFace();
     try std.testing.expect(face == null);
     try std.testing.expect(!face_owned);
+}
+
+test "an application's face is what measures, and deinitFace hands its bytes back" {
+    // The bundled bytes stand in for an app's own: what is under test is that installing them takes over the face and copies them.
+    reset();
+    setAllocator(std.testing.allocator);
+    defer setAllocator(std.heap.page_allocator);
+    try installFaceBytes(std.testing.allocator, font_io.bundled_font);
+    try std.testing.expect(font() != null);
+    try std.testing.expect(glyphs.installedFont() != null);
+    try std.testing.expect(measureText("Invoice", 14).w > 0);
+    // testing.allocator fails this test if the bytes this module copied are still live when it ends.
+    deinitFace();
+    try std.testing.expect(app_face == null);
+    // The slot that points into those bytes is cleared too, so a later measurement cannot read freed memory.
+    try std.testing.expect(glyphs.installedFont() == null);
 }
