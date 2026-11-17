@@ -10,6 +10,9 @@ pub const cap: usize = 384;
 /// Cursor kind for Wayland wl_pointer cursor shape: the same enum a widget's props name.
 pub const Cursor = @import("../props.zig").Cursor;
 
+/// The colour type a claim is tested with: only a fill that hides what is behind it stops a click.
+const Color = @import("../color.zig").Color;
+
 /// Click callback shapes (same as button.ClickFn / list row fn).
 pub const ClickFn = *const fn (?*anyopaque) void;
 pub const RowFn = *const fn (?*anyopaque, usize) void;
@@ -56,10 +59,35 @@ const Entry = struct {
     cursor: Cursor = .default,
     /// Scroll-container viewport this target was declared inside, if any.
     clip: ?Clip = null,
+    /// Declaration order inside the frame, which is paint order: a later target is drawn over an earlier one.
+    seq: u32 = 0,
 };
 
 var entries: [cap]Entry = undefined;
 var count: usize = 0;
+
+/// One opaque surface: a widget that paints a fill hiding whatever is behind it. Its area answers a click for itself, so nothing registered BEFORE it is reachable there.
+const Surface = struct {
+    id: cl.ElementId,
+    z: i16 = 0,
+    seq: u32 = 0,
+    clip: ?Clip = null,
+};
+
+/// How many opaque surfaces one frame may claim; a screen with more filled boxes than this is past the point where a per-frame fixed cap helps.
+pub const surface_cap: usize = 512;
+
+var surfaces: [surface_cap]Surface = undefined;
+var surface_count: usize = 0;
+
+/// A frame's single ordering counter, shared by targets and surfaces so paint order across both is comparable.
+var seq_counter: u32 = 0;
+
+fn nextSeq() u32 {
+    const s = seq_counter;
+    seq_counter +%= 1;
+    return s;
+}
 
 /// Viewport chain in force while declaring; `pushClip` appends to it and `popClip` unwinds it.
 var clip: ?Clip = null;
@@ -69,8 +97,37 @@ var clip_depth: usize = 0;
 /// Clear the registry for a new frame.
 pub fn beginFrame() void {
     count = 0;
+    surface_count = 0;
+    seq_counter = 0;
     clip = null;
     clip_depth = 0;
+}
+
+/// An opaque fill claims the area it covers: a click inside it is answered by IT, never by something painted underneath.
+pub fn occlude(id: cl.ElementId) void {
+    occludeZ(id, 0);
+}
+
+/// The same, for an overlay: a card floating with `z` claims its area at that priority, so an in-flow target behind it (z 0) stays unreachable.
+pub fn occludeZ(id: cl.ElementId, z: i16) void {
+    if (surface_count >= surface_cap) return;
+    surfaces[surface_count] = .{ .id = id, .z = z, .seq = nextSeq(), .clip = clip };
+    surface_count += 1;
+}
+
+/// The claim an opaque background makes; a translucent one (an alpha below 255) shows what is behind it, so it claims nothing.
+pub fn occludeFill(id: cl.ElementId, bg: Color) void {
+    if (bg.isOpaque()) occlude(id);
+}
+
+/// The same for a floating card: it claims at its own z, so the page it covers stays unreachable while its own rows (registered above) do not.
+pub fn occludeFillZ(id: cl.ElementId, bg: Color, z: i16) void {
+    if (bg.isOpaque()) occludeZ(id, z);
+}
+
+/// How many surfaces claimed something this frame (the devtool's tree and the tests read it).
+pub fn surfaceCount() usize {
+    return surface_count;
 }
 
 /// Enter a scroll container's viewport: targets declared until `popClip` answer only inside it.
@@ -113,7 +170,7 @@ pub fn registerZ(id: cl.ElementId, cb: *const fn (?*anyopaque, usize) void, ctx:
 /// Full row version storing cursor (list rows pass .pointer).
 pub fn registerZCursor(id: cl.ElementId, cb: *const fn (?*anyopaque, usize) void, ctx: ?*anyopaque, index: usize, z: i16, cursor: Cursor) void {
     if (count >= cap) return;
-    entries[count] = .{ .id = id, .cb_row = cb, .ctx = ctx, .index = index, .z = z, .cursor = cursor, .clip = clip };
+    entries[count] = .{ .id = id, .cb_row = cb, .ctx = ctx, .index = index, .z = z, .cursor = cursor, .clip = clip, .seq = nextSeq() };
     count += 1;
 }
 
@@ -130,7 +187,7 @@ pub fn registerClickCursor(id: cl.ElementId, cb: ClickFn, ctx: ?*anyopaque, curs
 /// The same, with a dispatch priority: a field inside an overlay that swallows clicks must register ABOVE it, or the overlay eats the click.
 pub fn registerClickCursorZ(id: cl.ElementId, cb: ClickFn, ctx: ?*anyopaque, cursor: Cursor, z: i16) void {
     if (count >= cap) return;
-    entries[count] = .{ .id = id, .cb_click = cb, .ctx = ctx, .z = z, .cursor = cursor, .clip = clip };
+    entries[count] = .{ .id = id, .cb_click = cb, .ctx = ctx, .z = z, .cursor = cursor, .clip = clip, .seq = nextSeq() };
     count += 1;
 }
 
@@ -155,12 +212,29 @@ pub fn registerHover(id: cl.ElementId, cursor: Cursor) void {
 /// Hover-only with explicit z (overlay floats pass their z so the float wins over covered in-flow rows, mirroring dispatchClick's rule).
 pub fn registerHoverZ(id: cl.ElementId, cursor: Cursor, z: i16) void {
     if (count >= cap) return;
-    entries[count] = .{ .id = id, .z = z, .cursor = cursor, .clip = clip };
+    entries[count] = .{ .id = id, .z = z, .cursor = cursor, .clip = clip, .seq = nextSeq() };
     count += 1;
 }
 
 fn contains(bb: cl.BoundingBox, x: f32, y: f32) bool {
     return x >= bb.x and x < bb.x + bb.width and y >= bb.y and y < bb.y + bb.height;
+}
+
+/// True when an opaque surface fills this point ABOVE the priority given: it is painted later (or floats higher), so whatever is underneath is not what the user is pointing at.
+fn filledAbove(x: f32, y: f32, z: i16, seq: u32) bool {
+    var i: usize = 0;
+    while (i < surface_count) : (i += 1) {
+        const s = surfaces[i];
+        // Ordering is (z, declaration): a surface with a lower z or an earlier declare is BEHIND this target.
+        if (s.z < z) continue;
+        if (s.z == z and s.seq <= seq) continue;
+        const data = cl.getElementData(s.id);
+        if (!data.found) continue;
+        if (!contains(data.bounding_box, x, y)) continue;
+        if (!insideClip(s.clip, x, y)) continue;
+        return true;
+    }
+    return false;
 }
 
 /// The highest-z entry containing the point (ties keep last-registered-first), or null.
@@ -178,6 +252,8 @@ pub fn topmostAt(x: f32, y: f32) ?Entry {
         // Forward scan + >= : later entries win ties (legacy order).
         if (best == null or e.z >= best.?.z) best = e;
     }
+    // A filled surface painted over this target takes the click: an input behind a pane must not answer through it.
+    if (best) |b| if (filledAbove(x, y, b.z, b.seq)) return null;
     return best;
 }
 
@@ -210,6 +286,19 @@ pub fn describeAt(x: f32, y: f32) void {
             x,                   y,                   hit.id.id,               hit.id.offset,            hit.z,
             data.bounding_box.x, data.bounding_box.y, data.bounding_box.width, data.bounding_box.height,
         });
+        return;
+    }
+    // A filled surface over a target is the one case where a target exists and must not answer, so the trace says it.
+    var best: ?Entry = null;
+    var j: usize = 0;
+    while (j < count) : (j += 1) {
+        const e = entries[j];
+        const data = cl.getElementData(e.id);
+        if (!data.found or !contains(data.bounding_box, x, y) or !insideClip(e.clip, x, y)) continue;
+        if (e.cb_row != null or e.cb_click != null) best = e;
+    }
+    if (best) |b| {
+        tracePrint("[click] ({d:.1},{d:.1}) -> COVERED: id {d}/{d} is painted under a filled surface\n", .{ x, y, b.id.id, b.id.offset });
         return;
     }
     tracePrint("[click] ({d:.1},{d:.1}) -> NOTHING ({d} entries)\n", .{ x, y, count });
@@ -274,6 +363,8 @@ pub fn hoverCursorAt(x: f32, y: f32) Cursor {
         if (!insideClip(e.clip, x, y)) continue;
         if (best == null or e.z >= best.?.z) best = e;
     }
+    // The same rule a click follows: a field covered by an opaque card is not an I-beam, it is the card.
+    if (best) |b| if (filledAbove(x, y, b.z, b.seq)) return .default;
     return if (best) |hit| hit.cursor else .default;
 }
 
@@ -592,4 +683,138 @@ test "nested scroll containers both clip, and the chain unwinds for a sibling" {
     const sib = cl.getElementData(cl.ElementId.ID("cr-sibling")).bounding_box;
     try std.testing.expect(dispatchClick(sib.x + sib.width * 0.5, sib.y + sib.height * 0.5));
     try std.testing.expectEqual(@as(usize, 2), rec.calls);
+}
+
+// ---- occlusion: an opaque fill claims the area it covers ---------------------------------------------- A target painted UNDER a filled surface is not what the user is pointing at, so it must not answer. This is the rule that keeps a click on a pane from reaching an input that the pane covers.
+
+var oc_rec = ClipClick{};
+
+fn onOcClick(ctx: ?*anyopaque) void {
+    const r: *ClipClick = @ptrCast(@alignCast(ctx.?));
+    r.calls += 1;
+}
+
+// A 120x40 target at the origin, then (optionally) a 200x120 surface floating over it: the pane-over-a-row shape.
+fn declareOcclusion(claim: bool, translucent: bool) void {
+    cl.UI()(.{ .id = .ID("oc-under"), .layout = .{ .sizing = .{ .w = .fixed(120), .h = .fixed(40) } } })({});
+    registerClick(.ID("oc-under"), onOcClick, &oc_rec);
+    registerHover(.ID("oc-under"), .text);
+    cl.UI()(.{
+        .id = .ID("oc-over"),
+        .layout = .{ .sizing = .{ .w = .fixed(200), .h = .fixed(120) } },
+        .floating = .{ .attach_to = .to_root, .attach_points = .{ .element = .left_top, .parent = .left_top }, .z_index = 0 },
+    })({});
+    if (!claim) return;
+    if (translucent) occludeFill(.ID("oc-over"), @import("../color.zig").Color.rgba(0, 0, 0, 80)) else occludeFill(.ID("oc-over"), @import("../color.zig").Color.rgb(0x1e, 0x1e, 0x1e));
+}
+
+fn layOutOcclusion(claim: bool, translucent: bool) void {
+    beginFrame();
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.beginLayout();
+    declareOcclusion(claim, translucent);
+    _ = cl.endLayout();
+}
+
+fn underCentre() cl.Vector2 {
+    const bb = cl.getElementData(cl.ElementId.ID("oc-under")).bounding_box;
+    return .{ .x = bb.x + bb.width * 0.5, .y = bb.y + bb.height * 0.5 };
+}
+
+test "a filled surface over a target stops the click reaching it" {
+    oc_rec = ClipClick{};
+    // Without a claim the target answers, which is the defect this rule exists to remove.
+    layOutOcclusion(false, false);
+    const p = underCentre();
+    try std.testing.expect(dispatchClick(p.x, p.y));
+    try std.testing.expectEqual(@as(usize, 1), oc_rec.calls);
+
+    // With the pane's fill claiming the area, the same point answers nothing.
+    layOutOcclusion(true, false);
+    try std.testing.expectEqual(@as(usize, 1), surfaceCount());
+    try std.testing.expect(!dispatchClick(p.x, p.y));
+    try std.testing.expectEqual(@as(usize, 1), oc_rec.calls);
+}
+
+test "a translucent fill hides nothing, so the target underneath still answers" {
+    oc_rec = ClipClick{};
+    layOutOcclusion(true, true);
+    const p = underCentre();
+    try std.testing.expect(dispatchClick(p.x, p.y));
+    try std.testing.expectEqual(@as(usize, 1), oc_rec.calls);
+}
+
+test "a target declared INSIDE the covering surface answers as usual" {
+    // The pane claims its area, then its own child registers: paint order decides, and the child is later.
+    oc_rec = ClipClick{};
+    beginFrame();
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.beginLayout();
+    cl.UI()(.{ .id = .ID("oc-card"), .layout = .{ .sizing = .{ .w = .fixed(200), .h = .fixed(120) } } })({
+        occludeFill(.ID("oc-card"), @import("../color.zig").Color.rgb(0x1e, 0x1e, 0x1e));
+        cl.UI()(.{ .id = .ID("oc-child"), .layout = .{ .sizing = .{ .w = .fixed(80), .h = .fixed(30) } } })({});
+        registerClick(.ID("oc-child"), onOcClick, &oc_rec);
+    });
+    _ = cl.endLayout();
+
+    const bb = cl.getElementData(cl.ElementId.ID("oc-child")).bounding_box;
+    try std.testing.expect(dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
+    try std.testing.expectEqual(@as(usize, 1), oc_rec.calls);
+}
+
+test "a surface painted BEFORE a target does not hide it" {
+    // A card drawn first, the target on top of it: the later target is what the user sees.
+    oc_rec = ClipClick{};
+    beginFrame();
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.beginLayout();
+    cl.UI()(.{
+        .id = .ID("oc-behind"),
+        .layout = .{ .sizing = .{ .w = .fixed(200), .h = .fixed(120) } },
+        .floating = .{ .attach_to = .to_root, .attach_points = .{ .element = .left_top, .parent = .left_top }, .z_index = 0 },
+    })({});
+    occludeFill(.ID("oc-behind"), @import("../color.zig").Color.rgb(0x1e, 0x1e, 0x1e));
+    cl.UI()(.{ .id = .ID("oc-above"), .layout = .{ .sizing = .{ .w = .fixed(80), .h = .fixed(30) } } })({});
+    registerClick(.ID("oc-above"), onOcClick, &oc_rec);
+    _ = cl.endLayout();
+
+    const bb = cl.getElementData(cl.ElementId.ID("oc-above")).bounding_box;
+    try std.testing.expect(dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
+    try std.testing.expectEqual(@as(usize, 1), oc_rec.calls);
+}
+
+test "an overlay above the covering surface still answers" {
+    // An in-flow pane claims at z 0; a dropdown card floating at z 10 is painted over it, so its row must win.
+    oc_rec = ClipClick{};
+    beginFrame();
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.beginLayout();
+    cl.UI()(.{
+        .id = .ID("oc-pane"),
+        .layout = .{ .sizing = .{ .w = .fixed(300), .h = .fixed(200) } },
+        .floating = .{ .attach_to = .to_root, .attach_points = .{ .element = .left_top, .parent = .left_top }, .z_index = 0 },
+    })({});
+    occlude(.ID("oc-pane"));
+    cl.UI()(.{
+        .id = .ID("oc-popup"),
+        .layout = .{ .sizing = .{ .w = .fixed(90), .h = .fixed(24) } },
+        .floating = .{ .attach_to = .to_root, .attach_points = .{ .element = .left_top, .parent = .left_top }, .z_index = 10 },
+    })({});
+    occludeZ(.ID("oc-popup"), 10);
+    registerZ(.ID("oc-popup"), onClipRow, &oc_rec, 0, 10);
+    _ = cl.endLayout();
+
+    const bb = cl.getElementData(cl.ElementId.ID("oc-popup")).bounding_box;
+    try std.testing.expect(dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
+    try std.testing.expectEqual(@as(usize, 1), oc_rec.calls);
+}
+
+test "the hover cursor of a covered field is not an I-beam" {
+    layOutOcclusion(false, false);
+    const p = underCentre();
+    try std.testing.expectEqual(Cursor.text, hoverCursorAt(p.x, p.y));
+
+    // The pane's claim covers it, so the pointer is the pane's own shape.
+    layOutOcclusion(true, false);
+    try std.testing.expectEqual(Cursor.default, hoverCursorAt(p.x, p.y));
 }

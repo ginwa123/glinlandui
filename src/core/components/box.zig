@@ -51,6 +51,8 @@ pub fn box(p: BoxProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void)
     };
     const bg = if (p.hover_bg) |hover| (if (cl.pointerOver(p.id.clay())) hover else p.bg) else p.bg;
     cl.UI()(declaration(p, dir, bg))({
+        // An opaque fill claims the area it covers, so a click inside this container stops here instead of reaching a widget it hides.
+        if (bg) |b| registry.occludeFill(p.id.clay(), b);
         // The box's own hit target answers first, so a clickable child drawn on top of it wins the tie.
         if (p.on_click.f) |cb| registry.registerClickCursor(p.id.clay(), cb, p.on_click.ctx, p.cursor);
         // A right click opens the card the engine draws, so a container is all a menu needs.

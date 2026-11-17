@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const keyboard = @import("keyboard_constant.zig");
 
 pub const Action = enum {
     // The buffer or caret did not change.
@@ -66,6 +67,65 @@ pub fn codepointLen(buf: []const u8, offset: usize) usize {
     return @min(n, buf.len - offset);
 }
 
+// ---- undo and redo: one step is the whole text plus the caret that was in it, captured once per run of typing ----
+
+/// How many steps one editor remembers before the oldest is dropped.
+pub const history_steps: usize = 64;
+
+/// How many bytes one editor's history may hold. Past it the oldest steps go; the newest always stays.
+pub const history_bytes: usize = 16 * 1024 * 1024;
+
+/// One remembered state: the text as it was, and where the caret was in it.
+pub const Step = struct {
+    text: []u8,
+    caret: Caret,
+};
+
+/// The steps behind and ahead of an editor's caret.
+pub const History = struct {
+    undo: std.ArrayList(Step) = .empty,
+    redo: std.ArrayList(Step) = .empty,
+    bytes: usize = 0,
+
+    /// Free every remembered state.
+    pub fn deinit(self: *History, alloc: Allocator) void {
+        self.dropUndo(alloc);
+        self.dropRedo(alloc);
+        self.undo.deinit(alloc);
+        self.redo.deinit(alloc);
+        self.bytes = 0;
+    }
+
+    pub fn canUndo(self: *const History) bool {
+        return self.undo.items.len > 0;
+    }
+
+    pub fn canRedo(self: *const History) bool {
+        return self.redo.items.len > 0;
+    }
+
+    fn dropUndo(self: *History, alloc: Allocator) void {
+        for (self.undo.items) |*step| alloc.free(step.text);
+        self.undo.clearRetainingCapacity();
+        self.bytes = 0;
+    }
+
+    /// Forget the steps that were undone: a fresh edit starts a new future, which is what every editor does.
+    pub fn dropRedo(self: *History, alloc: Allocator) void {
+        for (self.redo.items) |*step| alloc.free(step.text);
+        self.redo.clearRetainingCapacity();
+    }
+
+    /// Past the step or byte budget the oldest step goes, so a long session costs a bounded amount of memory.
+    fn trim(self: *History, alloc: Allocator) void {
+        while (self.undo.items.len > history_steps or (self.bytes > history_bytes and self.undo.items.len > 1)) {
+            const oldest = self.undo.orderedRemove(0);
+            self.bytes -= oldest.text.len;
+            alloc.free(oldest.text);
+        }
+    }
+};
+
 // Edit operations on a buffer the caller owns, or on one this editor grows when it runs out.
 pub const Editor = struct {
     buf: []u8,
@@ -84,6 +144,11 @@ pub const Editor = struct {
     // Horizontal scroll in pixels, for a line wider than the field.
     scroll_x: f32 = 0,
 
+    // The steps behind and ahead of the caret: empty, and free, until an editor with an allocator edits something.
+    hist: History = .{},
+    // True while the last edit was a run of typing that the next keystroke extends: a word costs one step, not one per byte.
+    run_open: bool = false,
+
     // Bind an editor to storage it does not own: a run that does not fit is refused.
     pub fn init(buf: []u8) Editor {
         return .{ .buf = buf };
@@ -94,8 +159,11 @@ pub const Editor = struct {
         return .{ .buf = buf, .alloc = alloc };
     }
 
-    // Free the storage this editor grew into. The buffer it started with belongs to the caller and is left alone.
+    // Free the storage this editor grew into, and every step it remembered. The buffer it started with belongs to the caller and is left alone.
     pub fn deinit(self: *Editor) void {
+        if (self.alloc) |a| self.hist.deinit(a);
+        self.hist = .{};
+        self.run_open = false;
         if (!self.owned) return;
         if (self.alloc) |a| a.free(self.buf);
         self.buf = &.{};
@@ -155,11 +223,98 @@ pub const Editor = struct {
         self.idle = 0;
     }
 
+    // ---- undo and redo ----
+
+    // Remember the state an edit is about to replace. `coalesce` extends the run the previous keystroke opened, so a word costs one step.
+    fn capture(self: *Editor, coalesce: bool) void {
+        if (coalesce and self.run_open) return;
+        self.run_open = coalesce;
+        const a = self.alloc orelse return;
+        const copy = a.dupe(u8, self.text()) catch return;
+        self.hist.undo.append(a, .{ .text = copy, .caret = self.caret }) catch {
+            a.free(copy);
+            return;
+        };
+        self.hist.bytes += copy.len;
+        self.hist.dropRedo(a);
+        self.hist.trim(a);
+    }
+
+    /// True when Cmd/Ctrl+Z has something to take back.
+    pub fn canUndo(self: *const Editor) bool {
+        return self.hist.canUndo();
+    }
+
+    /// True when Cmd/Ctrl+Shift+Z has something to put back.
+    pub fn canRedo(self: *const Editor) bool {
+        return self.hist.canRedo();
+    }
+
+    /// Take the last step back: the text and the caret return to where they were before it. False when there is nothing to undo.
+    pub fn undo(self: *Editor) bool {
+        const a = self.alloc orelse return false;
+        const step = self.hist.undo.pop() orelse return false;
+        self.hist.bytes -= step.text.len;
+        // Where the text is NOW becomes the step forward, so redo can put it back.
+        self.pushForward(a);
+        const previous = step.text;
+        self.restore(previous, step.caret);
+        a.free(previous);
+        return true;
+    }
+
+    /// Put back the step that was taken back. False when there is nothing to redo.
+    pub fn redo(self: *Editor) bool {
+        const a = self.alloc orelse return false;
+        const step = self.hist.redo.pop() orelse return false;
+        if (a.dupe(u8, self.text())) |copy| {
+            if (self.hist.undo.append(a, .{ .text = copy, .caret = self.caret })) |_| {
+                self.hist.bytes += copy.len;
+            } else |_| {
+                a.free(copy);
+            }
+        } else |_| {}
+        const ahead = step.text;
+        self.restore(ahead, step.caret);
+        a.free(ahead);
+        return true;
+    }
+
+    // Where the text is now, remembered as the step forward.
+    fn pushForward(self: *Editor, a: Allocator) void {
+        const copy = a.dupe(u8, self.text()) catch return;
+        self.hist.redo.append(a, .{ .text = copy, .caret = self.caret }) catch {
+            a.free(copy);
+            return;
+        };
+    }
+
+    // Write a remembered text and caret back into the buffer.
+    fn restore(self: *Editor, remembered: []const u8, caret: Caret) void {
+        _ = self.reserve(remembered.len);
+        const n = @min(remembered.len, self.buf.len);
+        @memmove(self.buf[0..n], remembered[0..n]);
+        self.len = n;
+        self.caret = caret;
+        self.caret.clamp(n);
+        // The restore moved the text, so the next keystroke is a new run.
+        self.run_open = false;
+        self.idle = 0;
+    }
+
     // Insert one byte at the caret, replacing the selection if any.
     pub fn insertByte(self: *Editor, c: u8) bool {
-        if (self.caret.hasSelection()) {
-            _ = self.deleteSelection();
-        }
+        // One step per run of typing: the first keystroke of a word captures the text it is about to change.
+        self.capture(true);
+        if (self.caret.hasSelection()) _ = self.deleteSelectionQuietly();
+        const inserted = self.insertByteQuietly(c);
+        // A space or a new line ends the run, so the next word is a step of its own.
+        if (inserted and (c == ' ' or c == '\n')) self.run_open = false;
+        return inserted;
+    }
+
+    // The insert itself, with no history and no selection: what a run of bytes does byte by byte.
+    fn insertByteQuietly(self: *Editor, c: u8) bool {
         // A field with an allocator has no length limit: it asks for more room instead of refusing the keystroke.
         if (!self.reserve(self.len + 1)) return false;
 
@@ -179,12 +334,14 @@ pub const Editor = struct {
 
     // Insert a run of bytes. `s` must not be a slice of this editor's own buffer: growth can move it mid-run.
     pub fn insertSlice(self: *Editor, s: []const u8) usize {
-        if (self.caret.hasSelection()) _ = self.deleteSelection();
+        // A paste is one step however long it is, and it closes the run the caret was in.
+        self.capture(false);
+        if (self.caret.hasSelection()) _ = self.deleteSelectionQuietly();
         // One growth for the whole run, so a pasted megabyte is copied in a handful of steps and not one byte at a time.
         _ = self.reserve(self.len + s.len);
         var written: usize = 0;
         for (s) |c| {
-            if (!self.insertByte(c)) break;
+            if (!self.insertByteQuietly(c)) break;
             written += 1;
         }
         return written;
@@ -192,6 +349,13 @@ pub const Editor = struct {
 
     // Delete the selection, if any. Returns true if something was removed.
     pub fn deleteSelection(self: *Editor) bool {
+        if (!self.caret.hasSelection()) return false;
+        self.capture(false);
+        return self.deleteSelectionQuietly();
+    }
+
+    // The deletion itself, for an edit that already captured its step.
+    fn deleteSelectionQuietly(self: *Editor) bool {
         const sel = self.caret.selection() orelse return false;
         if (sel.start == sel.end) return false;
         self.splice(sel.start, sel.end - sel.start);
@@ -202,7 +366,12 @@ pub const Editor = struct {
 
     // Delete the byte before the caret (Backspace).
     pub fn backspace(self: *Editor) void {
-        if (self.deleteSelection()) return;
+        // A held Backspace is one run, like typing: it costs one step until the caret moves or something else happens.
+        self.capture(true);
+        if (self.caret.hasSelection()) {
+            _ = self.deleteSelectionQuietly();
+            return;
+        }
         if (self.caret.offset == 0) return;
         // A whole codepoint, not a byte: deleting half of `\xc3\xa9` would leave invalid UTF-8 on screen.
         const start = prevCodepoint(self.text(), self.caret.offset);
@@ -212,14 +381,19 @@ pub const Editor = struct {
 
     // Delete the byte at the caret (Delete).
     pub fn deleteForward(self: *Editor) void {
-        if (self.deleteSelection()) return;
+        self.capture(true);
+        if (self.caret.hasSelection()) {
+            _ = self.deleteSelectionQuietly();
+            return;
+        }
         if (self.caret.offset >= self.len) return;
         self.splice(self.caret.offset, codepointLen(self.text(), self.caret.offset));
     }
 
     // Delete the word before the caret: Ctrl/Cmd+Backspace, which is the keyboard equivalent of dragging over a word and deleting it.
     pub fn deleteWordLeft(self: *Editor) void {
-        if (self.deleteSelection()) return;
+        self.capture(false);
+        if (self.deleteSelectionQuietly()) return;
         const from = self.caret.offset;
         self.moveWordLeft(false);
         const to = self.caret.offset;
@@ -228,7 +402,8 @@ pub const Editor = struct {
 
     // Delete the word after the caret: Ctrl/Cmd+Delete.
     pub fn deleteWordRight(self: *Editor) void {
-        if (self.deleteSelection()) return;
+        self.capture(false);
+        if (self.deleteSelectionQuietly()) return;
         const from = self.caret.offset;
         self.moveWordRight(false);
         const to = self.caret.offset;
@@ -256,7 +431,8 @@ pub const Editor = struct {
 
     // Delete the selection, or delete the whole line the caret is on when nothing is selected.
     pub fn deleteLine(self: *Editor) void {
-        if (self.deleteSelection()) return;
+        self.capture(false);
+        if (self.deleteSelectionQuietly()) return;
         const start = findLineStart(self.buf, 0, self.len, self.caret.offset);
         var end = findLineEnd(self.buf, 0, self.len, self.caret.offset);
         // Swallow the trailing newline so a second Ctrl-K is not a no-op.
@@ -371,6 +547,8 @@ pub const Editor = struct {
             self.caret.clearSelection();
         }
         self.caret.offset = clamped;
+        // A caret that moved is not a run of typing any more, so the next keystroke starts a new undo step.
+        self.run_open = false;
         // EVERY caret move restarts the solid half of the blink, arrows included: a caret that lands mid-blink is a caret that vanishes as you move it.
         self.idle = 0;
     }
@@ -441,6 +619,11 @@ pub const Editor = struct {
     }
 
     pub fn clear(self: *Editor) void {
+        if (self.len == 0) {
+            self.caret = .{};
+            return;
+        }
+        self.capture(false);
         self.len = 0;
         self.caret = .{};
     }
@@ -639,28 +822,29 @@ pub fn handleText(editor: *Editor, text: []const u8) Action {
     return .edited;
 }
 
-// Raw evdev key codes, matching glinlandui's `input` module so a key handler can be shared between the single-line and multi-line fields.
-pub const KEY_TAB: u32 = 15;
-pub const KEY_BACKSPACE: u32 = 14;
-pub const KEY_ENTER: u32 = 28;
-pub const KEY_A: u32 = 30;
-pub const KEY_LEFTSHIFT: u32 = 42;
-pub const KEY_LEFTCTRL: u32 = 29;
-pub const KEY_LEFT: u32 = 105;
-pub const KEY_RIGHT: u32 = 106;
-pub const KEY_UP: u32 = 103;
-pub const KEY_DOWN: u32 = 108;
-pub const KEY_HOME: u32 = 102;
-pub const KEY_END: u32 = 107;
-pub const KEY_DELETE: u32 = 111;
-pub const KEY_X: u32 = 45;
-pub const KEY_C: u32 = 46;
-pub const KEY_V: u32 = 47;
-pub const KEY_K: u32 = 37;
-// Ctrl+O.
-pub const KEY_O: u32 = 24;
-// Escape, evdev code 1.
-pub const KEY_ESCAPE: u32 = 1;
+// The keys this model names, from the one table in `keyboard_constant.zig`: no code is spelled twice in the engine.
+pub const KEY_TAB: u32 = keyboard.KEY_TAB;
+pub const KEY_BACKSPACE: u32 = keyboard.KEY_BACKSPACE;
+pub const KEY_ENTER: u32 = keyboard.KEY_ENTER;
+pub const KEY_A: u32 = keyboard.KEY_A;
+pub const KEY_LEFTSHIFT: u32 = keyboard.KEY_LEFTSHIFT;
+pub const KEY_RIGHTSHIFT: u32 = keyboard.Key.right_shift.code();
+pub const KEY_LEFTCTRL: u32 = keyboard.KEY_LEFTCTRL;
+pub const KEY_LEFT: u32 = keyboard.KEY_LEFT;
+pub const KEY_RIGHT: u32 = keyboard.KEY_RIGHT;
+pub const KEY_UP: u32 = keyboard.KEY_UP;
+pub const KEY_DOWN: u32 = keyboard.KEY_DOWN;
+pub const KEY_HOME: u32 = keyboard.KEY_HOME;
+pub const KEY_END: u32 = keyboard.KEY_END;
+pub const KEY_DELETE: u32 = keyboard.KEY_DELETE;
+pub const KEY_X: u32 = keyboard.KEY_X;
+pub const KEY_C: u32 = keyboard.KEY_C;
+pub const KEY_V: u32 = keyboard.KEY_V;
+pub const KEY_Y: u32 = keyboard.KEY_Y;
+pub const KEY_Z: u32 = keyboard.KEY_Z;
+pub const KEY_K: u32 = keyboard.KEY_K;
+pub const KEY_O: u32 = keyboard.KEY_O;
+pub const KEY_ESCAPE: u32 = keyboard.KEY_ESCAPE;
 
 // Map a keycode to a printable ASCII byte (US layout), or null.
 pub fn keyChar(keycode: u32, shift: bool) ?u8 {
@@ -1410,4 +1594,131 @@ test "ctrl+arrow, ctrl+end and ctrl+backspace reach a word, not a byte" {
     _ = handleKey(&e, KEY_BACKSPACE, false, true);
     try testing.expectEqualStrings("one two\nthree ", e.text());
     try testing.expectEqual(@as(usize, 14), e.caret.offset);
+}
+
+// ---- undo and redo: a word is one step, and a run ends at a space, a newline, or a caret that moved ----
+
+// An editor that can remember: it needs an allocator, because a step is a copy of the text it replaced.
+fn undoEditor(buf: []u8) Editor {
+    return Editor.initWithRoom(buf, testing.allocator);
+}
+
+test "a run of typing is one step, and undo takes the whole word back" {
+    var buf: [64]u8 = undefined;
+    var e = undoEditor(&buf);
+    defer e.deinit();
+
+    _ = e.insertSlice("hello");
+    // The caret moved between runs, so the next word is a step of its own.
+    e.setCaret(e.len, false);
+    _ = e.insertSlice(" world");
+    try testing.expectEqualStrings("hello world", e.text());
+
+    try testing.expect(e.canUndo());
+    try testing.expect(e.undo());
+    try testing.expectEqualStrings("hello", e.text());
+    try testing.expect(e.undo());
+    try testing.expectEqualStrings("", e.text());
+    try testing.expect(!e.canUndo());
+    try testing.expect(!e.undo());
+}
+
+test "typing byte by byte is one step until a space, and then the next word is its own" {
+    var buf: [64]u8 = undefined;
+    var e = undoEditor(&buf);
+    defer e.deinit();
+
+    for ("ab") |c| _ = e.insertByte(c);
+    _ = e.insertByte(' ');
+    for ("cd") |c| _ = e.insertByte(c);
+    try testing.expectEqualStrings("ab cd", e.text());
+
+    // A step holds the text as it was BEFORE the run, so the first undo drops the word and keeps the space it followed.
+    try testing.expect(e.undo());
+    try testing.expectEqualStrings("ab ", e.text());
+    try testing.expect(e.undo());
+    try testing.expectEqualStrings("", e.text());
+}
+
+test "redo puts back what undo took, and a fresh edit drops the steps ahead" {
+    var buf: [64]u8 = undefined;
+    var e = undoEditor(&buf);
+    defer e.deinit();
+
+    _ = e.insertSlice("one");
+    e.setCaret(e.len, false);
+    _ = e.insertSlice(" two");
+    try testing.expect(e.undo());
+    try testing.expectEqualStrings("one", e.text());
+    try testing.expect(e.canRedo());
+    try testing.expect(e.redo());
+    try testing.expectEqualStrings("one two", e.text());
+    try testing.expect(!e.canRedo());
+
+    // Undo again, then type: the future that was undone is gone.
+    try testing.expect(e.undo());
+    _ = e.insertSlice("!");
+    try testing.expectEqualStrings("one!", e.text());
+    try testing.expect(!e.canRedo());
+}
+
+test "undo puts the caret back where the edit happened" {
+    var buf: [64]u8 = undefined;
+    var e = undoEditor(&buf);
+    defer e.deinit();
+
+    _ = e.insertSlice("abcdef");
+    e.setCaret(3, false);
+    _ = e.insertSlice("XY");
+    try testing.expectEqualStrings("abcXYdef", e.text());
+    try testing.expect(e.undo());
+    try testing.expectEqualStrings("abcdef", e.text());
+    try testing.expectEqual(@as(usize, 3), e.caret.offset);
+}
+
+test "a paste is one step however long it is, and a selection delete is one too" {
+    var buf: [4]u8 = undefined;
+    var e = undoEditor(&buf);
+    defer e.deinit();
+
+    _ = e.insertSlice("start ");
+    _ = e.insertSlice("a whole pasted run");
+    try testing.expectEqualStrings("start a whole pasted run", e.text());
+    try testing.expect(e.undo());
+    try testing.expectEqualStrings("start ", e.text());
+
+    // A selection deleted as one gesture comes back as one step, with the selection it was.
+    e.selectAll();
+    try testing.expect(e.deleteSelection());
+    try testing.expectEqualStrings("", e.text());
+    try testing.expect(e.undo());
+    try testing.expectEqualStrings("start ", e.text());
+}
+
+test "an editor with no allocator has no history, and undo is a no-op rather than a crash" {
+    var buf: [16]u8 = undefined;
+    var e = Editor.init(&buf);
+    _ = e.insertSlice("abc");
+    try testing.expect(!e.canUndo());
+    try testing.expect(!e.undo());
+    try testing.expect(!e.redo());
+    try testing.expectEqualStrings("abc", e.text());
+}
+
+test "the history stops at its step cap and keeps the newest steps" {
+    var buf: [64]u8 = undefined;
+    var e = undoEditor(&buf);
+    defer e.deinit();
+
+    // Every byte is its own run because each one moves the caret back to the end first.
+    var i: usize = 0;
+    while (i < history_steps + 10) : (i += 1) {
+        e.setCaret(e.len, false);
+        _ = e.insertByte('a');
+    }
+    try testing.expectEqual(@as(usize, history_steps), e.hist.undo.items.len);
+    // The newest step is still the one the last keystroke took, so undo works from the end of the buffer.
+    try testing.expectEqual(@as(usize, history_steps + 10), e.text().len);
+    try testing.expect(e.undo());
+    try testing.expectEqual(@as(usize, history_steps + 9), e.text().len);
 }

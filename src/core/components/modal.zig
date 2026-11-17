@@ -120,6 +120,8 @@ pub fn modal(p: Props) void {
         .corner_radius = p.radius.resolve(m.corner(.lg)).clay(),
         .border = .{ .color = p.border.toClay(), .width = .outside(m.hairline.whole()) },
     })({
+        // The card is a surface above the scrim: a click inside it is the card's, and nothing it dims answers through it.
+        registry.occludeFillZ(p.id.clay(), p.bg, z_index + 1);
         if (p.title.len > 0) cl.text(p.title, .{ .font_size = p.title_size, .color = p.title_fg.toClay() });
         if (p.message.len > 0) cl.text(p.message, .{ .font_size = p.message_size, .color = p.fg.toClay(), .wrap_mode = .words });
         actionRow(p);

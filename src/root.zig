@@ -37,6 +37,9 @@ pub const devtools = @import("core/devtools/root.zig");
 // The text model every field uses: buffer, caret, selection, and every edit and movement. A single-line field is this with the newline ignored.
 pub const text_editor = @import("core/text_editor.zig");
 
+// Every key the engine names, in one enum: the evdev code a backend reports IS its tag.
+pub const keyboard = @import("core/keyboard_constant.zig");
+
 // Table virtualisation: which rows and columns to draw, given a scroll position.
 pub const table = @import("core/table.zig");
 
@@ -199,6 +202,8 @@ test {
 
     // What a field does with the row it sits in: the weight tests, kept beside the component rather than inside it.
     _ = @import("core/components/input_weight_test.zig");
+    _ = @import("core/components/input_draft.zig");
+    _ = @import("core/keyboard_constant.zig");
     // The tab order every focusable component shares.
     _ = @import("core/zoom.zig");
 }

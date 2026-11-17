@@ -53,6 +53,8 @@ pub fn button(p: ButtonProps) void {
             .color = fg.toClay(),
         });
     });
+    // A button paints a surface of its own, so a click on it never reaches what the surface hides; a disabled one is a wall, not a window.
+    registry.occludeFill(p.id.clay(), if (p.disabled) p.disabled_bg else p.bg);
     // Semantics: registered for EVERY button, not only the ones with a click callback.
     semantics.registerAt(@src(), .{
         .declared = semantics.declaredAt(p.src),

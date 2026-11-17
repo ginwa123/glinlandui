@@ -186,6 +186,8 @@ pub fn declare() void {
         .corner_radius = .all(menu.radius.pts()),
         .border = .{ .color = menu.border.toClay(), .width = .outside(1) },
     })({
+        // The card is a surface: a click that misses every row is still the card's, never the widget it covers.
+        registry.occludeFillZ(.ID(menu_id), menu.bg, z_index);
         for (menu.items, 0..) |label, i| row(menu, label, i);
     });
 }

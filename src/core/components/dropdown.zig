@@ -162,6 +162,8 @@ pub fn dropdown(
                 .width = .outside(props.border_width.whole()),
             } else .{},
         })({
+            // The card floats above the page and paints its own fill, so a click on it is the card's, never the widget it covers.
+            registry.occludeFillZ(.ID(props.overlay_id), props.overlay_bg, props.z_index);
             dropdownInner(props, rows, item_ctx, renderItem);
         });
         return;

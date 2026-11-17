@@ -350,6 +350,8 @@ pub fn scroll(props: ScrollProps, ctx: anytype, comptime children: fn (@TypeOf(c
     })({
         // Clip ancestry for the semantics layer: every node registered inside this container records it, so resolve() can compute what is actually visible and.
         semantics.pushAncestor(props.id.clay(), true);
+        // A filled viewport is its own surface: a click on the container is the container's, never a widget the fill hides.
+        if (props.bg) |b| click_registry.occludeFill(props.id.clay(), b);
         // A target inside a scroll container answers only inside it (a row scrolled under the footer must not swallow the footer's click); by ID, resolved in the frame the click lands in, because this box is not known until its own layout closes.
         click_registry.pushClip(props.id.clay());
         children(ctx);

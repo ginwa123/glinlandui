@@ -180,6 +180,8 @@ fn listVertical(
         for (items, 0..) |item, i| {
             const is_sel: bool = if (props.selected) |sel| sel == i else false;
             const base_bg: Color = if (props.disabled) props.disabled_bg else if (is_sel) props.selected_bg else props.row_bg;
+            // A row paints its own fill, so it claims the area before its own target: a click on the row is the row's, never the widget the row covers.
+            registry.occludeFillZ(rowId(props.id.str(), i), base_bg, props.click_z);
             // Registered BEFORE the row: a later entry wins the hit test, so a button declared inside the row beats the row.
             registerCell(props, i);
             // A draggable row offers itself to the reorder module, which owns the press/move/release dance.

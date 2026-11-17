@@ -366,7 +366,7 @@ fn fieldRowChildren(scope: *Scope) void {
         .direction = .row,
     }, scope, fieldChildren);
     text_mod.label(.{
-        .label = .{ .text = "type, select, copy — the field owns the caret and reports every edit", .size = t.type_scale.caption, .color = t.colors.text_done },
+        .label = .{ .text = "type, select, copy, undo — the field owns the caret, the history and every edit it reports", .size = t.type_scale.caption, .color = t.colors.text_done },
     });
 }
 

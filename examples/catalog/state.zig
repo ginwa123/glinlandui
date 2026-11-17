@@ -133,7 +133,7 @@ pub const Section = struct {
 // The page, in the order it draws: the executable form of the UI kit document.
 pub const sections = [_]Section{
     .{ .id = "catalog.buttons.section", .title = "Buttons", .note = "one primary per view, everything else quiet", .body = .buttons },
-    .{ .id = "catalog.field.section", .title = "Text field", .note = "value in, on_change out; the engine types into it", .body = .text_field },
+    .{ .id = "catalog.field.section", .title = "Text field", .note = "value in, on_change out; Cmd/Ctrl+Z takes an edit back, and a right click offers Undo and Redo", .body = .text_field },
     .{ .id = "catalog.selection.section", .title = "Selection controls", .note = "a checked box is primary, and never colour alone", .body = .selection },
     .{ .id = "catalog.roles.section", .title = "Colour roles", .note = "theme.dragon.colors — eleven roles, no hex", .body = .roles },
     .{ .id = "catalog.type.section", .title = "Type scale", .note = "title 18 / body 14 / label 13 / caption 12", .body = .type_scale },

@@ -6,16 +6,16 @@ const frame_mod = @import("frame.zig");
 const theme_mod = @import("theme.zig");
 const dispatch = @import("component.zig").dispatch;
 
-/// Escape under the xkb/Wayland evdev numbering, which every backend this engine runs on reports.
-const key_escape: u32 = 1;
-/// Tab, in the same numbering: the key that walks the focusable components.
-const key_tab: u32 = 15;
-/// `0`, `-` and `=` plus the keypad pair, in the same numbering: the five keys a browser zooms with.
-const key_0: u32 = 11;
-const key_minus: u32 = 12;
-const key_equal: u32 = 13;
-const key_kp_minus: u32 = 74;
-const key_kp_plus: u32 = 78;
+const keyboard = @import("keyboard_constant.zig");
+
+/// The keys the Host itself acts on, from the one table: Escape, Tab, and the five a browser zooms with.
+const key_escape: u32 = keyboard.KEY_ESCAPE;
+const key_tab: u32 = keyboard.KEY_TAB;
+const key_0: u32 = keyboard.KEY_ZERO;
+const key_minus: u32 = keyboard.KEY_MINUS;
+const key_equal: u32 = keyboard.KEY_EQUAL;
+const key_kp_minus: u32 = keyboard.KEY_KP_MINUS;
+const key_kp_plus: u32 = keyboard.KEY_KP_PLUS;
 const zoom_mod = @import("zoom.zig");
 const focus_mod = @import("component.zig").focus;
 const registry = @import("component.zig").click_registry;

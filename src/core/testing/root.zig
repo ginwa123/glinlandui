@@ -122,8 +122,8 @@ pub const Driver = struct {
         self.frame();
     }
 
-    // Ctrl on the evdev numbering every backend reports; Cmd arrives as 125, which the mods latch treats the same.
-    const key_ctrl: u32 = 29;
+    // Ctrl, and the Shift a shifted byte needs, from the engine's one keyboard table.
+    const key_ctrl: u32 = @import("../keyboard_constant.zig").KEY_LEFTCTRL;
 
     /// Render one frame through the normal Host/Clay frame path.
     pub fn frame(self: *Driver) void {
@@ -571,7 +571,7 @@ fn scrollAncestor(n: semantics.Node) ?semantics.Node {
 pub const RootFn = host_mod.RootFn;
 
 // evdev KEY_LEFTSHIFT, the modifier the keycode route has to hold for an uppercase or shifted byte.
-pub const key_shift: u32 = 42;
+pub const key_shift: u32 = @import("../keyboard_constant.zig").KEY_LEFTSHIFT;
 
 // The key a printable ASCII byte is typed with, and whether Shift is part of the gesture.
 
