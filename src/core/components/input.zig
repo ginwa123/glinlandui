@@ -397,6 +397,8 @@ pub const Field = struct {
     click_z: i16 = 0,
     // Measures a run with the font that draws the field. The engine's text backend is that font.
     measure: *const fn ([]const u8, u16) f32 = text_backend.runWidth,
+    // Where the text grows past its inline buffer. Null uses the allocator the app installed with `setTextAllocator`.
+    alloc: ?std.mem.Allocator = null,
     // Copy, cut and paste: the system clipboard unless a caller (or a test) hands in its own.
     clipboard: Clipboard = .{},
     // The rows this field ADDS after its own four, and the card's look; `on_select` is called with the app's own index.
@@ -429,15 +431,27 @@ pub const Field = struct {
 
     // Point the editor at this field's own buffer, once, after the Field is where it will stay.
     pub fn bind(self: *Field) void {
-        self.bindTo(&self.buf);
+        if (self.bound) return;
+        // The inline buffer is only the start: with an allocator the text grows past it, so a field has no length limit.
+        self.editor = if (self.alloc orelse text_alloc) |a|
+            text_editor.Editor.initWithRoom(&self.buf, a)
+        else
+            text_editor.Editor.init(&self.buf);
+        self.revealed_caret = null;
+        self.bound = true;
     }
 
-    // Same, for an app that owns a bigger buffer than a single-line field needs.
+    // Same, for an app that hands in storage it OWNS and sizes: that slice stays the text, and nothing grows past it.
     pub fn bindTo(self: *Field, buf: []u8) void {
         if (self.bound) return;
         self.editor = text_editor.Editor.init(buf);
         self.revealed_caret = null;
         self.bound = true;
+    }
+
+    // Free the text this field grew past its inline buffer. Call it once, when the app goes away.
+    pub fn deinit(self: *Field) void {
+        self.editor.deinit();
     }
 
     // Point a READ-ONLY field at text the app owns: the same bytes, no copy, and no `bindTo` length limit.
@@ -450,6 +464,8 @@ pub const Field = struct {
         }
         // Re-init only when the model handed over a different run, so the caret and the selection survive a redraw.
         if (!self.bound or self.editor.buf.ptr != bytes.ptr or self.editor.buf.len != bytes.len) {
+            // The run this field grew itself belongs to the field, so it goes before the new one takes over.
+            self.editor.deinit();
             self.editor = text_editor.Editor.init(bytes);
             self.revealed_caret = null;
             self.bound = true;
@@ -521,17 +537,24 @@ pub const Field = struct {
         if (self.on_change.f) |f| f(self.on_change.ctx, self.editor.text());
     }
 
-    // Copy the declared value, so a change next frame is detectable and a truncation is not a change every frame.
+    // The head and the tail of the declared value: enough to notice the model editing a run too long to copy whole.
     fn rememberDeclared(self: *Field, value: []const u8) void {
-        self.declared_len = @min(value.len, self.declared.len);
-        @memcpy(self.declared[0..self.declared_len], value[0..self.declared_len]);
+        const half = self.declared.len / 2;
+        const head = @min(value.len, half);
+        @memcpy(self.declared[0..head], value[0..head]);
+        const tail = @min(value.len, half);
+        @memcpy(self.declared[half..][0..tail], value[value.len - tail ..]);
+        self.declared_len = value.len;
     }
 
     // True when `value` is the value this field already declared.
     fn declaredIs(self: *const Field, value: []const u8) bool {
-        const n = @min(value.len, self.declared.len);
-        if (n != self.declared_len) return false;
-        return std.mem.eql(u8, value[0..n], self.declared[0..n]);
+        if (value.len != self.declared_len) return false;
+        const half = self.declared.len / 2;
+        const head = @min(value.len, half);
+        if (!std.mem.eql(u8, self.declared[0..head], value[0..head])) return false;
+        const tail = @min(value.len, half);
+        return std.mem.eql(u8, self.declared[half..][0..tail], value[value.len - tail ..]);
     }
 
     // Remember the id as text, so a click that runs after the frame still knows the field's name.
@@ -549,11 +572,14 @@ pub const ChangeFn = ?*const fn (?*anyopaque, []const u8) void;
 // A field asks whether Enter was taken: `(ctx, draft)`, true = taken, and then the field clears.
 pub const SubmitFn = ?*const fn (?*anyopaque, []const u8) bool;
 
-// How much draft a field owns. An app that needs more binds a bigger buffer with `bindTo`.
+// The text a field holds before it asks its allocator for room. Not a limit: past this the text simply grows.
 pub const max_field_len: usize = 256;
 
-// The most a single paste can carry: the clipboard is read into one stack buffer, and a longer run is truncated.
+// The first read of a paste. With an allocator the run is read again with more room, so this is a starting size.
 pub const paste_max: usize = 64 * 1024;
+
+// The most one paste may grow to. A clipboard is not a file, and an unbounded copy is an unbounded allocation.
+pub const paste_ceiling: usize = 64 * 1024 * 1024;
 
 // Where a field's copy, cut and paste go: the system clipboard by default, a scripted one in a test.
 pub const Clipboard = struct {
@@ -593,6 +619,14 @@ const menu_readonly_disabled = [_]bool{ true, false, true, false };
 // The field that owns the keyboard this frame: the engine types into it, so the app never routes a key.
 var active: ?*Field = null;
 
+// Where a field's text grows once it passes the inline buffer: `Host.init` installs the app's own allocator here.
+var text_alloc: ?std.mem.Allocator = null;
+
+/// Install the allocator every field grows with; null takes the room away again, which is what a component test wants.
+pub fn setTextAllocator(alloc: ?std.mem.Allocator) void {
+    text_alloc = alloc;
+}
+
 // Forget last frame's field: a field that stops being declared must not keep the keyboard.
 pub fn beginFrame() void {
     active = null;
@@ -604,12 +638,9 @@ pub fn dispatchText(text: []const u8) bool {
     // A read-only field never takes a composed run: the pasteboard cannot type into a response body.
     if (field.readonly) return false;
     if (text.len == 0) return false;
-    var before: [max_field_len]u8 = undefined;
-    const before_len = field.editor.len;
-    const n = @min(before_len, before.len);
-    @memcpy(before[0..n], field.editor.text()[0..n]);
+    const before = snapshot(field.editor.text());
     if (text_editor.handleText(&field.editor, text) == .ignored) return false;
-    if (changed(before[0..n], before_len, field.editor.text())) field.report();
+    if (changed(before, field.editor.text())) field.report();
     return true;
 }
 
@@ -642,21 +673,28 @@ pub fn dispatchKey(mods: Mods, keycode: u32) bool {
             else => {},
         }
     }
-    var before: [max_field_len]u8 = undefined;
-    const before_len = field.editor.len;
-    const n = @min(before_len, before.len);
-    @memcpy(before[0..n], field.editor.text()[0..n]);
+    const before = snapshot(field.editor.text());
     // A read-only field follows the caret and the selection; anything else would be an edit, so it is absorbed.
     if (field.readonly and !isNavigation(keycode, mods.shortcut())) return true;
     if (text_editor.handleKey(&field.editor, keycode, mods.shift, mods.shortcut()) == .ignored) return false;
-    if (changed(before[0..n], before_len, field.editor.text())) field.report();
+    if (changed(before, field.editor.text())) field.report();
     return true;
 }
 
+// What the text was before a key: its length and a hash of every byte, so an edit anywhere is noticed and no copy is kept.
+const Snapshot = struct {
+    len: usize,
+    hash: u64,
+};
+
+fn snapshot(text: []const u8) Snapshot {
+    return .{ .len = text.len, .hash = std.hash.Wyhash.hash(0, text) };
+}
+
 // True when the text differs from the snapshot taken before the key: an arrow moves the caret, not the text.
-fn changed(before: []const u8, before_len: usize, after: []const u8) bool {
-    if (after.len != before_len) return true;
-    return !std.mem.eql(u8, before, after[0..before.len]);
+fn changed(before: Snapshot, after: []const u8) bool {
+    if (after.len != before.len) return true;
+    return std.hash.Wyhash.hash(0, after) != before.hash;
 }
 
 // The only keys a read-only field acts on: they move the caret and grow the selection, and change no byte.
@@ -686,9 +724,38 @@ pub fn cutSelection(field: *Field) bool {
 
 // Paste: one run from the clipboard, replacing a selection, reported as one edit.
 pub fn pasteClipboard(field: *Field) bool {
-    var buf: [paste_max]u8 = undefined;
-    const text = field.clipboard.read(&buf);
-    if (text.len == 0) return false;
+    // With an allocator, a clipboard that fills the buffer is read again with twice the room: a paste is not capped either.
+    const alloc = text_alloc orelse {
+        var stack: [paste_max]u8 = undefined;
+        const text = field.clipboard.read(&stack);
+        return text.len > 0 and pasteInto(field, text);
+    };
+    var cap: usize = paste_max;
+    while (true) {
+        const buf = alloc.alloc(u8, cap) catch break;
+        const text = field.clipboard.read(buf);
+        if (text.len == 0) {
+            alloc.free(buf);
+            return false;
+        }
+        // Short of the room it was given means the whole pasteboard is here, so it goes in and the buffer goes back.
+        if (text.len < cap or cap >= paste_ceiling) {
+            const took = pasteInto(field, text);
+            alloc.free(buf);
+            return took;
+        }
+        // Still full: there may be more, so ask for twice the room and drop this copy.
+        alloc.free(buf);
+        cap *= 2;
+    }
+    // Out of memory: fall back to the stack buffer, which is what a paste is worth when nothing can grow.
+    var stack: [paste_max]u8 = undefined;
+    const text = field.clipboard.read(&stack);
+    return text.len > 0 and pasteInto(field, text);
+}
+
+// Put a run from the pasteboard into the field, and report it when a byte landed.
+fn pasteInto(field: *Field, text: []const u8) bool {
     if (text_editor.handleText(&field.editor, text) == .ignored) return false;
     field.report();
     return true;
@@ -2720,4 +2787,45 @@ test "a draft the model shortens in place cannot leave the caret past its end" {
     _ = cl.endLayout();
     try std.testing.expect(shrink_field.editor.caret.offset <= shrink_field.editor.len);
     try std.testing.expect((shrink_field.editor.caret.anchor orelse 0) <= shrink_field.editor.len);
+}
+
+// One field per test: `bind` happens once per Field, so a second test on the same struct would reuse the first's editor.
+var grow_field: Field = .{ .id = .{ .text = "test-grow-field" } };
+var capped_field: Field = .{ .id = .{ .text = "test-capped-field" } };
+
+test "a field has no length limit: it grows past its inline buffer and gives the run back" {
+    // The engine installs the app's allocator from `Host.init`; a component test does the same by hand.
+    setTextAllocator(std.testing.allocator);
+    defer setTextAllocator(null);
+    grow_field.bind();
+    defer grow_field.deinit();
+    var long: [5000]u8 = undefined;
+    @memset(&long, 'x');
+    grow_field.setText(&long);
+    try std.testing.expectEqual(@as(usize, 5000), grow_field.text().len);
+    // A keystroke at the end lands: the field asked for room instead of refusing the byte.
+    grow_field.editor.setCaret(5000, false);
+    try std.testing.expect(grow_field.editor.insertByte('y'));
+    try std.testing.expectEqual(@as(usize, 5001), grow_field.editor.len);
+    try std.testing.expectEqual(@as(u8, 'y'), grow_field.text()[5000]);
+}
+
+test "a field with no allocator keeps its inline buffer as the whole story" {
+    setTextAllocator(null);
+    capped_field.bind();
+    var long: [5000]u8 = undefined;
+    @memset(&long, 'x');
+    capped_field.setText(&long);
+    try std.testing.expectEqual(max_field_len, capped_field.text().len);
+}
+
+test "an edit past the inline length is still reported, because the snapshot covers every byte" {
+    var head: [600]u8 = undefined;
+    @memset(&head, 'a');
+    var edited = head;
+    // The same length, and the change sits past the 256 bytes a prefix compare would have looked at.
+    edited[550] = 'b';
+    const before = snapshot(&head);
+    try std.testing.expect(changed(before, &edited));
+    try std.testing.expect(!changed(before, &head));
 }
