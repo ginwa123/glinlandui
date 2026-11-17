@@ -31,6 +31,9 @@ pub const split = @import("components/split.zig");
 pub const modal = @import("components/modal.zig");
 pub const context_menu = @import("components/context_menu.zig");
 
+// The single-line draft layer under `input`: a caller's bytes, a caret, a selection, and what each key does.
+pub const input_draft = @import("components/input_draft.zig");
+
 // The per-frame plumbing a pointer event travels through.
 pub const click_registry = @import("components/click_registry.zig");
 pub const dispatch = @import("components/dispatch.zig");
@@ -47,6 +50,7 @@ test {
     _ = badge;
     _ = button;
     _ = input;
+    _ = input_draft;
     _ = checkbox;
     _ = radio;
     _ = toggle;

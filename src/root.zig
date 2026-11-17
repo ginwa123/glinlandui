@@ -202,7 +202,6 @@ test {
 
     // What a field does with the row it sits in: the weight tests, kept beside the component rather than inside it.
     _ = @import("core/components/input_weight_test.zig");
-    _ = @import("core/components/input_draft.zig");
     _ = @import("core/keyboard_constant.zig");
     // The tab order every focusable component shares.
     _ = @import("core/zoom.zig");
