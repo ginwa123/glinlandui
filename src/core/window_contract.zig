@@ -44,6 +44,39 @@ pub fn keyToClose(keycode: u32) bool {
     return keycode == 1 or keycode == 0xff1b;
 }
 
+// ============================== zoom ==============================
+
+// Zoom lays out in FEWER points and draws them at a LARGER device scale, so the surface keeps its pixel size and everything, text included, is genuinely drawn bigger instead of being resampled.
+pub const zoom_min: f32 = 0.5;
+pub const zoom_max: f32 = 3.0;
+
+// Clamp a zoom factor into the browser range; a zero, negative or NaN value is 1.0, never a collapsed layout.
+pub fn clampZoom(zoom: f32) f32 {
+    if (!(zoom > 0)) return 1.0;
+    return std.math.clamp(zoom, zoom_min, zoom_max);
+}
+
+// The logical size to lay out at: the window's own space divided by the zoom.
+pub fn zoomLayout(w: u32, h: u32, zoom: f32) struct { w: u32, h: u32 } {
+    const z = clampZoom(zoom);
+    const fw = @as(f32, @floatFromInt(w)) / z;
+    const fh = @as(f32, @floatFromInt(h)) / z;
+    // One point is the floor: a zero would divide by zero inside Clay's sizing pass.
+    return .{ .w = @intFromFloat(@max(fw, 1.0)), .h = @intFromFloat(@max(fh, 1.0)) };
+}
+
+// A pointer point in the zoomed layout space: the same division the layout got, or every hit test sits a zoom factor away.
+pub fn zoomPoint(x: f32, y: f32, zoom: f32) struct { x: f32, y: f32 } {
+    const z = clampZoom(zoom);
+    return .{ .x = x / z, .y = y / z };
+}
+
+// The device scale a zoomed layout is drawn at: the display's density times the zoom.
+pub fn zoomScale(dpi: f32, zoom: f32) f32 {
+    const base: f32 = if (dpi > 0) dpi else 1.0;
+    return base * clampZoom(zoom);
+}
+
 // Legacy (layer-shell era): centred anchor = all four edges.
 pub fn centeredAnchor() u32 {
     return consts.LayerAnchor.top |
@@ -149,6 +182,8 @@ pub const WindowState = struct {
     needs_draw: bool = true,
     frame_pending: bool = false,
     last_shape: u32 = consts.CursorShape.default,
+    // Browser-style content zoom: the layout is laid out at win_w/zoom and drawn at dpi*zoom.
+    zoom: f32 = 1.0,
 
     pub fn init(config: WindowConfig) WindowState {
         return .{
@@ -444,4 +479,48 @@ test "cursor shape mapping matches protocol constants" {
     try std.testing.expectEqual(consts.CursorShape.pointer, @as(u32, 4));
     try std.testing.expectEqual(consts.CursorShape.text, @as(u32, 9));
     try std.testing.expectEqual(consts.CursorShape.ew_resize, @as(u32, 26));
+}
+
+test "clampZoom keeps a browser range and rejects a collapsed factor" {
+    try std.testing.expectEqual(@as(f32, 1.0), clampZoom(1.0));
+    try std.testing.expectEqual(zoom_min, clampZoom(0.1));
+    try std.testing.expectEqual(zoom_max, clampZoom(9.0));
+    // Zero, negative and NaN all mean "no zoom", never a zero-sized layout.
+    try std.testing.expectEqual(@as(f32, 1.0), clampZoom(0));
+    try std.testing.expectEqual(@as(f32, 1.0), clampZoom(-2));
+    try std.testing.expectEqual(@as(f32, 1.0), clampZoom(std.math.nan(f32)));
+}
+
+test "zoomLayout divides the window space by the zoom" {
+    const at100 = zoomLayout(1280, 840, 1.0);
+    try std.testing.expectEqual(@as(u32, 1280), at100.w);
+    try std.testing.expectEqual(@as(u32, 840), at100.h);
+    // 200%: half the points, so every box on screen is twice the size.
+    const at200 = zoomLayout(1280, 840, 2.0);
+    try std.testing.expectEqual(@as(u32, 640), at200.w);
+    try std.testing.expectEqual(@as(u32, 420), at200.h);
+    // 50%: twice the points.
+    const at50 = zoomLayout(1280, 840, 0.5);
+    try std.testing.expectEqual(@as(u32, 2560), at50.w);
+    try std.testing.expectEqual(@as(u32, 1680), at50.h);
+    // A window smaller than the zoomed point still lays out at one point rather than collapsing to zero.
+    const tiny = zoomLayout(1, 1, 3.0);
+    try std.testing.expectEqual(@as(u32, 1), tiny.w);
+    try std.testing.expectEqual(@as(u32, 1), tiny.h);
+}
+
+test "zoomPoint and zoomLayout agree, so a click in the window corner stays on the layout corner" {
+    for ([_]f32{ 0.5, 0.75, 1.0, 1.5, 2.0, 3.0 }) |z| {
+        const layout = zoomLayout(1280, 840, z);
+        const p = zoomPoint(1280, 840, z);
+        try std.testing.expectApproxEqAbs(@as(f32, @floatFromInt(layout.w)), p.x, 1.0);
+        try std.testing.expectApproxEqAbs(@as(f32, @floatFromInt(layout.h)), p.y, 1.0);
+    }
+}
+
+test "zoomScale multiplies the display density by the zoom" {
+    try std.testing.expectApproxEqAbs(@as(f32, 1.25), zoomScale(1.25, 1.0), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.875), zoomScale(1.25, 1.5), 0.0001);
+    // An unreported density is 1.0, so zoom still works on a backend that never measured one.
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), zoomScale(0, 2.0), 0.0001);
 }

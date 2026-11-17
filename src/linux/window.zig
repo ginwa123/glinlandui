@@ -344,8 +344,8 @@ fn pointerEnter(data: ?*anyopaque, pointer: ?*c.struct_wl_pointer, serial: u32, 
     const nx = fixedToFloat(sx);
     const ny = fixedToFloat(sy);
     if (pointerPosChanged(win.pointer_x, win.pointer_y, nx, ny)) win.needs_draw = true;
-    win.pointer_x = nx;
-    win.pointer_y = ny;
+    win.pointer_x = win.zoomedPoint(nx);
+    win.pointer_y = win.zoomedPoint(ny);
     if (win.delegate) |d| d.on_pointer(d.ptr, win.pointer_x, win.pointer_y, win.pointer_down, 0);
 }
 
@@ -363,8 +363,9 @@ fn pointerMotion(data: ?*anyopaque, pointer: ?*c.struct_wl_pointer, time: u32, s
     const nx = fixedToFloat(sx);
     const ny = fixedToFloat(sy);
     if (pointerPosChanged(win.pointer_x, win.pointer_y, nx, ny)) win.needs_draw = true;
-    win.pointer_x = nx;
-    win.pointer_y = ny;
+    // The app lays out in win_w/zoom points, so the point crosses the same division the layout did.
+    win.pointer_x = win.zoomedPoint(nx);
+    win.pointer_y = win.zoomedPoint(ny);
     if (win.delegate) |d| d.on_pointer(d.ptr, win.pointer_x, win.pointer_y, win.pointer_down, 0);
 }
 
@@ -448,8 +449,8 @@ fn pointerWarp(data: ?*anyopaque, pointer: ?*c.struct_wl_pointer, sx: c.wl_fixed
     const nx = fixedToFloat(sx);
     const ny = fixedToFloat(sy);
     if (pointerPosChanged(win.pointer_x, win.pointer_y, nx, ny)) win.needs_draw = true;
-    win.pointer_x = nx;
-    win.pointer_y = ny;
+    win.pointer_x = win.zoomedPoint(nx);
+    win.pointer_y = win.zoomedPoint(ny);
     if (win.delegate) |d| d.on_pointer(d.ptr, win.pointer_x, win.pointer_y, win.pointer_down, 0);
 }
 
@@ -724,6 +725,8 @@ pub const Window = struct {
     /// The outputs this window is on and the scale they resolve to; `applied_scale` is the density already in force.
     watch: ui_scale.Watch = .{},
     applied_scale: f32 = 0,
+    // Browser-style content zoom on top of the display density: the layout is laid out in win_w/zoom points.
+    zoom: f32 = 1.0,
     /// The bound `wl_output` proxies, so a scale arrives only from outputs this window actually knows.
     output_objs: [ui_scale.max_outputs]?*c.struct_wl_output = [_]?*c.struct_wl_output{null} ** ui_scale.max_outputs,
     output_objs_len: usize = 0,
@@ -764,13 +767,29 @@ pub const Window = struct {
         return scale.pixelSize(self.win_w, self.win_h, self.watch.effective());
     }
 
+    /// A surface point in the zoomed layout space: the space the app lays out in, and the one its hit tests use.
+    fn zoomedPoint(self: *const Window, v: f32) f32 {
+        return v / contract.clampZoom(self.zoom);
+    }
+
+    /// Browser-style content zoom: the same window, laid out in fewer points and drawn at a bigger device scale.
+    pub fn setZoom(self: *Window, zoom: f32) void {
+        const next = contract.clampZoom(zoom);
+        if (next == self.zoom) return;
+        self.zoom = next;
+        // The display density did not change, so applyUiScale would early-return: the scale is set here instead, from the density in force.
+        soft.setRenderScale(contract.zoomScale(self.watch.effective(), next));
+        self.needs_draw = true;
+    }
+
     /// Adopt the display density: one value for every surface in this process, one for the compositor's bookkeeping, and a redraw at the new size.
     fn applyUiScale(self: *Window) void {
         const s = self.watch.effective();
         if (s == self.applied_scale) return;
         self.applied_scale = s;
         ui_scale.setApplied(s);
-        soft.setRenderScale(s);
+        // The zoom rides on top of the density: the same surface pixels, drawn bigger.
+        soft.setRenderScale(contract.zoomScale(s, self.zoom));
         // A buffer `s` times the surface size is only shown at the surface size when the scale says so; without this the window would grow `s` times.
         if (self.surface) |surface| {
             const rounded: i32 = @intFromFloat(@round(s));
@@ -993,8 +1012,9 @@ pub const Window = struct {
                         if (self.delegate) |d| d.on_resize(d.ptr, self.win_w, self.win_h);
                     }
                     c.glClear(c.GL_COLOR_BUFFER_BIT);
-                    // Drawing happens in the delegate; Window swaps after it returns.
-                    if (self.delegate) |d| d.on_frame(d.ptr, self.win_w, self.win_h);
+                    // Drawing happens in the delegate; Window swaps after it returns. Zoom lays out in fewer points, so the window's own size never changes.
+                    const layout = contract.zoomLayout(self.win_w, self.win_h, self.zoom);
+                    if (self.delegate) |d| d.on_frame(d.ptr, layout.w, layout.h);
                     // Per-frame cursor-shape apply (change-only): clayFrame resolved the contract Cursor -> shape AFTER endLayout into frame.currentShape().
                     if (self.shape_device) |dev| {
                         const shape = frame.currentShape();

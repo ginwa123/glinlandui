@@ -176,11 +176,13 @@ pub const Window = struct {
             c.glin_cocoa_quit(self.handle);
             return;
         }
-        const w = self.state.win_w;
-        const h = self.state.win_h;
+        // Zoom lays out in FEWER points and draws them bigger: the window's own size never changes.
+        const layout = contract.zoomLayout(self.state.win_w, self.state.win_h, self.state.zoom);
+        const w = layout.w;
+        const h = layout.h;
 
-        // Render at the display's backing scale, so text is rasterized at device resolution rather than upscaled.
-        if (self.handle) |win_handle| soft.setRenderScale(@floatCast(c.glin_cocoa_backing_scale(win_handle)));
+        // Render at the display's backing scale, so text is rasterized at device resolution rather than upscaled. The zoom rides on top of it, so a zoomed layout is drawn bigger instead of resampled.
+        if (self.handle) |win_handle| soft.setRenderScale(contract.zoomScale(@floatCast(c.glin_cocoa_backing_scale(win_handle)), self.state.zoom));
         // The components snap hairlines to this grid, so the caret lands on whole device pixels.
         frame_mod.setPixelScale(soft.renderScale());
 
@@ -262,6 +264,16 @@ pub const Window = struct {
         self.diff_prev_h = sf.height;
     }
 
+    // Browser-style content zoom: the same window, laid out in fewer points and drawn at a bigger device scale.
+    pub fn setZoom(self: *Window, zoom: f32) void {
+        const next = contract.clampZoom(zoom);
+        if (next == self.state.zoom) return;
+        self.state.zoom = next;
+        self.state.needs_draw = true;
+        // The backing scale is read every frame, so the next one already draws at backing*zoom; it only has to be asked to.
+        if (self.handle) |handle| c.glin_cocoa_invalidate(handle);
+    }
+
     // Apply the cursor shape the frame resolved, when it changed.
     fn applyCursor(self: *Window) void {
         if (self.handle == null) return;
@@ -321,16 +333,18 @@ pub const Window = struct {
         self.last_ptr_y = y;
         self.last_ptr_pressed = pressed_now;
         // The last layout's size, not the window's: a resize adopted but not yet drawn would shift every hit test.
-        const space = contract.pointerSpace(self.layout_w, self.layout_h, self.state.win_w, self.state.win_h);
+        const zoomed = contract.zoomLayout(self.state.win_w, self.state.win_h, self.state.zoom);
+        const space = contract.pointerSpace(self.layout_w, self.layout_h, zoomed.w, zoomed.h);
         const w = space.w;
         const h = space.h;
 
-        // Translate to the Delegate's contract: evdev button code on a transition, 0 on motion, and the y axis flipped.
+        // Translate to the Delegate's contract: evdev button code on a transition, 0 on motion, and the y axis flipped. The point crosses the same zoom division the layout did.
+        const zoom_factor = contract.clampZoom(self.state.zoom);
         const t = input_macos.translate(w, h, .{
             .kind = @intCast(kind),
             .button_number = button_number,
-            .x = @floatCast(x),
-            .y = @floatCast(y),
+            .x = @as(f32, @floatCast(x)) / zoom_factor,
+            .y = @as(f32, @floatCast(y)) / zoom_factor,
         }, self.left_held);
         if (t.pressed and kind == input_macos.DOWN) self.left_held = true;
         if (!t.pressed and kind == input_macos.UP) self.left_held = false;

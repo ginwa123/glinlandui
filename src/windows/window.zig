@@ -86,6 +86,8 @@ pub const Window = struct {
     left_held: bool = false,
     /// The cursor shape last handed to Win32, so a frame that did not change it costs nothing.
     last_shape: u32 = frame_mod.shape_sentinel,
+    /// The display's own density, recorded once: the zoom multiplies it, and dividing it back out is what a reset needs.
+    dpi: f32 = 1.0,
     /// Frames composited so far.
     diag_frames: u32 = 0,
 
@@ -153,9 +155,9 @@ pub const Window = struct {
         if (cw > 0 and ch > 0) _ = adapter.noteResize(&self.state, @intCast(cw), @intCast(ch));
 
         // The display's density, so the surface is rendered at device resolution instead of being upscaled by the compositor.
-        soft.setRenderScale(@floatCast(c.glin_win_scale(handle)));
+        self.dpi = @floatCast(c.glin_win_scale(handle));
         // The same density for the components, so a caret is one DEVICE pixel rather than one logical point (1.5 px at 150%).
-        frame_mod.setPixelScale(soft.renderScale());
+        self.applyScale();
 
         c.glin_win_window_set_callbacks(
             handle,
@@ -199,8 +201,10 @@ pub const Window = struct {
             onResized(self);
         }
         if (adapter.resolveQuit(&self.state)) return;
-        const w = self.state.win_w;
-        const h = self.state.win_h;
+        // Zoom lays out in FEWER points and draws them bigger: the window's own size never changes.
+        const layout = contract.zoomLayout(self.state.win_w, self.state.win_h, self.state.zoom);
+        const w = layout.w;
+        const h = layout.h;
 
         const d = self.delegate orelse return;
         d.on_frame(d.ptr, w, h);
@@ -251,6 +255,23 @@ pub const Window = struct {
         }
     }
 
+    /// Browser-style content zoom: the same window, laid out in fewer points and drawn at a bigger device scale.
+    pub fn setZoom(self: *Window, zoom: f32) void {
+        const next = contract.clampZoom(zoom);
+        if (next == self.state.zoom) return;
+        self.state.zoom = next;
+        self.applyScale();
+        self.state.needs_draw = true;
+        // The next frame lays out at win_w/zoom, and nothing paints until Win32 is told there is something to draw.
+        c.glin_win_invalidate(self.handle);
+    }
+
+    /// Push the device scale the renderer and the components must use: the display's density times the zoom.
+    fn applyScale(self: *Window) void {
+        soft.setRenderScale(contract.zoomScale(self.dpi, self.state.zoom));
+        frame_mod.setPixelScale(soft.renderScale());
+    }
+
     /// Apply a coalesced resize.
     fn onResized(_: *Window) void {}
 
@@ -266,17 +287,20 @@ pub const Window = struct {
         const self = ctx(p);
         const d = self.delegate orelse return;
         // The last layout's size, not the window's: a resize adopted but not yet drawn would shift every hit test.
-        const space = contract.pointerSpace(self.layout_w, self.layout_h, self.state.win_w, self.state.win_h);
+        const zoomed = contract.zoomLayout(self.state.win_w, self.state.win_h, self.state.zoom);
+        const space = contract.pointerSpace(self.layout_w, self.layout_h, zoomed.w, zoomed.h);
         const w = space.w;
         const h = space.h;
 
         // Translate to the Delegate's contract: evdev button code on a transition, 0 on motion, and NO y flip (Win32's client origin is already top-left).
         const kind_u8: u8 = if (kind >= 0 and kind <= 255) @intCast(kind) else 0;
+        // The click arrives in the window's own points; the layout is zoomed, so the point crosses the same division the layout did.
+        const zoom_factor = contract.clampZoom(self.state.zoom);
         const t = input_win.translate(w, h, .{
             .kind = kind_u8,
             .button_number = @intCast(button_number),
-            .x = @floatCast(x),
-            .y = @floatCast(y),
+            .x = @as(f32, @floatCast(x)) / zoom_factor,
+            .y = @as(f32, @floatCast(y)) / zoom_factor,
         }, self.left_held);
         if (t.pressed and kind_u8 == input_win.DOWN) self.left_held = true;
         if (!t.pressed and kind_u8 == input_win.UP) self.left_held = false;
