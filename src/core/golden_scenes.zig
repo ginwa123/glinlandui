@@ -56,6 +56,18 @@ pub fn textCmd(x: f32, y: f32, rw: f32, rh: f32, s: [:0]const u8, size: u16, col
     };
 }
 
+/// A border whose sides differ: Clay's model is four widths, and a backend that draws one of them turns a left bar into a ring.
+pub fn sideBorder(x: f32, y: f32, rw: f32, rh: f32, width: cl.BorderWidth, color: [4]f32) cl.RenderCommand {
+    return .{
+        .bounding_box = .{ .x = x, .y = y, .width = rw, .height = rh },
+        .render_data = .{ .border = .{ .color = color, .corner_radius = .{}, .width = width } },
+        .user_data = null,
+        .id = 0,
+        .z_index = 0,
+        .command_type = .border,
+    };
+}
+
 /// The colour every scene is cleared to. Shared so the CPU hash and the GPU comparison start from the same pixels.
 pub const clear: [4]f32 = .{ 18, 18, 22, 255 };
 
@@ -89,10 +101,22 @@ pub const composite = [_]cl.RenderCommand{
     rect(110, 44, 84, 40, .{ 60, 60, 70, 128 }),
 };
 
+/// The selected row of a tree: a fill with a 2 pt bar down its left side, on each of three rows.
+pub const side_bar = [_]cl.RenderCommand{
+    rect(0, 0, 200, 120, .{ 20, 20, 24, 255 }),
+    roundRect(8, 14, 184, 28, 4, .{ 34, 50, 73, 255 }),
+    sideBorder(8, 14, 184, 28, .{ .left = 2 }, .{ 135, 169, 135, 255 }),
+    roundRect(8, 46, 184, 28, 4, .{ 34, 50, 73, 255 }),
+    sideBorder(8, 46, 184, 28, .{ .left = 2 }, .{ 135, 169, 135, 255 }),
+    roundRect(8, 78, 184, 28, 4, .{ 34, 50, 73, 255 }),
+    sideBorder(8, 78, 184, 28, .{ .left = 3 }, .{ 135, 169, 135, 255 }),
+};
+
 /// Every scene, with the name the failure message should use.
 pub const all = [_]struct { name: []const u8, cmds: []const cl.RenderCommand }{
     .{ .name = "rects", .cmds = &rects },
     .{ .name = "rounded", .cmds = &rounded },
     .{ .name = "text", .cmds = &text },
     .{ .name = "composite", .cmds = &composite },
+    .{ .name = "side_bar", .cmds = &side_bar },
 };

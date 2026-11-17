@@ -189,10 +189,7 @@ pub const Renderer = struct {
                         cr[0] * k, cr[1] * k, cr[2] * k, cr[3] * k,
                     }, 0, 0, r.background_color);
                 },
-                .border => {
-                    const bd = cmd.render_data.border;
-                    self.pushRect(bb.x * k, bb.y * k, bb.width * k, bb.height * k, .{ 0, 0, 0, 0 }, 1, @floatFromInt(borderWidth(bd.width)), bd.color);
-                },
+                .border => self.pushBorder(cmd.render_data.border, bb, k),
                 .text => {
                     const td = cmd.render_data.text;
                     const bytes = td.string_contents.chars[0..@intCast(td.string_contents.length)];
@@ -269,10 +266,7 @@ pub const Renderer = struct {
                         cr[0] * k, cr[1] * k, cr[2] * k, cr[3] * k,
                     }, 0, 0, r.background_color);
                 },
-                .border => {
-                    const bd = cmd.render_data.border;
-                    self.pushRect(bb.x * k, bb.y * k, bb.width * k, bb.height * k, .{ 0, 0, 0, 0 }, 1, @floatFromInt(borderWidth(bd.width)), bd.color);
-                },
+                .border => self.pushBorder(cmd.render_data.border, bb, k),
                 .text => {
                     const td = cmd.render_data.text;
                     const bytes = td.string_contents.chars[0..@intCast(td.string_contents.length)];
@@ -375,6 +369,32 @@ pub const Renderer = struct {
             }) catch {};
         }
         self.seg_start = end;
+    }
+
+    // A border is four sides in Clay's model; the shader takes one width, so unequal sides become four rects.
+    fn pushBorder(self: *Renderer, bd: cl.BorderRenderData, bb: cl.BoundingBox, k: f32) void {
+        const top: f32 = @floatFromInt(bd.width.top);
+        const bottom: f32 = @floatFromInt(bd.width.bottom);
+        const left: f32 = @floatFromInt(bd.width.left);
+        const right: f32 = @floatFromInt(bd.width.right);
+        if (top == bottom and top == left and top == right) {
+            if (top <= 0) return;
+            self.pushRect(bb.x * k, bb.y * k, bb.width * k, bb.height * k, .{ 0, 0, 0, 0 }, 1, top * k, bd.color);
+            return;
+        }
+        if (top > 0 and bb.width > 0) self.pushRect(bb.x * k, bb.y * k, bb.width * k, @min(top, bb.height) * k, .{ 0, 0, 0, 0 }, 0, 0, bd.color);
+        if (bottom > 0 and bb.width > 0) {
+            const bh = @min(bottom, bb.height);
+            self.pushRect(bb.x * k, (bb.y + bb.height - bh) * k, bb.width * k, bh * k, .{ 0, 0, 0, 0 }, 0, 0, bd.color);
+        }
+        const inner_h = bb.height - @min(top, bb.height) - @min(bottom, bb.height);
+        if (inner_h > 0) {
+            if (left > 0) self.pushRect(bb.x * k, (bb.y + @min(top, bb.height)) * k, @min(left, bb.width) * k, inner_h * k, .{ 0, 0, 0, 0 }, 0, 0, bd.color);
+            if (right > 0) {
+                const rw = @min(right, bb.width);
+                self.pushRect((bb.x + bb.width - rw) * k, (bb.y + @min(top, bb.height)) * k, rw * k, inner_h * k, .{ 0, 0, 0, 0 }, 0, 0, bd.color);
+            }
+        }
     }
 
     fn pushRect(self: *Renderer, x: f32, y: f32, w: f32, h: f32, radius: [4]f32, mode: f32, border: f32, color: [4]f32) void {
@@ -555,8 +575,3 @@ pub const Renderer = struct {
         return .{ .x = slot.x, .y = slot.y, .w = slot.w, .h = slot.h, .xoff = mask.xoff, .yoff = mask.yoff };
     }
 };
-
-fn borderWidth(bw: cl.BorderWidth) u16 {
-    // Clay's BorderWidth is four sides; the shader needs one number, exactly as the Metal backend does.
-    return @max(bw.left, @max(bw.right, @max(bw.top, bw.bottom)));
-}
