@@ -115,6 +115,10 @@ pub var ptr_down: bool = false;
 pub var ptr_press_x: f32 = 0;
 pub var ptr_press_y: f32 = 0;
 
+// The wheel this frame consumed, in points: a strip with its own axis reads it, since a wheel has no horizontal one.
+pub var scroll_dx: f32 = 0;
+pub var scroll_dy: f32 = 0;
+
 // Record the pointer position for this frame.
 pub fn setPointer(x: f32, y: f32) void {
     ptr_x = x;
@@ -545,8 +549,8 @@ pub fn clayFrame(
     pointer_x: f32,
     pointer_y: f32,
     pointer_down: bool,
-    scroll_dx: f32,
-    scroll_dy: f32,
+    wheel_dx: f32,
+    wheel_dy: f32,
     w: u32,
     h: u32,
     declare: DeclareFn,
@@ -559,8 +563,8 @@ pub fn clayFrame(
         pointer_x,
         pointer_y,
         pointer_down,
-        scroll_dx,
-        scroll_dy,
+        wheel_dx,
+        wheel_dy,
         w,
         h,
         declare,
@@ -577,8 +581,8 @@ pub fn clayFrameWithOptions(
     pointer_x: f32,
     pointer_y: f32,
     pointer_down: bool,
-    scroll_dx: f32,
-    scroll_dy: f32,
+    wheel_dx: f32,
+    wheel_dy: f32,
     w: u32,
     h: u32,
     declare: DeclareFn,
@@ -586,8 +590,11 @@ pub fn clayFrameWithOptions(
     options: *const FrameOptions,
 ) u32 {
     cl.setPointerState(.{ .x = pointer_x, .y = pointer_y }, pointer_down);
+    // The delta stays readable for the whole declare: a component that scrolls on its own axis cannot get it from Clay.
+    scroll_dx = wheel_dx;
+    scroll_dy = wheel_dy;
     // Clay's built-in drag stays OFF (touch-style, inverted for a slider), and its wheel delta is divided by its own 10x factor: 1 point of gesture, 1 point of content.
-    cl.updateScrollContainers(false, .{ .x = -scroll_dx / wheel_factor, .y = -scroll_dy / wheel_factor }, 1.0 / 60.0);
+    cl.updateScrollContainers(false, .{ .x = -wheel_dx / wheel_factor, .y = -wheel_dy / wheel_factor }, 1.0 / 60.0);
     cl.setLayoutDimensions(.{ .w = @floatFromInt(w), .h = @floatFromInt(h) });
     if (options.measure) |_| {
         cl.setMeasureTextFunction(*const FrameOptions, options, measureWithOptions);

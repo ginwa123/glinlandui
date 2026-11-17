@@ -5,6 +5,9 @@ const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const frame_mod = @import("../frame.zig");
 
+/// Which way a list runs: rows stack down (a tree, a list) or run across (a tab strip, a chip row).
+pub const Axis = enum { vertical, horizontal };
+
 /// Where a drop lands relative to the row under the pointer: above it, inside it, or below it.
 pub const Zone = enum {
     before,
@@ -24,6 +27,8 @@ pub const Reorder = struct {
     // Called once per drop when the list knows zones: the row that moved, the row it was dropped ON, and where on it.
     on_drop: ?*const fn (?*anyopaque, usize, usize, Zone) void = null,
     ctx: ?*anyopaque = null,
+    // Which way the rows run: the pointer is read on this axis, and the drop line is drawn across it.
+    axis: Axis = .vertical,
     // The line drawn where the row would land, the ring around a container it would land in, and the tint of the row being dragged.
     line: Color = Color.rgb(0x7a, 0xb8, 0xff),
     ghost_bg: Color = Color.rgb(0x3a, 0x3a, 0x3a),
@@ -59,7 +64,8 @@ const Drag = struct {
     count: usize,
     // Arm on the press, become active once the pointer has moved far enough that this cannot be a click.
     active: bool = false,
-    press_y: f32 = 0,
+    // Where the press landed on the list's own axis, so the threshold is measured on the axis the rows run along.
+    press: f32 = 0,
     // The boundary a plain list lands on: 0..count, where count is "after the last row".
     drop: usize = 0,
     // The row the pointer is over, and where on it a zone-aware list would drop.
@@ -71,6 +77,30 @@ var drag: ?Drag = null;
 
 // A row under the pointer, and the zone the pointer asks of it.
 const Target = struct { index: usize, zone: Zone };
+
+// Where the pointer sits on the list's own axis: down for a column, across for a row.
+fn posOf(spec: Reorder, x: f32, y: f32) f32 {
+    return switch (spec.axis) {
+        .vertical => y,
+        .horizontal => x,
+    };
+}
+
+// Where a row starts on that axis.
+fn startOf(spec: Reorder, bb: cl.BoundingBox) f32 {
+    return switch (spec.axis) {
+        .vertical => bb.y,
+        .horizontal => bb.x,
+    };
+}
+
+// How long a row is along it.
+fn lenOf(spec: Reorder, bb: cl.BoundingBox) f32 {
+    return switch (spec.axis) {
+        .vertical => bb.height,
+        .horizontal => bb.width,
+    };
+}
 
 /// Forget last frame's rows; the drag in flight survives, because it spans frames.
 pub fn beginFrame() void {
@@ -153,7 +183,7 @@ pub fn press(x: f32, y: f32) void {
             .spec = row.spec,
             .from = row.index,
             .count = countIn(row.list),
-            .press_y = y,
+            .press = posOf(row.spec, x, y),
             .target = row.index,
             .zone = .after,
         };
@@ -164,16 +194,16 @@ pub fn press(x: f32, y: f32) void {
 /// A pointer move while a button is down: past the threshold the press becomes a drag, and the drop follows the pointer.
 pub fn move(x: f32, y: f32) void {
     var d = &(drag orelse return);
+    const at = posOf(d.spec, x, y);
     if (!d.active) {
-        if (@abs(y - d.press_y) < threshold_px) return;
+        if (@abs(at - d.press) < threshold_px) return;
         d.active = true;
     }
-    d.drop = boundaryAt(d.list, y, d.count);
-    if (targetAt(d.list, y)) |t| {
+    d.drop = boundaryAt(d.list, d.spec, at, d.count);
+    if (targetAt(d.list, d.spec, at)) |t| {
         d.target = t.index;
         d.zone = t.zone;
     }
-    _ = x;
 }
 
 /// The release: a completed drag reports its move and is consumed; a press that never moved leaves the click to the row.
@@ -181,16 +211,16 @@ pub fn release(x: f32, y: f32) bool {
     const d = drag orelse return false;
     drag = null;
     if (!d.active) return false;
-    _ = x;
-    const target = targetAt(d.list, y) orelse return true;
+    const at = posOf(d.spec, x, y);
+    const target = targetAt(d.list, d.spec, at) orelse return true;
     // A drop on the row that was picked up changes nothing, in any zone.
     if (target.index == d.from) return true;
     if (d.spec.on_drop) |f| {
         f(d.spec.ctx, d.from, target.index, target.zone);
         return true;
     }
-    // Dropping below the row's own position lands one index earlier, because the row leaves its slot first.
-    const boundary = boundaryAt(d.list, y, d.count);
+    // Dropping past the row's own position lands one index earlier, because the row leaves its slot first.
+    const boundary = boundaryAt(d.list, d.spec, at, d.count);
     const to = if (boundary > d.from) boundary - 1 else boundary;
     if (to == d.from) return true;
     if (d.spec.on_move) |f| f(d.spec.ctx, d.from, to);
@@ -203,14 +233,14 @@ pub fn cancel() void {
 }
 
 // The boundary the pointer is over: 0 before the first row, `count` after the last one.
-fn boundaryAt(list: []const u8, y: f32, count: usize) usize {
+fn boundaryAt(list: []const u8, spec: Reorder, at: f32, count: usize) usize {
     var boundary: usize = count;
     var i: usize = 0;
     while (i < row_count) : (i += 1) {
         const row = rows[i];
         if (!std.mem.eql(u8, row.list, list)) continue;
         const bb = boxOf(row.id) orelse continue;
-        if (y < bb.y + bb.height * 0.5) {
+        if (at < startOf(spec, bb) + lenOf(spec, bb) * 0.5) {
             if (row.index < boundary) boundary = row.index;
         }
     }
@@ -218,7 +248,7 @@ fn boundaryAt(list: []const u8, y: f32, count: usize) usize {
 }
 
 // The row the pointer is over, and its zone: clamped to the nearest row when the pointer is past either end.
-fn targetAt(list: []const u8, y: f32) ?Target {
+fn targetAt(list: []const u8, spec: Reorder, at: f32) ?Target {
     var nearest: ?Target = null;
     var nearest_dist: f32 = 0;
     var i: usize = 0;
@@ -226,11 +256,13 @@ fn targetAt(list: []const u8, y: f32) ?Target {
         const row = rows[i];
         if (!std.mem.eql(u8, row.list, list)) continue;
         const bb = boxOf(row.id) orelse continue;
-        if (y >= bb.y and y < bb.y + bb.height) {
-            return .{ .index = row.index, .zone = zoneIn(bb.y, bb.height, y, row.accepts_into) };
+        const top = startOf(spec, bb);
+        const len = lenOf(spec, bb);
+        if (at >= top and at < top + len) {
+            return .{ .index = row.index, .zone = zoneIn(top, len, at, row.accepts_into) };
         }
-        const above = y < bb.y;
-        const dist = if (above) bb.y - y else y - (bb.y + bb.height);
+        const above = at < top;
+        const dist = if (above) top - at else at - (top + len);
         if (nearest == null or dist < nearest_dist) {
             nearest = .{ .index = row.index, .zone = if (above) .before else .after };
             nearest_dist = dist;
@@ -278,13 +310,18 @@ pub fn declareLine(list: []const u8) void {
     const bb = boxOf(target.id) orelse return;
     // Root-relative, from the row's own box: the line needs no parent id, so two rows of one list cannot be confused.
     const after = d.drop >= d.count;
-    const y = if (after) bb.y + bb.height else bb.y;
+    // A 2 pt bar drawn ACROSS the list: a bottom/top edge for a column, a left/right edge for a row.
+    const vertical = d.spec.axis == .vertical;
+    const edge = if (vertical) (if (after) bb.y + bb.height else bb.y) else (if (after) bb.x + bb.width else bb.x);
     cl.UI()(.{
         .id = .ID("glin.reorder.line"),
-        .layout = .{ .sizing = .{ .w = .fixed(bb.width), .h = .fixed(2) } },
+        .layout = .{ .sizing = .{
+            .w = .fixed(if (vertical) bb.width else 2),
+            .h = .fixed(if (vertical) 2 else bb.height),
+        } },
         .floating = .{
             .attach_to = .to_root,
-            .offset = .{ .x = bb.x, .y = y - 1 },
+            .offset = if (vertical) .{ .x = bb.x, .y = edge - 1 } else .{ .x = edge - 1, .y = bb.y },
             .z_index = z_index,
             .pointer_capture_mode = .passthrough,
         },
@@ -567,6 +604,23 @@ test "a plain list keeps on_move, and never reports a zone" {
     _ = release(third.x, third.y + 4);
     try testing.expectEqual(@as(usize, 1), move_ctx.calls);
     try testing.expectEqual(@as(usize, 0), drop_ctx.calls);
+}
+
+test "the horizontal axis reads x, and its zones are left, middle and right" {
+    const spec = Reorder{ .axis = .horizontal };
+    const bb = cl.BoundingBox{ .x = 100, .y = 20, .width = 80, .height = 30 };
+    // A row across the screen is measured on x, and its length is its width.
+    try testing.expectEqual(@as(f32, 100), startOf(spec, bb));
+    try testing.expectEqual(@as(f32, 80), lenOf(spec, bb));
+    try testing.expectEqual(@as(f32, 55), posOf(spec, 55, 999));
+    // The outer thirds are a boundary: a tab that holds nothing is still only ever dropped beside.
+    try testing.expectEqual(Zone.before, zoneIn(100, 80, 110, false));
+    try testing.expectEqual(Zone.after, zoneIn(100, 80, 170, false));
+    // The same numbers on the vertical axis read the other coordinate.
+    const down = Reorder{};
+    try testing.expectEqual(@as(f32, 20), startOf(down, bb));
+    try testing.expectEqual(@as(f32, 30), lenOf(down, bb));
+    try testing.expectEqual(@as(f32, 999), posOf(down, 55, 999));
 }
 
 test "a drag is over one list at a time, and only that list draws its indicator" {

@@ -1,12 +1,15 @@
-//! A tab bar: one clickable tab per entry, with an optional accent dot and a close button.
-
+//! A tab bar: fixed-width tabs in a strip that scrolls, an accent dot, a close box, a right-click card and drag-to-reorder.
 const std = @import("std");
 const cl = @import("zclay");
 const headless = @import("../testing/headless.zig");
 const prop = @import("../props.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
+const context_menu = @import("context_menu.zig");
+const reorder_mod = @import("reorder.zig");
 const semantics = @import("../semantics.zig");
+const text_fit = @import("../text_fit.zig");
+const frame_mod = @import("../frame.zig");
 
 /// One tab.
 pub const Tab = struct {
@@ -15,6 +18,27 @@ pub const Tab = struct {
     closable: bool = true,
     /// A small dot before the label, for a per-tab colour. Null draws none.
     accent: ?Color = null,
+    /// Whether this tab's work is unsaved: the one fact its card's Save row is enabled by.
+    dirty: bool = false,
+};
+
+/// What a tab's right-click card can ask for, in the order the card lists them.
+pub const Action = enum { save, close_others, close_right, close_left, close };
+
+/// Every action, in card order.
+pub const all_actions = [_]Action{ .save, .close_others, .close_right, .close_left, .close };
+
+/// The words a card draws when an app does not name its own.
+pub const default_labels = [_][]const u8{ "Save", "Close others", "Close tabs to the right", "Close tabs to the left", "Close" };
+
+/// A tab's card. The engine knows which rows are possible; the app decides what picking one means.
+pub const Menu = struct {
+    f: ?*const fn (?*anyopaque, usize, Action) void = null,
+    ctx: ?*anyopaque = null,
+    // Five labels in `all_actions` order, so an app can speak its own language; null draws the defaults.
+    labels: ?[]const []const u8 = null,
+    // The card's look: the defaults are a dark card, an app passes its theme's own colours.
+    style: prop.ContextMenu = .{},
 };
 
 /// Tab click: the index in the slice the bar was given.
@@ -26,31 +50,109 @@ pub const TabsProps = struct {
     src: ?std.builtin.SourceLocation = null,
     tabs: []const Tab = &.{},
     h: prop.Size = .{ .fixed = 34 },
+    // Every tab is this wide, however long its label: a bar of equal tabs reads as a bar, not as a run of words.
+    tab_w: prop.Len = .{ .px = 160 },
     bg: Color = Color.rgb(0x1a, 0x1a, 0x1d),
     active_bg: Color = Color.rgb(0x14, 0x14, 0x16),
+    hover_bg: Color = Color.rgb(0x22, 0x22, 0x26),
     fg: Color = Color.rgb(0x8a, 0x8a, 0x94),
     active_fg: Color = Color.rgb(0xf0, 0xf0, 0xf4),
     close_fg: Color = Color.rgb(0x5a, 0x5a, 0x64),
+    close_hover: Color = Color.rgb(0x33, 0x33, 0x3c),
+    label_size: prop.Len = .{ .px = 13 },
     pad_lr: prop.Len = .{ .px = 11 },
+    // The bar a drop would land on, drawn across the strip.
+    drop_line: Color = Color.rgb(0x7a, 0xb8, 0xff),
     on_select: prop.Select = .{},
     on_close: prop.Select = .{},
+    // Drag a tab onto another to move it: the app splices its own array, `from` and `to` are indices after the move.
+    on_move: ?*const fn (?*anyopaque, usize, usize) void = null,
+    ctx: ?*anyopaque = null,
+    menu: Menu = .{},
     click_z: i16 = 0,
 };
 
+/// The element id of tab `i`. `+1` so tab 0 never collides with the bar's own id.
 fn tabId(base: []const u8, i: usize) cl.ElementId {
     return cl.ElementId.IDI(base, @as(u32, @intCast(i + 1)));
 }
 
+/// An element inside tab `i`: the dot, the close box or the label's own row.
 fn innerId(base: []const u8, i: usize, slot: u32) cl.ElementId {
     return cl.ElementId.IDI(base, @as(u32, @intCast(i + 1)) + slot * 0x10000);
 }
 
+/// The strip's clip, and the row of tabs inside it: two ids no tab index can reach.
+fn stripId(base: []const u8) cl.ElementId {
+    return cl.ElementId.IDI(base, 0xF000);
+}
+
+fn stripRowId(base: []const u8) cl.ElementId {
+    return cl.ElementId.IDI(base, 0xF001);
+}
+
+/// The most bars one app may keep a scroll position for, and the most tabs one bar may offer a card for.
+const bar_cap: usize = 16;
+const tab_cap: usize = 64;
+
+/// What a bar remembers between frames: where its strip sits, and how much room it had.
+const Strip = struct {
+    id: cl.ElementId,
+    // How far the strip has slid left; 0 shows the first tab.
+    h_scroll: f32 = 0,
+    // The clip's width last frame, which is the only viewport a declare can know before its own layout closes.
+    inner_w: f32 = 0,
+    // The active index the reveal last ran for: a strip nobody navigated must not undo a wheel scroll every frame.
+    followed: ?usize = null,
+    // Where this bar's cards live in `menu_slots`: one slot per tab, never shared with another bar.
+    menu_base: usize = 0,
+};
+
+var strips: [bar_cap]Strip = undefined;
+var strip_count: usize = 0;
+
+// One tab's card, kept between frames: a card outlives the declare that raised it, so its rows cannot live on the stack.
+const MenuSlot = struct {
+    f: ?*const fn (?*anyopaque, usize, Action) void = null,
+    ctx: ?*anyopaque = null,
+    tab: usize = 0,
+    // The card's own flags, in `all_actions` order: a row nobody can pick is drawn dim and answers nothing.
+    disabled: [all_actions.len]bool = .{ false, false, false, false, false },
+};
+
+var menu_slots: [bar_cap * tab_cap]MenuSlot = undefined;
+
+// The strip belonging to this bar, created on first use: the state survives the frame, keyed the way Clay keys the element.
+fn stripFor(id: cl.ElementId) *Strip {
+    for (strips[0..strip_count]) |*s| {
+        if (s.id.id == id.id and s.id.offset == id.offset) return s;
+    }
+    // A bar that was never declared before takes the next slot; one past the cap recycles the first one's.
+    const slot = if (strip_count < strips.len) strip_count else 0;
+    if (strip_count < strips.len) strip_count += 1;
+    strips[slot] = .{ .id = id, .menu_base = slot * tab_cap };
+    return &strips[slot];
+}
+
 /// Declare a tab bar.
 pub fn tabs(props: TabsProps) void {
+    const name = props.id.str();
+    const strip = stripFor(props.id.clay());
+    const gap: f32 = 1;
+    const tab_w = props.tab_w.pts();
+    const count: f32 = @floatFromInt(props.tabs.len);
+    const content_w = if (props.tabs.len == 0) 0 else count * tab_w + gap * (count - 1);
+    // The clip's width is last frame's, because a box read mid-declare has not been laid out yet.
+    if (frame_mod.bounds(stripId(name))) |b| strip.inner_w = b.width;
+    followActive(props.tabs, strip, tab_w, gap);
+    wheelScroll(strip, stripId(name), content_w);
+    // Never past either end: a close, or a wheel past the last tab, can ask for more than the strip has to give.
+    strip.h_scroll = std.math.clamp(strip.h_scroll, 0, @max(content_w - strip.inner_w, 0));
+
     semantics.registerAt(@src(), .{
         .declared = semantics.declaredAt(props.src),
         .id = props.id.clay(),
-        .tag = props.id.str(),
+        .tag = name,
         .role = .list,
         .flags = .{ .enabled = true },
     });
@@ -60,28 +162,87 @@ pub fn tabs(props: TabsProps) void {
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{ .w = .grow, .h = props.h.clay() },
-            .child_gap = 1,
+            .child_gap = 0,
         },
         .background_color = props.bg.toClay(),
     })({
-        for (props.tabs, 0..) |tab, i| tabUi(props, tab, i);
+        // ONE horizontal clip: a tab slides under the bar's right edge instead of painting over the component beside it.
+        cl.UI()(.{
+            .id = stripId(name),
+            .layout = .{
+                .direction = .left_to_right,
+                .sizing = .{ .w = .grow, .h = .grow },
+                .child_alignment = .{ .x = .left, .y = .center },
+                .child_gap = 0,
+            },
+            .clip = .{ .horizontal = true, .child_offset = .{ .x = -strip.h_scroll, .y = 0 } },
+        })({
+            cl.UI()(.{
+                .id = stripRowId(name),
+                .layout = .{
+                    .direction = .left_to_right,
+                    .sizing = .{ .w = .fit, .h = .grow },
+                    .child_gap = gap,
+                },
+            })({
+                // A tab scrolled out of the strip must not answer a click where it used to be.
+                registry.pushClip(stripId(name));
+                for (props.tabs, 0..) |tab, i| tabUi(props, strip, tab, i);
+                registry.popClip();
+            });
+        });
     });
 }
 
-fn tabUi(props: TabsProps, tab: Tab, i: usize) void {
+// Slide the strip just enough to show the active tab, and only when the active tab CHANGED: a wheel scroll stays put.
+fn followActive(items: []const Tab, strip: *Strip, tab_w: f32, gap: f32) void {
+    const active = activeIndex(items) orelse return;
+    // A bar nobody has laid out yet has no room to keep a tab in, so the reveal waits for the second frame.
+    if (strip.inner_w <= 0) return;
+    if (strip.followed == active) return;
+    const start = @as(f32, @floatFromInt(active)) * (tab_w + gap);
+    const end = start + tab_w;
+    if (start - strip.h_scroll < 0) strip.h_scroll = start;
+    if (end - strip.h_scroll > strip.inner_w) strip.h_scroll = end - strip.inner_w;
+    strip.followed = active;
+}
+
+// The index of the tab that is on screen: the first one flagged active, because a bar shows one at a time.
+fn activeIndex(items: []const Tab) ?usize {
+    for (items, 0..) |tab, i| {
+        if (tab.active) return i;
+    }
+    return null;
+}
+
+// A wheel over the strip slides it: a mouse has no horizontal axis, and Clay spends a delta only on an axis a clip enables.
+fn wheelScroll(strip: *Strip, clip: cl.ElementId, content_w: f32) void {
+    // Nothing past the edge to reach, or no room known yet: the wheel belongs to whoever is behind the bar.
+    if (content_w <= strip.inner_w) return;
+    const box = frame_mod.bounds(clip) orelse return;
+    if (frame_mod.ptr_x < box.x or frame_mod.ptr_x >= box.x + box.width) return;
+    if (frame_mod.ptr_y < box.y or frame_mod.ptr_y >= box.y + box.height) return;
+    // A trackpad sends x, a mouse wheel sends y: either one means the tabs past the edge, never both at once.
+    const delta = if (@abs(frame_mod.scroll_dx) > 0.01) frame_mod.scroll_dx else frame_mod.scroll_dy;
+    if (delta == 0) return;
+    strip.h_scroll += delta;
+}
+
+fn tabUi(props: TabsProps, strip: *Strip, tab: Tab, i: usize) void {
     const fg = if (tab.active) props.active_fg else props.fg;
-    const bg = if (tab.active) props.active_bg else props.bg;
+    const bg = if (tab.active) props.active_bg else if (cl.hovered()) props.hover_bg else props.bg;
+    const size = props.label_size.whole();
 
     cl.UI()(.{
-        .id = .IDI(props.id.str(), @as(u32, @intCast(i + 1))),
+        .id = tabId(props.id.str(), i),
         .layout = .{
             .direction = .left_to_right,
-            .sizing = .{ .w = .fit, .h = .grow },
+            .sizing = .{ .w = .fixed(props.tab_w.pts()), .h = .grow },
             .padding = .{ .left = props.pad_lr.whole(), .right = props.pad_lr.whole() },
             .child_alignment = .{ .x = .left, .y = .center },
             .child_gap = 8,
         },
-        .background_color = (if (!tab.active and cl.hovered()) props.bg else bg).toClay(),
+        .background_color = bg.toClay(),
     })({
         if (tab.accent) |accent| {
             cl.UI()(.{
@@ -91,7 +252,21 @@ fn tabUi(props: TabsProps, tab: Tab, i: usize) void {
                 .corner_radius = .all(3),
             })({});
         }
-        cl.text(tab.label, .{ .font_size = 13, .color = fg.toClay() });
+        // The label takes whatever the dot and the close leave, and is cut to it: a tab never grows a second line.
+        cl.UI()(.{
+            .id = innerId(props.id.str(), i, 3),
+            .layout = .{
+                .direction = .left_to_right,
+                .sizing = .{ .w = .grow, .h = .grow },
+                .child_alignment = .{ .x = .left, .y = .center },
+                .child_gap = 0,
+            },
+        })({
+            const fitted = text_fit.fit(tab.label, size, labelBudget(props, tab));
+            cl.text(tab.label[0..fitted.keep], .{ .font_size = size, .color = fg.toClay() });
+            // Three dots rather than U+2026: the bundled face has Latin-1, and a missing glyph reads worse than a short name.
+            if (fitted.dots) cl.text(text_fit.dots, .{ .font_size = size, .color = fg.toClay() });
+        });
         if (tab.closable) {
             cl.UI()(.{
                 .id = innerId(props.id.str(), i, 2),
@@ -99,7 +274,7 @@ fn tabUi(props: TabsProps, tab: Tab, i: usize) void {
                     .sizing = .{ .w = .fixed(16), .h = .fixed(16) },
                     .child_alignment = .{ .x = .center, .y = .center },
                 },
-                .background_color = (if (cl.hovered()) Color.rgb(0x33, 0x33, 0x3c) else Color.rgb(0, 0, 0)).toClay(),
+                .background_color = (if (cl.hovered()) props.close_hover else Color.rgb(0x00, 0x00, 0x00)).toClay(),
                 .corner_radius = .all(4),
             })({
                 cl.text("x", .{ .font_size = 11, .color = props.close_fg.toClay() });
@@ -121,6 +296,64 @@ fn tabUi(props: TabsProps, tab: Tab, i: usize) void {
             registry.registerZCursor(innerId(props.id.str(), i, 2), cb, props.on_close.ctx, i, props.click_z, .pointer);
         }
     }
+    // The Host already routes press/move/release to `reorder`, so a registered tab is draggable with no pointer code here.
+    if (props.on_move) |move_fn| {
+        reorder_mod.register(props.id.str(), tabId(props.id.str(), i), i, .{
+            .on_move = move_fn,
+            .ctx = props.ctx,
+            .axis = .horizontal,
+            .line = props.drop_line,
+        });
+    }
+    if (strip.menu_base + i < menu_slots.len) registerCard(props, strip.menu_base + i, tab, i);
+}
+
+// What a tab's label may spend: its own width less the dot, the close box, the two paddings and the gaps between them.
+fn labelBudget(props: TabsProps, tab: Tab) f32 {
+    const gap: f32 = 8;
+    var chrome = props.pad_lr.pts() * 2;
+    if (tab.accent != null) chrome += 5 + gap;
+    if (tab.closable) chrome += 16 + gap;
+    return props.tab_w.pts() - chrome;
+}
+
+// A tab's card: the engine fills the five rows and their enablement, and reports which tab and which action were picked.
+fn registerCard(props: TabsProps, slot_index: usize, tab: Tab, i: usize) void {
+    const spec = props.menu;
+    if (spec.f == null) return;
+    const slot = &menu_slots[slot_index];
+    slot.f = spec.f;
+    slot.ctx = spec.ctx;
+    slot.tab = i;
+    slot.disabled = disabledRows(props.tabs, tab, i);
+    var card = spec.style;
+    const labels = spec.labels orelse &default_labels;
+    // The engine's five actions are the whole vocabulary, so a longer list is cut rather than indexed past its end.
+    card.items = labels[0..@min(labels.len, all_actions.len)];
+    // The flags outlive this declare: a card is picked on a later frame, so they ride in the slot, never on the stack.
+    card.disabled = slot.disabled[0..];
+    card.on_select = .{ .f = onCardRow, .ctx = slot };
+    context_menu.register(tabId(props.id.str(), i), card, props.click_z);
+}
+
+// Which of the five rows this tab cannot use: a dim row, from what the engine itself knows and nothing more.
+fn disabledRows(items: []const Tab, tab: Tab, i: usize) [all_actions.len]bool {
+    return .{
+        // Save belongs to a tab with unsaved work; what saving it writes is the app's business.
+        !tab.dirty,
+        items.len < 2,
+        i + 1 >= items.len,
+        i == 0,
+        !tab.closable,
+    };
+}
+
+// A card row was picked: the action and the tab it belongs to go to the app.
+fn onCardRow(ctx: ?*anyopaque, row: usize) void {
+    const slot: *MenuSlot = @ptrCast(@alignCast(ctx.?));
+    if (row >= all_actions.len) return;
+    const f = slot.f orelse return;
+    f(slot.ctx, slot.tab, all_actions[row]);
 }
 
 const sample_tabs = [_]Tab{
@@ -137,7 +370,7 @@ test "a tab bar draws a box per tab plus the container" {
     var rects: usize = 0;
     var texts: usize = 0;
     try headless.countCommands(declareSample, &rects, &texts);
-    // Container + one box per tab + a dot on two + a close box on two.
+    // Container + one box per tab + a dot on two + a close box on two. The clip, the strip and the label's row draw nothing.
     try std.testing.expectEqual(@as(usize, 1 + 3 + 2 + 2), rects);
     // A label per tab, plus an "x" on the two closable ones.
     try std.testing.expectEqual(@as(usize, 3 + 2), texts);
@@ -158,4 +391,182 @@ fn declareEmpty() void {
 test "TabsProps needs only an id" {
     const p = TabsProps{ .id = .{ .text = "x" } };
     try std.testing.expectEqual(@as(usize, 0), p.tabs.len);
+}
+
+// ---- the fixture every frame test declares, so one module can hold several bars --------------------------------------
+
+var fx: TabsProps = .{ .id = .{ .text = "tabs-fx" } };
+
+// One frame on the canvas `headless.begin` set up, with the pointer where a test asked for it.
+fn frame(pointer_x: f32, pointer_y: f32) []cl.RenderCommand {
+    frame_mod.setPointer(pointer_x, pointer_y);
+    cl.setPointerState(.{ .x = pointer_x, .y = pointer_y }, false);
+    cl.beginLayout();
+    tabs(fx);
+    return cl.endLayout();
+}
+
+fn boxOf(id: cl.ElementId) cl.BoundingBox {
+    return cl.getElementData(id).bounding_box;
+}
+
+const long_tabs = [_]Tab{.{ .label = "a request name far too long for any tab", .closable = false }};
+
+test "a tab is exactly tab_w wide, and a label too long for it is cut with dots instead of wrapping" {
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    fx = .{ .id = .{ .text = "tabs-long" }, .tabs = &long_tabs, .tab_w = .{ .px = 100 }, .h = .{ .fixed = 30 } };
+    const cmds = frame(99999, 99999);
+    try std.testing.expectEqual(@as(f32, 100), boxOf(tabId("tabs-long", 0)).width);
+    // One label, cut once: the prefix and then the dots, and nothing else in the strip.
+    var runs: [4][]const u8 = undefined;
+    var n: usize = 0;
+    for (cmds) |c| {
+        if (c.command_type != .text) continue;
+        const run = c.render_data.text.string_contents;
+        if (n < runs.len) runs[n] = run.chars[0..@intCast(run.length)];
+        n += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), n);
+    try std.testing.expectEqualStrings(text_fit.dots, runs[1]);
+    // The kept part is a real prefix of the label and shorter than it: that is what "cut" means.
+    try std.testing.expect(runs[0].len > 0 and runs[0].len < long_tabs[0].label.len);
+    try std.testing.expectEqualStrings(long_tabs[0].label[0..runs[0].len], runs[0]);
+}
+
+const four_tabs = [_]Tab{
+    .{ .label = "one", .closable = false },
+    .{ .label = "two", .closable = false },
+    .{ .label = "three", .closable = false },
+    .{ .label = "four", .closable = false, .active = true },
+};
+
+test "a bar narrower than its tabs clips the strip and slides the active tab into view" {
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.setLayoutDimensions(.{ .w = 240, .h = 200 });
+    fx = .{ .id = .{ .text = "tabs-narrow" }, .tabs = &four_tabs, .tab_w = .{ .px = 100 }, .h = .{ .fixed = 30 } };
+    // The first frame lays the clip out; the second one knows its width, which is what the reveal needs.
+    _ = frame(99999, 99999);
+    _ = frame(99999, 99999);
+    const bar = boxOf(cl.getElementId("tabs-narrow"));
+    const active = boxOf(tabId("tabs-narrow", 3));
+    try std.testing.expect(active.width > 0);
+    try std.testing.expect(active.x >= bar.x - 0.5);
+    try std.testing.expect(active.x + active.width <= bar.x + bar.width + 0.5);
+    // And the first tab is the one that went off the left edge.
+    const first_tab = boxOf(tabId("tabs-narrow", 0));
+    try std.testing.expect(first_tab.x + first_tab.width <= bar.x + 0.5);
+    // The bar itself is the window's width: the strip scrolling never widened it.
+    try std.testing.expectEqual(@as(f32, 240), bar.width);
+}
+
+const wheel_tabs = [_]Tab{
+    .{ .label = "one", .closable = false, .active = true },
+    .{ .label = "two", .closable = false },
+    .{ .label = "three", .closable = false },
+    .{ .label = "four", .closable = false },
+};
+
+test "the wheel over the strip slides it, and a frame without a wheel leaves it there" {
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.setLayoutDimensions(.{ .w = 240, .h = 200 });
+    fx = .{ .id = .{ .text = "tabs-wheel" }, .tabs = &wheel_tabs, .tab_w = .{ .px = 100 }, .h = .{ .fixed = 30 } };
+    // The active tab is the first one, so the reveal leaves the strip at its start and the wheel has room to move it.
+    _ = frame(99999, 99999);
+    const before = boxOf(tabId("tabs-wheel", 3));
+    frame_mod.scroll_dy = 40;
+    _ = frame(50, 15);
+    frame_mod.scroll_dy = 0;
+    const after = boxOf(tabId("tabs-wheel", 3));
+    try std.testing.expectApproxEqAbs(before.x - 40, after.x, 0.5);
+    // A second frame with no wheel keeps it: a strip nobody navigated must not be yanked back every frame.
+    _ = frame(50, 15);
+    try std.testing.expectApproxEqAbs(after.x, boxOf(tabId("tabs-wheel", 3)).x, 0.01);
+}
+
+var card_ctx: struct { calls: usize = 0, tab: usize = 0, action: Action = .save } = .{};
+
+fn onCard(ctx: ?*anyopaque, index: usize, action: Action) void {
+    const c: *@TypeOf(card_ctx) = @ptrCast(@alignCast(ctx.?));
+    c.calls += 1;
+    c.tab = index;
+    c.action = action;
+}
+
+const menu_tabs = [_]Tab{
+    .{ .label = "clean" },
+    .{ .label = "edited", .dirty = true },
+};
+
+test "a right click on a tab offers the five rows and reports the one it picked" {
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.setLayoutDimensions(.{ .w = 480, .h = 200 });
+    card_ctx = .{};
+    fx = .{
+        .id = .{ .text = "tabs-menu" },
+        .tabs = &menu_tabs,
+        .tab_w = .{ .px = 120 },
+        .h = .{ .fixed = 30 },
+        .menu = .{ .f = onCard, .ctx = &card_ctx },
+    };
+    registry.beginFrame();
+    context_menu.beginFrame();
+    _ = frame(99999, 99999);
+    // The second tab is the last one and has unsaved work, so Save, Close others and Close to the left are live.
+    const second = boxOf(tabId("tabs-menu", 1));
+    try std.testing.expect(context_menu.secondaryClick(second.x + 20, second.y + 10, 480, 200));
+    try std.testing.expect(context_menu.isOpen());
+    // The card is drawn on the frame after the click, which is when its rows get boxes.
+    registry.beginFrame();
+    context_menu.beginFrame();
+    frame_mod.setPointer(99999, 99999);
+    cl.setPointerState(.{ .x = 99999, .y = 99999 }, false);
+    cl.beginLayout();
+    tabs(fx);
+    context_menu.declare();
+    _ = cl.endLayout();
+    for (0..all_actions.len) |i| try std.testing.expect(cl.getElementData(context_menu.rowId(i)).found);
+    // Picking "Close others" reports that action with the tab it belongs to.
+    const row = boxOf(context_menu.rowId(1));
+    try std.testing.expect(registry.dispatchClick(row.x + row.width * 0.5, row.y + row.height * 0.5));
+    try std.testing.expectEqual(@as(usize, 1), card_ctx.calls);
+    try std.testing.expectEqual(@as(usize, 1), card_ctx.tab);
+    try std.testing.expectEqual(Action.close_others, card_ctx.action);
+    try std.testing.expect(!context_menu.isOpen());
+}
+
+var move_ctx: struct { calls: usize = 0, from: usize = 0, to: usize = 0 } = .{};
+
+fn onMove(ctx: ?*anyopaque, from: usize, to: usize) void {
+    const c: *@TypeOf(move_ctx) = @ptrCast(@alignCast(ctx.?));
+    c.calls += 1;
+    c.from = from;
+    c.to = to;
+}
+
+test "dragging a tab across the strip reports the index it lands on" {
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.setLayoutDimensions(.{ .w = 480, .h = 200 });
+    move_ctx = .{};
+    reorder_mod.cancel();
+    fx = .{
+        .id = .{ .text = "tabs-drag" },
+        .tabs = &four_tabs,
+        .tab_w = .{ .px = 100 },
+        .h = .{ .fixed = 30 },
+        .on_move = onMove,
+        .ctx = &move_ctx,
+    };
+    _ = frame(99999, 99999);
+
+    const first = boxOf(tabId("tabs-drag", 0));
+    reorder_mod.press(first.x + first.width * 0.5, first.y + first.height * 0.5);
+    // A press that never moves is still a click, not a move.
+    try std.testing.expect(!reorder_mod.isDragging());
+    const third = boxOf(tabId("tabs-drag", 2));
+    reorder_mod.move(third.x + third.width * 0.5, third.y + third.height * 0.5);
+    try std.testing.expect(reorder_mod.isDragging());
+    _ = reorder_mod.release(third.x + third.width * 0.5, third.y + third.height * 0.5);
+    try std.testing.expectEqual(@as(usize, 1), move_ctx.calls);
+    try std.testing.expectEqual(@as(usize, 0), move_ctx.from);
+    try std.testing.expectEqual(@as(usize, 2), move_ctx.to);
 }
