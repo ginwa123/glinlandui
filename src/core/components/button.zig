@@ -5,6 +5,7 @@ const headless = @import("../testing/headless.zig");
 const Color = @import("../color.zig").Color;
 const prop = @import("../props.zig");
 const registry = @import("click_registry.zig");
+const focus = @import("focus.zig");
 const semantics = @import("../semantics.zig");
 
 /// Click callback: plain fn pointer + opaque ctx (no closures).
@@ -60,6 +61,8 @@ pub fn button(p: ButtonProps) void {
         .flags = .{ .enabled = !p.disabled },
     });
     if (!p.disabled) {
+        // A button is in the tab order, and Enter or Space on it is a click at its own centre (WCAG 2.1.1).
+        focus.declare(p.id.clay(), p.id.str());
         if (p.on_click.f) |cb| {
             // Pointer cursor: clickable button.
             registry.registerClickCursor(p.id.clay(), cb, p.on_click.ctx, .pointer);

@@ -9,6 +9,11 @@ const dispatch = @import("components/dispatch.zig");
 const key_escape: u32 = 1;
 /// Tab, in the same numbering: the key that walks the focusable components.
 const key_tab: u32 = 15;
+/// Enter and Space: the keys that activate whatever the keyboard is on.
+const key_enter: u32 = 28;
+const key_space: u32 = 57;
+/// Above the ordinary content, below a menu or a dropdown card.
+const ring_z: i16 = 6;
 const focus_mod = @import("components/focus.zig");
 const registry = @import("components/click_registry.zig");
 const image_widgets = @import("components/image.zig");
@@ -107,6 +112,9 @@ pub const Host = struct {
     pub fn declareFrame(self: *Host, w: u32, h: u32) void {
         // A devtool client is waiting: fire its action BEFORE the registries are cleared, so it lands in the targets the last frame declared.
         if (self.service) |svc| svc.begin(svc.ptr, self);
+        // The ring a focused non-field element gets is drawn at the END of this declare, from the box the frame before it left.
+        const ring_target = focus_mod.hostRingElement();
+        const ring_box = if (ring_target) |id| frame_mod.bounds(id) else null;
         // Fresh registries per frame (components self-register during declare; stale boxes must never ghost-fire).
         frame_mod.beginDragFrame();
         registry.beginFrame();
@@ -117,6 +125,8 @@ pub const Host = struct {
         image_widgets.beginFrame();
         semantics.beginFrame();
         self.root_fn(self.root_ctx, w, h);
+        // Every focusable that does not colour its own ring gets the same one here, so the whole toolkit agrees on what focus looks like (WCAG 2.4.7).
+        if (ring_box) |b| if (ring_target) |id| focus_mod.drawRing(id, b, focus_mod.ring_color, focus_mod.ring_width, ring_z);
         // The context menu is the engine's, so it needs no declaration from the app: it floats over the tree it was raised from.
         context_menu.declare();
         // The devtool declares last, so its overlay paints over the app; it registers no semantics node, so it never shows up in its own tree.
@@ -250,6 +260,14 @@ pub const Host = struct {
         if (pressed and keycode == key_escape and frame_mod.focusedId() != null) {
             frame_mod.setFocus(null);
             return false;
+        }
+        // Enter or Space on anything but a text field is that control's click, at its own centre: a button, a row or a tab used without a pointer (WCAG 2.1.1).
+        if (pressed and (keycode == key_enter or keycode == key_space) and !input_mod.ownsKeyboard()) {
+            if (frame_mod.focusedElement()) |id| {
+                if (frame_mod.bounds(id)) |b| {
+                    if (registry.dispatchClick(b.x + b.width / 2, b.y + b.height / 2)) return false;
+                }
+            }
         }
         if (dispatch.handleKey(&self.keys, keycode, pressed)) return true;
         // No app handler asked to close: the focused field takes the key, so typing needs no routing code in the app.

@@ -638,6 +638,11 @@ pub fn beginFrame() void {
     focus.beginDeclare();
 }
 
+// True while a text field owns the keyboard: Enter then means submit, and Space is a character, never a click.
+pub fn ownsKeyboard() bool {
+    return active != null;
+}
+
 // Type a composed run into the focused field; false when no field owns the keyboard.
 pub fn dispatchText(text: []const u8) bool {
     const field = active orelse return false;
@@ -881,8 +886,8 @@ pub fn textField(field: *Field) void {
     field.bind();
     const input = &field.editor;
     const name = field.rememberName();
-    // Every enabled field is in the tab order: a screen full of fields and no pointer still has to be usable (WCAG 2.1.1).
-    if (!field.disabled and name.len > 0) focus.declare(name);
+    // Every enabled field is in the tab order, and it colours its own ring from its props, so the Host must not draw a second one.
+    if (!field.disabled and name.len > 0) focus.declareWithRing(field.id.clay(), name);
     // The click and drag handlers need the same origin and metrics the text is drawn with.
     field.pad_lr = field.pad.left;
     // The model's value wins when it CHANGED; an unchanged value leaves the draft and the caret alone.
@@ -963,7 +968,7 @@ pub fn textField(field: *Field) void {
     });
 
     // The keyboard's position has to be visible (WCAG 2.4.7), and a ring drawn outside the box covers none of the field (2.4.11).
-    if (ring_box) |b| if (field.focus_ring_w.pts() > 0) drawFocusRing(field, name, b);
+    if (ring_box) |b| if (field.focus_ring_w.pts() > 0) drawFocusRing(field, b);
 
     // Semantics: an editable field declares `set_text`, so a test can type into it by name and a reader can find it.
     if (!field.disabled and name.len > 0) {
@@ -1115,22 +1120,10 @@ const text_clip_index: u32 = 3;
 const focus_ring_index: u32 = 4;
 
 // One floating box around the field's own box, a frame behind: a box read mid-declare has not been laid out yet.
-fn drawFocusRing(field: *Field, name: []const u8, b: frame_mod.Bounds) void {
+fn drawFocusRing(field: *Field, b: frame_mod.Bounds) void {
     // A ring is a hairline on the device grid: a fractional width would paint two half-lit columns (the audit says so too).
     const width: u16 = @intFromFloat(@max(1, @round(field.focus_ring_w.pts())));
-    if (b.width < 1 or b.height < 1) return;
-    cl.UI()(.{
-        .id = .IDI(name, focus_ring_index),
-        .floating = .{
-            .attach_to = .to_root,
-            .offset = .{ .x = b.x, .y = b.y },
-            // Above the field, and passthrough: a ring is a sign of where the keyboard is, never a target of its own.
-            .z_index = field.click_z + 1,
-            .pointer_capture_mode = .passthrough,
-        },
-        .layout = .{ .sizing = .{ .w = .fixed(b.width), .h = .fixed(b.height) } },
-        .border = .{ .color = field.focus_ring.toClay(), .width = .outside(width) },
-    })({});
+    focus.drawRing(field.id.clay(), b, field.focus_ring, width, field.click_z + 1);
 }
 
 // The clip's Clay id, which is also the box whose width is the room the text has before it has to slide.

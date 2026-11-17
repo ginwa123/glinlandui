@@ -228,6 +228,8 @@ fn hashColor(h: u64, c: [4]f32) u64 {
 // The element that owns the keyboard: an id the app declared, copied because app ids usually live in the frame arena.
 var focus_buf: [96]u8 = undefined;
 var focus_len: usize = 0;
+// The same element as Clay sees it, so a row or a tab — whose id never had a string form — can own the keyboard too.
+var focus_element: ?cl.ElementId = null;
 var focus_known: bool = false;
 var focus_cleared: bool = false;
 
@@ -237,14 +239,35 @@ pub fn setFocus(id: ?[]const u8) void {
     if (id) |s| {
         focus_len = @min(s.len, focus_buf.len);
         @memcpy(focus_buf[0..focus_len], s[0..focus_len]);
+        focus_element = cl.getElementId(focus_buf[0..focus_len]);
     } else {
         focus_len = 0;
+        focus_element = null;
     }
+}
+
+// Give the keyboard to a Clay element by its own id: how a composite widget's row or tab is reachable, since that id has no string form.
+pub fn setFocusElement(id: cl.ElementId) void {
+    focus_known = true;
+    focus_len = 0;
+    focus_element = id;
+}
+
+// The element that owns the keyboard, whatever set it, or null when nothing does.
+pub fn focusedElement() ?cl.ElementId {
+    return focus_element;
+}
+
+// True when `id` is the element that owns the keyboard.
+pub fn isFocusedElement(id: cl.ElementId) bool {
+    if (focus_element) |f| return f.id == id.id;
+    return false;
 }
 
 // Forget who owns the keyboard: a new host or window starts with nothing focused.
 pub fn resetFocus() void {
     focus_len = 0;
+    focus_element = null;
     focus_known = false;
     focus_cleared = false;
 }
@@ -253,6 +276,7 @@ pub fn resetFocus() void {
 pub fn clearFocus() void {
     focus_known = true;
     focus_len = 0;
+    focus_element = null;
     focus_cleared = true;
 }
 
@@ -274,7 +298,7 @@ pub fn focusedId() ?[]const u8 {
 
 // True when `id` is the element that owns the keyboard.
 pub fn isFocused(id: []const u8) bool {
-    return focus_len == id.len and std.mem.eql(u8, focus_buf[0..focus_len], id);
+    return isFocusedElement(cl.getElementId(id));
 }
 
 test "focus follows the toolkit: a click elsewhere drops it" {
