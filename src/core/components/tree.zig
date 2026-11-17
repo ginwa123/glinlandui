@@ -9,7 +9,8 @@ const registry = @import("click_registry.zig");
 const reorder_mod = @import("reorder.zig");
 const context_menu = @import("context_menu.zig");
 const semantics = @import("../semantics.zig");
-const text_fit = @import("../text_backend.zig");
+const text_backend = @import("../text_backend.zig");
+const text_fit = @import("../text_fit.zig");
 
 /// What a row is, which decides its colour.
 pub const RowKind = enum { group, item, leaf };
@@ -92,56 +93,20 @@ pub fn caretOf(props: TreeProps, row: Row) []const u8 {
     return if (row.expanded) props.caret_open else props.caret_closed;
 }
 
-/// How much of a label still fits, and whether the rest has to be shown as dots.
-const Fitted = struct { keep: usize, dots: bool };
-
 /// The label cut to the row's own box from the previous frame, so a long name is shortened instead of wrapping into the row below.
-fn fitLabel(props: TreeProps, row: Row, i: usize, size: u16) Fitted {
-    if (row.label.len == 0) return .{ .keep = 0, .dots = false };
+fn fitLabel(props: TreeProps, row: Row, i: usize, size: u16) text_fit.Fitted {
     const el = cl.getElementData(rowId(props.id.str(), i));
     if (!el.found) return .{ .keep = row.label.len, .dots = false };
     const row_w = el.bounding_box.width;
     if (row_w <= 0) return .{ .keep = row.label.len, .dots = false };
     // What the row spends before the label: its two paddings, the indent, the caret, the app's decor, the count and the gaps.
-    const caret_w = text_fit.measureText(caretOf(props, row), props.caret_size.whole()).w;
-    const meta_w = if (row.meta.len > 0) text_fit.measureText(row.meta, 11).w else 0;
+    const caret_w = text_backend.measureText(caretOf(props, row), props.caret_size.whole()).w;
+    const meta_w = if (row.meta.len > 0) text_backend.measureText(row.meta, 11).w else 0;
     const gaps: f32 = 6 * @as(f32, if (row.meta.len > 0) 3 else 2);
     const indent_w = props.indent.pts() * @as(f32, @floatFromInt(row.depth));
     const budget = row_w - props.pad_lr.pts() * 2 - indent_w - caret_w - props.extra_width.pts() - meta_w - gaps;
-    if (budget <= 0) return .{ .keep = 0, .dots = true };
-    if (text_fit.measureText(row.label, size).w <= budget) return .{ .keep = row.label.len, .dots = false };
-    const dots_w = text_fit.measureText("...", size).w;
-    if (dots_w >= budget) return .{ .keep = 0, .dots = false };
-    // The longest prefix that still fits beside the dots: a binary search over codepoint counts, so a 200 char label costs a handful of measures.
-    var lo: usize = 0;
-    var hi: usize = codepoints(row.label);
-    while (lo < hi) {
-        const mid = lo + (hi - lo + 1) / 2;
-        if (text_fit.measureText(prefix(row.label, mid), size).w + dots_w <= budget) lo = mid else hi = mid - 1;
-    }
-    return .{ .keep = prefix(row.label, lo).len, .dots = true };
-}
-
-/// A count of codepoints, so a cut never lands inside a UTF-8 sequence.
-fn codepoints(text: []const u8) usize {
-    var n: usize = 0;
-    var i: usize = 0;
-    while (i < text.len) : (n += 1) {
-        i += 1;
-        while (i < text.len and (text[i] & 0xC0) == 0x80) i += 1;
-    }
-    return n;
-}
-
-/// The first `n` codepoints of `text`.
-fn prefix(text: []const u8, n: usize) []const u8 {
-    var i: usize = 0;
-    var k: usize = 0;
-    while (i < text.len and k < n) : (k += 1) {
-        i += 1;
-        while (i < text.len and (text[i] & 0xC0) == 0x80) i += 1;
-    }
-    return text[0..i];
+    // One implementation of the cut, shared with the tab strip: the budget is the only thing a row knows better.
+    return text_fit.fit(row.label, size, budget);
 }
 
 /// Declare a tree: one clickable row per entry, indented by `depth`.
