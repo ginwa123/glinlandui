@@ -78,6 +78,18 @@ typedef void (*GlinWinOnClose)(void *user);
 /// the state machine and nothing is ever painted.
 void glin_win_invalidate(GlinWinWindow *win);
 
+/// Ask for a cursor shape for the client area. `id` is a Win32 `IDC_*`
+/// resource id (32512 arrow, 32513 I-beam, 32644 size-EW, 32645 size-NS,
+/// 32649 hand), which the HOST maps from the toolkit's Cursor in
+/// windows/adapter.zig — this function makes no decisions, it remembers the
+/// handle and hands it to SetCursor.
+///
+/// Remembering it is the point: DefWindowProc answers every WM_SETCURSOR with
+/// the window CLASS cursor (the arrow), so a SetCursor() from the frame is
+/// overwritten on the next pointer move unless this shim answers WM_SETCURSOR
+/// itself — which it does, from the handle stored here.
+void glin_win_set_cursor(GlinWinWindow *win, unsigned int id);
+
 /// Create the window and the D3D11 device + swap chain. Returns NULL when the
 /// window itself could not be created (no interactive window station, which is
 /// what a fully headless service session looks like).
