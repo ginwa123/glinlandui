@@ -33,6 +33,8 @@ pub const BoxProps = struct {
     radius: prop.Radius = .{},
     border: prop.Border = .{},
     child_align: cl.ChildAlignment = .{},
+    // A child wider or taller than this box is CUT at its edge instead of painted over the neighbour.
+    clip: prop.Clip = .{},
     // The click this container raises: an app hands one in instead of reaching for the click registry itself.
     on_click: prop.Click = .{},
     // The pointer shape over the hit target; only read when `on_click` has a handler.
@@ -48,19 +50,7 @@ pub fn box(p: BoxProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void)
         .column => .top_to_bottom,
     };
     const bg = if (p.hover_bg) |hover| (if (cl.pointerOver(p.id.clay())) hover else p.bg) else p.bg;
-    cl.UI()(.{
-        .id = p.id.clay(),
-        .layout = .{
-            .direction = dir,
-            .sizing = .{ .w = p.w.clay(), .h = p.h.clay() },
-            .padding = p.pad.clay(),
-            .child_gap = p.gap.whole(),
-            .child_alignment = p.child_align,
-        },
-        .background_color = if (bg) |b| b.toClay() else .{ 0, 0, 0, 0 },
-        .corner_radius = p.radius.clay(),
-        .border = p.border.clay(),
-    })({
+    cl.UI()(declaration(p, dir, bg))({
         // The box's own hit target answers first, so a clickable child drawn on top of it wins the tie.
         if (p.on_click.f) |cb| registry.registerClickCursor(p.id.clay(), cb, p.on_click.ctx, p.cursor);
         // A right click opens the card the engine draws, so a container is all a menu needs.
@@ -79,6 +69,25 @@ pub fn box(p: BoxProps, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void)
         .flags = .{ .enabled = true },
         .actions = .{ .click = p.on_click.f != null },
     });
+}
+
+// The element a box declares, with a clip config only when it asked for one: an unused clip would still register as a scroll container.
+fn declaration(p: BoxProps, dir: cl.LayoutDirection, bg: ?Color) cl.ElementDeclaration {
+    var d = cl.ElementDeclaration{
+        .id = p.id.clay(),
+        .layout = .{
+            .direction = dir,
+            .sizing = .{ .w = p.w.clay(), .h = p.h.clay() },
+            .padding = p.pad.clay(),
+            .child_gap = p.gap.whole(),
+            .child_alignment = p.child_align,
+        },
+        .background_color = if (bg) |b| b.toClay() else .{ 0, 0, 0, 0 },
+        .corner_radius = p.radius.clay(),
+        .border = p.border.clay(),
+    };
+    if (p.clip.any()) d.clip = .{ .horizontal = p.clip.horizontal, .vertical = p.clip.vertical };
+    return d;
 }
 
 // ---- Arrange helpers: Row / Column / Spacer over Box ----
@@ -358,4 +367,66 @@ test "a clickable box asks for the pointer shape it was given" {
     try std.testing.expectEqual(prop.Cursor.text, text_box.cursor);
     // The default is a hand, because a clickable container is a button unless it says otherwise.
     try std.testing.expectEqual(prop.Cursor.pointer, (BoxProps{ .id = .{ .text = "t" } }).cursor);
+}
+
+// ---- tests ---------------------------------------------------------------------------------------------------
+
+const testing = std.testing;
+const soft = @import("../render_software.zig");
+
+fn clipChildren(_: void) void {
+    cl.UI()(.{ .layout = .{ .sizing = .{ .w = .fit, .h = .fit } } })({
+        cl.text("surface_variant_and_then_some_more", .{ .font_size = 12, .color = .{ 1, 1, 1, 1 } });
+    });
+}
+
+fn declareClipBox() void {
+    box(.{
+        .id = .{ .text = "test-clip-cell" },
+        .w = .{ .fixed = 80 },
+        .h = .{ .fixed = 20 },
+        .clip = .{ .horizontal = true },
+        .bg = Color.rgb(0, 0, 0),
+    }, {}, clipChildren);
+}
+
+fn declarePlainBox() void {
+    box(.{
+        .id = .{ .text = "test-clip-cell" },
+        .w = .{ .fixed = 80 },
+        .h = .{ .fixed = 20 },
+        .bg = Color.rgb(0, 0, 0),
+    }, {}, clipChildren);
+}
+
+// The pixels to the RIGHT of the 80 pt cell: what a neighbour would be painted over.
+fn inkOutside(cmds: []cl.RenderCommand) !usize {
+    var surface = try soft.Surface.init(std.testing.allocator, 300, 20);
+    defer surface.deinit();
+    surface.setClearColor(.{ 0.0, 0.0, 0.0, 1.0 });
+    surface.clear();
+    surface.renderCommands(cmds);
+    var count: usize = 0;
+    var y: i64 = 0;
+    while (y < 20) : (y += 1) {
+        var x: i64 = 80;
+        while (x < 300) : (x += 1) {
+            const px = surface.px(x, y);
+            if (px[0] != 0 or px[1] != 0 or px[2] != 0) count += 1;
+        }
+    }
+    return count;
+}
+
+fn frameOf(declare: *const fn () void) ![]cl.RenderCommand {
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.beginLayout();
+    declare();
+    return cl.endLayout();
+}
+
+test "a box that clips cuts a child wider than itself, and a plain box paints it through" {
+    // A 12 pt run of 32 characters. The cell is 80 pt, so without a clip the run paints over its neighbour.
+    try testing.expect(try inkOutside(try frameOf(declarePlainBox)) > 0);
+    try testing.expectEqual(@as(usize, 0), try inkOutside(try frameOf(declareClipBox)));
 }

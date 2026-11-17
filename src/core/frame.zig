@@ -6,9 +6,10 @@ const builtin = @import("builtin");
 const cl = @import("zclay");
 const render = @import("render.zig");
 const text = @import("text_backend.zig");
-const click_registry = @import("components/click_registry.zig");
+const click_registry = @import("component.zig").click_registry;
 const semantics = @import("semantics.zig");
 const text_editor = @import("text_editor.zig");
+const zoom_mod = @import("zoom.zig");
 
 // ---- Wayland cursor-shape (wp_cursor_shape_manager_v1) ---- Contract (registry crew owns components/click_registry.zig).
 pub const Cursor = enum { default, pointer, text, ew_resize, ns_resize };
@@ -95,6 +96,8 @@ pub const Bounds = struct {
 
 // The box Clay laid out for an element this frame, or null when it was not declared.
 pub fn bounds(id: cl.ElementId) ?Bounds {
+    // Before the first frame Clay has no context at all, and its own lookup would dereference NULL: a box is simply not known yet.
+    if (@intFromPtr(cl.getCurrentContext()) == 0) return null;
     const data = cl.getElementData(id);
     if (!data.found) return null;
     return .{
@@ -128,24 +131,74 @@ pub fn setPointer(x: f32, y: f32) void {
 // Device pixels per logical point, as the window backend set it. 1.0 until a Retina window says otherwise.
 pub var pixel_scale: f32 = 1;
 
+// Content points per window point: what `Ctrl/Cmd +` / `-` / `0` set. A frame declares in content points and paints at this.
+pub var content_zoom: f32 = 1;
+
+// Device pixels per content point: the scale a run is rastered at and a box is painted at.
+fn deviceScale() f32 {
+    return pixel_scale * content_zoom;
+}
+
 // Record the window's backing scale, so a hairline can be snapped to real device pixels.
 pub fn setPixelScale(s: f32) void {
     pixel_scale = if (s > 0) s else 1;
     // The rasteriser draws a run at round(size * scale), so the layout must measure that size or a caret drifts off it.
-    text.setPixelScale(pixel_scale);
+    text.setPixelScale(deviceScale());
+}
+
+// Set the content zoom. The frame keeps declaring in content points: the window simply shows fewer of them.
+pub fn setZoom(factor: f32) void {
+    content_zoom = zoom_mod.clamp(factor);
+    text.setPixelScale(deviceScale());
+}
+
+// The content zoom in force, 1.0 when nothing asked for one.
+pub fn zoom() f32 {
+    return content_zoom;
+}
+
+// The window's width in the units a frame declares in, which is the width the layout is computed for.
+pub fn contentWidth(w: u32) u32 {
+    const scaled = @as(f32, @floatFromInt(w)) / content_zoom;
+    return @intFromFloat(@max(1, @round(scaled)));
+}
+
+pub fn contentHeight(h: u32) u32 {
+    const scaled = @as(f32, @floatFromInt(h)) / content_zoom;
+    return @intFromFloat(@max(1, @round(scaled)));
+}
+
+// The box a frame is declaring in, in content points: the window divided by the zoom.
+pub const Viewport = struct { w: f32 = 0, h: f32 = 0 };
+
+var viewport_now: Viewport = .{};
+
+// The content points this frame has, so a widget that needs the window reads it here instead of being handed it.
+pub fn viewport() Viewport {
+    return viewport_now;
+}
+
+// The frame sets this every frame; a harness that lays out on its own says the same thing here.
+pub fn setViewport(v: Viewport) void {
+    viewport_now = v;
+}
+
+// The viewport a window of this size gives, which is the whole zoom correction in one place.
+pub fn viewportOf(w: u32, h: u32) Viewport {
+    return .{ .w = @floatFromInt(contentWidth(w)), .h = @floatFromInt(contentHeight(h)) };
 }
 
 // Snap a caret's left edge to the device pixel grid. A 1 pt bar at a fractional x is antialiased across two device pixels, and the half-covered one
 
 // blends into the character beside it — which is what makes a caret look like it is drawn on top of a glyph.
 pub fn snapX(x: f32) f32 {
-    const k = pixel_scale;
+    const k = deviceScale();
     return @round(x * k) / k;
 }
 
-// One device pixel, in logical points: the width a caret should be so it covers whole pixels and nothing more.
+// One device pixel, in content points: the width a caret should be so it covers whole pixels and nothing more.
 pub fn hairline() f32 {
-    return 1 / pixel_scale;
+    return 1 / deviceScale();
 }
 
 // Record the button state and the press origin for this frame.
@@ -575,6 +628,56 @@ pub fn clayFrame(
     );
 }
 
+// Every length Clay emitted is in content points, and a zoomed frame paints them at `zoom` more window points.
+fn scaleCommands(commands: []cl.RenderCommand, z: f32) void {
+    if (z == 1) return;
+    for (commands) |*cmd| {
+        cmd.bounding_box.x *= z;
+        cmd.bounding_box.y *= z;
+        cmd.bounding_box.width *= z;
+        cmd.bounding_box.height *= z;
+        switch (cmd.command_type) {
+            .text => {
+                const t = &cmd.render_data.text;
+                t.font_size = scaleWhole(t.font_size, z);
+                t.line_height = scaleWhole(t.line_height, z);
+                t.letter_spacing = scaleWhole(t.letter_spacing, z);
+            },
+            .rectangle => scaleRadius(&cmd.render_data.rectangle.corner_radius, z),
+            .border => {
+                scaleRadius(&cmd.render_data.border.corner_radius, z);
+                const w = &cmd.render_data.border.width;
+                w.left = scaleSide(w.left, z);
+                w.right = scaleSide(w.right, z);
+                w.top = scaleSide(w.top, z);
+                w.bottom = scaleSide(w.bottom, z);
+            },
+            else => {},
+        }
+    }
+}
+
+// A font size or a line height: whole points, never zero.
+fn scaleWhole(v: u16, z: f32) u16 {
+    if (v == 0) return 0;
+    const scaled = @as(f32, @floatFromInt(v)) * z;
+    return @intFromFloat(@max(1, @round(scaled)));
+}
+
+// A border side keeps at least one point: a 1 pt rule at 50% must still be a line.
+fn scaleSide(v: u16, z: f32) u16 {
+    if (v == 0) return 0;
+    const scaled = @as(f32, @floatFromInt(v)) * z;
+    return @intFromFloat(@max(1, @round(scaled)));
+}
+
+fn scaleRadius(r: *cl.CornerRadius, z: f32) void {
+    r.top_left *= z;
+    r.top_right *= z;
+    r.bottom_left *= z;
+    r.bottom_right *= z;
+}
+
 // Frame variant with injectable measurement and a synchronous command probe.
 pub fn clayFrameWithOptions(
     alloc: std.mem.Allocator,
@@ -597,7 +700,11 @@ pub fn clayFrameWithOptions(
     scroll_dy = wheel_dy;
     // Clay's built-in drag stays OFF (touch-style, inverted for a slider), and its wheel delta is divided by its own 10x factor: 1 point of gesture, 1 point of content.
     cl.updateScrollContainers(false, .{ .x = -wheel_dx / wheel_factor, .y = -wheel_dy / wheel_factor }, 1.0 / 60.0);
-    cl.setLayoutDimensions(.{ .w = @floatFromInt(w), .h = @floatFromInt(h) });
+    // A zoomed window shows fewer content points: the layout is computed for the smaller box the app declares in.
+    const lw = contentWidth(w);
+    const lh = contentHeight(h);
+    viewport_now = viewportOf(w, h);
+    cl.setLayoutDimensions(.{ .w = @floatFromInt(lw), .h = @floatFromInt(lh) });
     if (options.measure) |_| {
         cl.setMeasureTextFunction(*const FrameOptions, options, measureWithOptions);
     } else {
@@ -608,8 +715,10 @@ pub fn clayFrameWithOptions(
     text_used = 0;
     focus_cleared = false;
     text_editor.beginBlinkFrame();
-    declare(ctx, w, h);
+    declare(ctx, lw, lh);
     const commands = cl.endLayout();
+    // What the app declared is the truth; the window paints it at the zoom in force.
+    scaleCommands(@constCast(commands), content_zoom);
     // A frame that draws exactly what the last one did does not need presenting: the window already shows those pixels.
     last_command_count = commands.len;
     const digest = hashCommands(@constCast(commands));
@@ -622,9 +731,10 @@ pub fn clayFrameWithOptions(
     if (audit.enabled) _ = audit.frame(commands, pixel_scale);
     // Semantics resolve AFTER layout (that is when Clay has bounding boxes) and BEFORE the probe, so a probe that inspects the tree sees resolved geometry.
     if (options.resolve_semantics) {
-        semantics.resolve(@floatFromInt(w), @floatFromInt(h));
+        // Semantics are about the tree the app declared, which is in content points.
+        semantics.resolve(@floatFromInt(lw), @floatFromInt(lh));
     }
-    invokeProbe(options, commands, w, h);
+    invokeProbe(options, commands, lw, lh);
     // Registries are populated by declare above — resolve the cursor now.
     const shape = hoverCursorShape(pointer_x, pointer_y);
     current_shape = shape;
@@ -658,6 +768,56 @@ fn testRectCmd(x: f32, y: f32, w: f32, h: f32, color: [4]f32) cl.RenderCommand {
         .z_index = 0,
         .command_type = .rectangle,
     };
+}
+
+test "scaleCommands paints every length at the zoom in force" {
+    const scenes = @import("golden_scenes.zig");
+    var cmds = [_]cl.RenderCommand{
+        testRectCmd(10, 20, 100, 40, .{ 9, 9, 9, 255 }),
+        scenes.textCmd(0, 0, 100, 20, "hi", 14, .{ 255, 255, 255, 255 }),
+        scenes.sideBorder(0, 0, 100, 40, .{ .left = 2 }, .{ 255, 255, 255, 255 }),
+    };
+    scaleCommands(&cmds, 2.0);
+    try std.testing.expectEqual(@as(f32, 20), cmds[0].bounding_box.x);
+    try std.testing.expectEqual(@as(f32, 40), cmds[0].bounding_box.y);
+    try std.testing.expectEqual(@as(f32, 200), cmds[0].bounding_box.width);
+    try std.testing.expectEqual(@as(f32, 80), cmds[0].bounding_box.height);
+    // A run doubles its font size, so the glyphs the layout reserved room for are the glyphs that are painted.
+    try std.testing.expectEqual(@as(u16, 28), cmds[1].render_data.text.font_size);
+    // A one-sided border stays one-sided, and its width doubles with everything else.
+    try std.testing.expectEqual(@as(u16, 4), cmds[2].render_data.border.width.left);
+    try std.testing.expectEqual(@as(u16, 0), cmds[2].render_data.border.width.top);
+}
+
+test "a zoomed window holds fewer content points, and the ladder clamps" {
+    setZoom(2.0);
+    defer setZoom(1.0);
+    try std.testing.expectEqual(@as(u32, 360), contentWidth(720));
+    try std.testing.expectEqual(@as(u32, 240), contentHeight(480));
+    // The same correction in one value: a widget reads content points and never divides by the zoom itself.
+    try std.testing.expectEqual(Viewport{ .w = 360, .h = 240 }, viewportOf(720, 480));
+    // Never zero, whatever the rounding says: a layout of no points is not a layout.
+    setZoom(3.0);
+    try std.testing.expectEqual(@as(u32, 1), contentWidth(1));
+    // A factor off the ladder snaps onto it instead of collapsing the window.
+    setZoom(9.0);
+    try std.testing.expectEqual(@as(f32, 3.0), zoom());
+    setZoom(0);
+    try std.testing.expectEqual(@as(f32, 1.0), zoom());
+}
+
+test "the viewport a frame reports is the box it was last given, and zero before any frame" {
+    setZoom(1.0);
+    setViewport(.{});
+    try std.testing.expectEqual(Viewport{ .w = 0, .h = 0 }, viewport());
+    setViewport(viewportOf(1280, 840));
+    try std.testing.expectEqual(Viewport{ .w = 1280, .h = 840 }, viewport());
+    setZoom(1.5);
+    defer setZoom(1.0);
+    setViewport(viewportOf(1280, 840));
+    // 1280 / 1.5 = 853.3 points, so a window at 150% has 853 points to declare in.
+    try std.testing.expectEqual(@as(f32, 853), viewport().w);
+    try std.testing.expectEqual(@as(f32, 560), viewport().h);
 }
 
 test "hashCommands is stable for identical output" {

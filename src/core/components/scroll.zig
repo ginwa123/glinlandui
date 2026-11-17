@@ -957,3 +957,120 @@ test "ensureVisible scrolls the least amount that shows a rect, and nothing when
     // And an unknown container is a no-op rather than a crash.
     ensureVisible("test-ensure-missing", 500, 20);
 }
+
+// ---- the clip, in pixels ---------------------------------------------------------------------------------------
+
+const soft = @import("../render_software.zig");
+const testing = std.testing;
+
+var bleed_rows: [20][]const u8 = undefined;
+
+fn bleedChildren(_: void) void {
+    for (&bleed_rows, 0..) |line, i| {
+        _ = i;
+        cl.text(line, .{ .font_size = 10, .color = .{ 1, 1, 1, 1 } });
+    }
+}
+
+fn declareBleedScroll(_: void) void {
+    scroll(.{
+        .id = .{ .text = "test-bleed-scroll" },
+        .direction = .vertical,
+        .w = .{ .fixed = 200 },
+        .h = .{ .fixed = 100 },
+        .show_scrollbar = false,
+    }, {}, bleedChildren);
+}
+
+test "a scrolled box paints nothing outside itself, in either direction" {
+    for (&bleed_rows) |*line| line.* = "row";
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.beginLayout();
+    declareBleedScroll({});
+    _ = cl.endLayout();
+    // Scrolled to the middle: the content is offset by a negative child_offset, which is when a missing clip shows.
+    scrollBy("test-bleed-scroll", 0, 60);
+    cl.beginLayout();
+    declareBleedScroll({});
+    const cmds = cl.endLayout();
+    try std.testing.expect(view("test-bleed-scroll").y != 0);
+
+    var surface = try soft.Surface.init(std.testing.allocator, 300, 200);
+    defer surface.deinit();
+    surface.setClearColor(.{ 0.0, 0.0, 0.0, 1.0 });
+    surface.clear();
+    surface.renderCommands(cmds);
+    var outside: usize = 0;
+    var y: i64 = 0;
+    while (y < 200) : (y += 1) {
+        var x: i64 = 0;
+        while (x < 300) : (x += 1) {
+            const inside = x < 200 and y < 100;
+            if (inside) continue;
+            const px = surface.px(x, y);
+            if (px[0] != 0 or px[1] != 0 or px[2] != 0) outside += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), outside);
+}
+
+// A scrolled page holding a scrolled box: the real nesting, where an inner clip must follow the outer offset.
+fn declareNested(_: void) void {
+    scroll(.{
+        .id = .{ .text = "test-outer" },
+        .direction = .vertical,
+        .w = .{ .fixed = 300 },
+        .h = .{ .fixed = 200 },
+        .show_scrollbar = false,
+    }, {}, nestedChildren);
+}
+
+fn nestedChildren(_: void) void {
+    // A tall spacer pushes the inner box well below the outer viewport's top.
+    cl.UI()(.{ .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(150) } } })({});
+    scroll(.{
+        .id = .{ .text = "test-inner" },
+        .direction = .vertical,
+        .w = .{ .fixed = 200 },
+        .h = .{ .fixed = 100 },
+        .show_scrollbar = false,
+    }, {}, bleedChildren);
+    cl.UI()(.{ .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(150) } } })({});
+}
+
+test "an inner scrolled box clips to itself even when the outer page is scrolled" {
+    for (&bleed_rows) |*line| line.* = "row";
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.beginLayout();
+    declareNested({});
+    _ = cl.endLayout();
+
+    // Scroll both: the outer by 60 so the inner box sits higher, and the inner by 60 so its rows are offset.
+    scrollBy("test-outer", 0, 60);
+    scrollBy("test-inner", 0, 60);
+    cl.beginLayout();
+    declareNested({});
+    const cmds = cl.endLayout();
+    try testing.expect(view("test-inner").y != 0);
+
+    // Every command the inner box owns must be inside its own box: that is what a scissor is for.
+    const inner = cl.getElementData(cl.getElementId("test-inner")).bounding_box;
+    var surface = try soft.Surface.init(std.testing.allocator, 400, 300);
+    defer surface.deinit();
+    surface.setClearColor(.{ 0.0, 0.0, 0.0, 1.0 });
+    surface.clear();
+    surface.renderCommands(cmds);
+    var outside: usize = 0;
+    var y: i64 = 0;
+    while (y < 300) : (y += 1) {
+        var x: i64 = 0;
+        while (x < 400) : (x += 1) {
+            const inside = @as(f32, @floatFromInt(x)) >= inner.x and @as(f32, @floatFromInt(x)) < inner.x + inner.width and
+                @as(f32, @floatFromInt(y)) >= inner.y and @as(f32, @floatFromInt(y)) < inner.y + inner.height;
+            if (inside) continue;
+            const px = surface.px(x, y);
+            if (px[0] != 0 or px[1] != 0 or px[2] != 0) outside += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), outside);
+}

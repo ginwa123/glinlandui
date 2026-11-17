@@ -50,6 +50,48 @@ application owns (`SliderProps.value/min/max`), and the payload *inside* a vocab
 derived from it (`ToggleProps.h`, which decides the knob) is a `Len`, because the component
 has to compute with the number and a growing axis gives it none.
 
+## Sizing a row: `grow` is Compose's `weight`
+
+A row lays out its fixed children first and hands the rest to its `grow` ones.
+
+| written | meaning | Compose |
+|---|---|---|
+| `.w = .grow` | the whole remainder, or an equal share of it when several siblings grow | `Modifier.weight(1f)` |
+| `.w = .growing(160, 0)` | the same, but never narrower than 160; `0` max means no ceiling | `Modifier.weight(1f).widthIn(min = 160.dp)` |
+| `.w = .between(90, 220)` | as wide as the content, clamped to those bounds | `Modifier.widthIn(...)` |
+| `.w = .{ .fixed = 70 }` | exactly 70 | `Modifier.width(70.dp)` |
+
+A `grow` widget does **not** push its row wider, even when its content is: a text field clips its
+own value (every field is a horizontal clip), so a 900 pt URL in a 200 pt field is clipped and
+scrolled rather than laid out past the window. That is why an app never has to cap a field, and
+it is what the two weight tests in `input.zig` pin down.
+
+Clay cannot weight siblings by RATIO: `grow` distributes the remainder equally, so `.grow` twice
+is 50/50 and there is no `weight(2f)`.
+
+## Reaching a component
+
+Everything here is private to the toolkit: an app imports `glinlandui.components`, which is
+`src/core/component.zig`, and that file re-exports every widget in this folder. A file outside
+this folder may not write `@import("…/components/button.zig")`, and a component added here must be
+added to the façade or no app can reach it. `ci/check_component_imports.sh` enforces both
+directions.
+
+At the call site the entry function is the widget's name, so an app aliases the function:
+
+```zig
+const components = glinlandui.components;
+const box = components.box.box;
+const button = components.button.button;
+const label = components.text.label;
+
+box(.{ .id = .{ .text = "root" }, .direction = .row }, scope, children);
+button(.{ .id = .{ .text = "send" }, .label = .{ .text = "Send" }, .on_click = .{ .f = onSend, .ctx = scope.vm } });
+```
+
+Component types still come from the same module (`components.split.State`, `components.modal.Action`),
+so a file that needs both aliases the module too and qualifies only the entry call.
+
 ## The catalogue
 
 | file | what it declares |
@@ -60,7 +102,7 @@ has to compute with the number and a growing axis gives it none.
 | `input.zig` | ONE text field: `textField(&field)` draws a `Field`, which carries its look, its draft, the caret and the selection, and raises `on_change`/`on_submit`. The engine types into the focused one, so an app routes no keys. `value` is the declared text and wins whenever it changes, and `placeholder` is drawn while the draft is empty. `click_z` lifts the field's own hit target above an overlay that swallows clicks. Every field raises its own card — Cut, Copy, Paste, Select All always, then `Field.menu`'s rows with the app's own indices |
 | `list.zig` | rows, cells or a grid, with selection, hover and per-row click targets — registered BEFORE each row, so a widget inside it wins the hit test |
 | `tree.zig` | hierarchical rows: depth indent, caret, expansion state, selection, right-aligned meta |
-| `tabs.zig` | a tab bar: active state, optional accent dot, optional close button |
+| `tabs.zig` | a tab bar: per-tab hover, an active line, a bottom rule, an unsaved dot in the close slot, optional accent dot, drag-to-reorder |
 | `badge.zig` | a short label in a rounded pill — a type, a count, a state |
 | `modal.zig` | a scrim over the window and a centred card with a title, a sentence and action rows |
 | `scroll.zig` | a scroll container with a scrollbar, plus `scrollBy` |

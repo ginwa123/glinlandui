@@ -1,10 +1,11 @@
 // The View: pure declaration from the state.
 // Nothing here writes the model. A widget raises an intent on the ViewModel and the next frame draws whatever the model says.
 const glinlandui = @import("glinlandui");
-const box_mod = glinlandui.components.box;
-const text_mod = glinlandui.components.text;
-const button = glinlandui.components.button;
-const scroll_mod = glinlandui.components.scroll;
+const box = glinlandui.components.box.box;
+const spacer = glinlandui.components.box.spacer;
+const label = glinlandui.components.text.label;
+const button = glinlandui.components.button.button;
+const scroll = glinlandui.components.scroll.scroll;
 const frame = glinlandui.frame;
 const props = glinlandui.props;
 const Color = glinlandui.Color;
@@ -30,7 +31,7 @@ pub const Scope = struct {
 
 // `@Composable fun LazyScrollScreen(vm: LazyScrollViewModel = viewModel())`
 pub fn Screen(scope: *Scope) void {
-    box_mod.box(.{
+    box(.{
         .id = .{ .text = "root" },
         .w = .grow,
         .h = .grow,
@@ -47,7 +48,7 @@ fn body(scope: *Scope) void {
 }
 
 fn header(scope: *Scope) void {
-    box_mod.box(.{
+    box(.{
         .id = .{ .text = "header" },
         .w = .grow,
         .h = .{ .fixed = 44 },
@@ -61,8 +62,8 @@ fn header(scope: *Scope) void {
 fn headerChildren(scope: *Scope) void {
     const t = scope.theme;
     const s = scope.ui.stats();
-    text_mod.label(.{ .label = .{ .text = "10,000 rows", .size = t.type_scale.body, .color = t.colors.text } });
-    text_mod.label(.{
+    label(.{ .label = .{ .text = "10,000 rows", .size = t.type_scale.body, .color = t.colors.text } });
+    label(.{
         .label = .{
             .text = frame.formatText("fps {d: >6.1}   frame {d: >5.2} ms   avg {d: >5.2}   max {d: >6.2}", .{
                 s.fps, s.last_ms, s.avg_ms, s.max_ms,
@@ -72,15 +73,15 @@ fn headerChildren(scope: *Scope) void {
             .color = if (s.last_ms > state_mod.budget_144_ms) over_budget else within_budget,
         },
     });
-    text_mod.label(.{
+    label(.{
         .label = .{
             .text = frame.formatText("declared {d} of {d}", .{ scope.ui.declared, state_mod.row_count }),
             .size = t.type_scale.body,
             .color = t.colors.text_dim,
         },
     });
-    box_mod.spacer(.{ .text = "header.spacer" });
-    button.button(.{
+    spacer(.{ .text = "header.spacer" });
+    button(.{
         .id = .{ .text = "header.auto" },
         .label = .{ .text = if (scope.ui.auto) "Stop" else "Scroll", .size = t.type_scale.body },
         .bg = if (scope.ui.auto) t.colors.primary else t.colors.surface_variant,
@@ -89,7 +90,7 @@ fn headerChildren(scope: *Scope) void {
         .pad = props.Pad.axes(4, 14),
         .on_click = .{ .f = onToggleAuto, .ctx = scope.vm },
     });
-    button.button(.{
+    button(.{
         .id = .{ .text = "header.bottom" },
         .label = .{ .text = "End", .size = t.type_scale.body },
         .bg = t.colors.surface_variant,
@@ -112,7 +113,7 @@ fn onJumpBottom(raw: ?*anyopaque) void {
 
 fn list(scope: *Scope) void {
     const t = scope.theme;
-    scroll_mod.scroll(.{
+    scroll(.{
         .id = .{ .text = view_model.scroll_id },
         .direction = .vertical,
         .w = .grow,
@@ -130,7 +131,7 @@ fn listChildren(scope: *Scope) void {
     // Everything above the viewport is ONE empty rectangle of its exact height: scrolling past ten thousand rows costs a single draw command, and the
     // scrollbar still knows how long the list is.
     if (vis.first_row > 0) {
-        box_mod.box(.{
+        box(.{
             .id = .{ .text = "lazy.pad.top" },
             .w = .grow,
             .h = .{ .fixed = @as(f32, @floatFromInt(vis.first_row)) * state_mod.row_h },
@@ -144,7 +145,7 @@ fn listChildren(scope: *Scope) void {
 
     const after = vis.first_row + vis.row_count;
     if (after < state_mod.row_count) {
-        box_mod.box(.{
+        box(.{
             .id = .{ .text = "lazy.pad.bottom" },
             .w = .grow,
             .h = .{ .fixed = @as(f32, @floatFromInt(state_mod.row_count - after)) * state_mod.row_h },
@@ -162,7 +163,7 @@ const RowCtx = struct {
 // One row: the row box with its hover colour, and the two labels inside it. Only the visible rows are declared.
 fn row(scope: *Scope, index: usize) void {
     const t = scope.theme;
-    box_mod.box(.{
+    box(.{
         .id = props.Id.at("lazy.row", index),
         .direction = .row,
         .w = .grow,
@@ -177,14 +178,14 @@ fn row(scope: *Scope, index: usize) void {
 
 fn rowChildren(ctx: RowCtx) void {
     const t = ctx.scope.theme;
-    text_mod.label(.{ .label = .{ .text = state_mod.rowName(ctx.index), .size = t.type_scale.label, .color = t.colors.text } });
-    text_mod.label(.{ .label = .{ .text = state_mod.rowMeta(ctx.index), .size = t.type_scale.label, .color = t.colors.text_dim } });
+    label(.{ .label = .{ .text = state_mod.rowName(ctx.index), .size = t.type_scale.label, .color = t.colors.text } });
+    label(.{ .label = .{ .text = state_mod.rowMeta(ctx.index), .size = t.type_scale.label, .color = t.colors.text_dim } });
 }
 
 fn noChildren(_: *Scope) void {}
 
 fn footer(scope: *Scope) void {
-    box_mod.box(.{
+    box(.{
         .id = .{ .text = "footer" },
         .w = .grow,
         .h = .{ .fixed = 26 },
@@ -197,7 +198,7 @@ fn footer(scope: *Scope) void {
 
 fn footerChildren(scope: *Scope) void {
     const t = scope.theme;
-    text_mod.label(.{
+    label(.{
         .label = .{ .text = "Space scrolls  ·  End jumps  ·  only the visible rows are declared", .size = t.type_scale.caption, .color = t.colors.text_dim },
     });
 }

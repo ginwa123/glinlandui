@@ -4,6 +4,7 @@ const cl = @import("zclay");
 const headless = @import("../testing/headless.zig");
 const soft = @import("../render_software.zig");
 const prop = @import("../props.zig");
+const theme_mod = @import("../theme.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const caret_mod = @import("caret.zig");
@@ -379,8 +380,9 @@ pub const Field = struct {
     // A field grows to the width it is given and fits its text vertically, unless the caller says otherwise.
     w: prop.Size = .grow,
     h: prop.Size = .{ .fixed = 32 },
-    pad: prop.Pad = prop.Pad.axes(0, 10),
-    radius: prop.Radius = prop.Radius.all(6),
+    // A field is its own surface: the theme's field padding and control corner unless the app says otherwise.
+    pad: prop.Pad = prop.Pad.themed,
+    radius: prop.Radius = prop.Radius.themed,
     border: prop.Border = .{},
     // The ring a focused field draws: outside the box, so taking the keyboard moves no text, and bright enough to read on any field in the theme.
     focus_ring: Color = Color.rgb(0x7a, 0xb8, 0xff),
@@ -419,6 +421,8 @@ pub const Field = struct {
     name_len: usize = 0,
     // Left padding, written by `textField` each frame so a click and the caret share one origin.
     pad_lr: prop.Len = .{ .px = 8 },
+    // The vertical padding stamp of the last draw: the caret and the pointer need the numbers the text was drawn with.
+    pad_tb: prop.Len = .{},
     // True while this field owns a drag in flight; the field ticks it, so the app never has to.
     dragging: bool = false,
     // How far the text has slid left inside the field, so the caret stays in view: the clip applies it.
@@ -816,7 +820,7 @@ fn onMenuOpen(ctx: ?*anyopaque) void {
     if (!data.found) return;
     const bb = data.bounding_box;
     const x = frame_mod.ptr_x - bb.x - field.pad_lr.pts() + field.h_scroll;
-    const y = frame_mod.ptr_y - bb.y - field.pad.top.pts();
+    const y = frame_mod.ptr_y - bb.y - field.pad_tb.pts();
     const at = field.caretOffsetAtPoint(x, y);
     if (field.editor.caret.selection()) |span| {
         if (at >= @min(span.start, span.end) and at <= @max(span.start, span.end)) {
@@ -867,7 +871,7 @@ fn dragSelect(field: *Field) void {
     const bb = data.bounding_box;
     // `extend` is false on the anchoring frame (place the caret) and true after it (grow the selection from that anchor).
     const x = frame_mod.ptr_x - bb.x - field.pad_lr.pts() + field.h_scroll;
-    const y = frame_mod.ptr_y - bb.y - field.pad.top.pts();
+    const y = frame_mod.ptr_y - bb.y - field.pad_tb.pts();
     field.editor.setCaret(field.caretOffsetAtPoint(x, y), field.dragging);
     if (!field.dragging) {
         field.dragging = true;
@@ -884,7 +888,9 @@ pub fn textField(field: *Field) void {
     // Every enabled field is in the tab order: a screen full of fields and no pointer still has to be usable (WCAG 2.1.1).
     if (!field.disabled and name.len > 0) focus.declare(name);
     // The click and drag handlers need the same origin and metrics the text is drawn with.
-    field.pad_lr = field.pad.left;
+    const pad = field.pad.resolve(theme_mod.current().metrics.field_pad);
+    field.pad_lr = pad.left;
+    field.pad_tb = pad.top;
     // The model's value wins when it CHANGED; an unchanged value leaves the draft and the caret alone.
     const adopt = if (field.declared_known) !field.declaredIs(field.value) else input.len == 0;
     if (!field.declared_known or adopt) {
@@ -935,12 +941,12 @@ pub fn textField(field: *Field) void {
         .layout = .{
             .direction = if (field.multiline) .top_to_bottom else .left_to_right,
             .sizing = .{ .w = field.w.clay(), .h = field.h.clay() },
-            .padding = field.pad.clay(),
+            .padding = pad.clay(),
             .child_alignment = .{ .x = .left, .y = if (field.multiline) .top else .center },
             .child_gap = 0,
         },
         .background_color = (if (field.disabled) field.disabled_bg else field.bg).toClay(),
-        .corner_radius = field.radius.clay(),
+        .corner_radius = field.radius.resolve(theme_mod.current().metrics.corner(.md)).clay(),
         .border = field.border.clay(),
     })({
         // The value rides inside ONE horizontal clip, so it slides under the field's right edge instead of over a neighbour.
@@ -1280,7 +1286,7 @@ fn onFieldDoubleClick(ctx: ?*anyopaque) void {
     if (!data.found) return;
     // The clip slid the text left by `h_scroll`, so the point is measured from where the text now starts.
     const x = frame_mod.ptr_x - data.bounding_box.x - field.pad_lr.pts() + field.h_scroll;
-    const y = frame_mod.ptr_y - data.bounding_box.y - field.pad.top.pts();
+    const y = frame_mod.ptr_y - data.bounding_box.y - field.pad_tb.pts();
     text_editor.selectWordAt(&field.editor, field.caretOffsetAtPoint(x, y));
     field.editor.idle = 0;
     frame_mod.setFocus(field.name());
@@ -1310,7 +1316,7 @@ fn onFieldClick(ctx: ?*anyopaque) void {
     if (!data.found) return;
     // The clip slid the text left by `h_scroll`, so the point is measured from where the text now starts.
     const x = frame_mod.ptr_x - data.bounding_box.x - field.pad_lr.pts() + field.h_scroll;
-    const y = frame_mod.ptr_y - data.bounding_box.y - field.pad.top.pts();
+    const y = frame_mod.ptr_y - data.bounding_box.y - field.pad_tb.pts();
     field.editor.setCaret(field.caretOffsetAtPoint(x, y), false);
     field.editor.idle = 0;
     frame_mod.setFocus(field.name());
@@ -1634,9 +1640,12 @@ test "Field carries neutral dark defaults" {
     try std.testing.expectEqual(@as(f32, 14), p.font_size.pts());
     try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.fg);
     try std.testing.expectEqual(Color.rgb(0x26, 0x26, 0x26), p.bg);
-    try std.testing.expectEqual(@as(f32, 6), p.radius.top_left.pts());
+    // Both are the theme's now: a field that sets neither takes `field_pad` and the control corner.
+    const m = theme_mod.Metrics.defaults;
+    try std.testing.expectEqual(@as(f32, 6), p.radius.resolve(m.corner(.md)).top_left.pts());
     try std.testing.expect(std.meta.activeTag(p.w) == .grow);
-    try std.testing.expectEqual(@as(f32, 0), p.pad.top.pts());
+    try std.testing.expectEqual(@as(f32, 0), p.pad.resolve(m.field_pad).top.pts());
+    try std.testing.expectEqual(@as(f32, 10), p.pad.resolve(m.field_pad).left.pts());
 }
 
 // ---- Field: the draft, the value prop, and the intents ----
@@ -2712,7 +2721,7 @@ test "a single-line caret sits on the glyph boundary, with the field's padding c
     const caret = frame_mod.bounds(.IDI("test-caret-field", 2)) orelse return error.CaretMissing;
     const advance = caret_field.measure("sss", caret_field.font_size.whole());
     // The text starts at the field's padding, and the caret at the run's end: half a device pixel is the whole budget.
-    try std.testing.expectApproxEqAbs(box.x + caret_field.pad.left.pts() + advance, caret.x, half_pixel());
+    try std.testing.expectApproxEqAbs(box.x + caret_field.pad_lr.pts() + advance, caret.x, half_pixel());
 
     // One more glyph moves the bar by one advance, so the gap cannot grow with the text; the snap may cost a pixel.
     caret_field.setText("ssss");
@@ -2771,7 +2780,7 @@ test "a caret lands on a whole device pixel at 125%, wherever its field starts" 
         const device = caret.x * frame_mod.pixel_scale;
         try std.testing.expectApproxEqAbs(@round(device), device, 0.01);
         // And it is the glyph boundary's own pixel, never a whole glyph away.
-        const want = box.x + grid_field.pad.left.pts() + grid_field.measure(grid_field.editor.text()[0..at], size);
+        const want = box.x + grid_field.pad_lr.pts() + grid_field.measure(grid_field.editor.text()[0..at], size);
         try std.testing.expect(@abs(caret.x - want) <= half_pixel() + 0.01);
     }
 }
@@ -2798,7 +2807,7 @@ test "a scrolled single-line caret slides with the text, and the scroll is count
     const box = frame_mod.bounds(scrolled_field.id.clay()) orelse return error.FieldMissing;
     const caret = frame_mod.bounds(.IDI("test-scrolled-field", 2)) orelse return error.CaretMissing;
     const advance = scrolled_field.measure(long_value, scrolled_field.font_size.whole());
-    try std.testing.expectApproxEqAbs(box.x + scrolled_field.pad.left.pts() + advance - scrolled_field.h_scroll, caret.x, half_pixel());
+    try std.testing.expectApproxEqAbs(box.x + scrolled_field.pad_lr.pts() + advance - scrolled_field.h_scroll, caret.x, half_pixel());
 }
 
 var shrink_field: Field = .{ .id = .{ .text = "test-shrink-field" }, .w = .{ .fixed = 200 } };

@@ -1,13 +1,14 @@
 // The View: pure declaration from the state.
 // Nothing here writes the model. A widget raises an intent on the ViewModel and the next frame draws whatever the model says.
 const glinlandui = @import("glinlandui");
-const box_mod = glinlandui.components.box;
-const text_mod = glinlandui.components.text;
-const button = glinlandui.components.button;
-const checkbox_mod = glinlandui.components.checkbox;
-const input_mod = glinlandui.components.input;
-const list_mod = glinlandui.components.list;
-const scroll_mod = glinlandui.components.scroll;
+const box = glinlandui.components.box.box;
+const spacer = glinlandui.components.box.spacer;
+const label = glinlandui.components.text.label;
+const button = glinlandui.components.button.button;
+const checkbox = glinlandui.components.checkbox.checkbox;
+const textField = glinlandui.components.input.textField;
+const list = glinlandui.components.list.list;
+const scroll = glinlandui.components.scroll.scroll;
 const frame = glinlandui.frame;
 const props = glinlandui.props;
 
@@ -32,7 +33,7 @@ pub const Scope = struct {
 
 // `@Composable fun TodoScreen(vm: TodoViewModel = viewModel())`
 pub fn TodoScreen(scope: *Scope) void {
-    box_mod.box(.{
+    box(.{
         .id = .{ .text = "todo.root" },
         .w = .grow,
         .h = .grow,
@@ -49,7 +50,7 @@ fn body(scope: *Scope) void {
 
 // `Row(Modifier.padding(16.dp)) { TextField(.., Modifier.weight(1f)); Button { Text("Add") } }`
 fn header(scope: *Scope) void {
-    box_mod.box(.{
+    box(.{
         .id = .{ .text = "todo.header" },
         .direction = .row,
         .w = .grow,
@@ -64,9 +65,9 @@ fn headerChildren(scope: *Scope) void {
     const field = &scope.vm.field;
     // `TextField(value = state.input)`: one line of state, and the field reports every edit back through `on_change`.
     field.value = scope.state.draft();
-    input_mod.textField(field);
+    textField(field);
 
-    button.button(.{
+    button(.{
         .id = .{ .text = "todo.add" },
         .label = .{ .text = "Add", .size = t.type_scale.label, .color = t.colors.on_primary },
         .bg = t.colors.primary,
@@ -86,7 +87,7 @@ fn onAdd(raw: ?*anyopaque) void {
 // `LazyColumn { itemsIndexed(todos) { i, todo -> Row { Checkbox; Text; TextButton } } }`
 fn todoList(scope: *Scope) void {
     const t = scope.theme;
-    scroll_mod.scroll(.{
+    scroll(.{
         .id = .{ .text = list_id },
         .direction = .vertical,
         .w = .grow,
@@ -100,11 +101,11 @@ fn todoList(scope: *Scope) void {
 fn listChildren(scope: *Scope) void {
     const t = scope.theme;
     if (scope.state.count == 0) {
-        text_mod.label(.{ .label = .{ .text = "No todos yet — type one and press Enter.", .size = t.type_scale.body, .color = t.colors.text_dim } });
+        label(.{ .label = .{ .text = "No todos yet — type one and press Enter.", .size = t.type_scale.body, .color = t.colors.text_dim } });
         return;
     }
     // The engine's list owns the rows: their ids, their hover, and the click that selects one.
-    list_mod.list(.{
+    list(.{
         .id = .{ .text = rows_id },
         .row_h = row_h,
         .row_bg = t.colors.background,
@@ -126,7 +127,7 @@ fn renderRow(scope: *Scope, todo: state_mod.Todo, index: usize) void {
     const ctxs = &scope.vm.row_ctxs;
     ctxs[index] = .{ .vm = scope.vm, .index = index };
 
-    checkbox_mod.checkbox(.{
+    checkbox(.{
         .id = .{ .text = frame.elementId("todo.row.check", index) },
         .checked = todo.done,
         .size = .{ .px = 18 },
@@ -137,11 +138,11 @@ fn renderRow(scope: *Scope, todo: state_mod.Todo, index: usize) void {
         .on_click = .{ .f = onToggle, .ctx = &ctxs[index] },
     });
     // The state is a value and this returns before Clay draws, so the run is copied into the frame's scratch.
-    text_mod.label(.{
+    label(.{
         .label = .{ .text = frame.formatText("{s}", .{todo.text()}), .size = t.type_scale.body, .color = if (todo.done) t.colors.text_done else t.colors.text },
     });
-    box_mod.spacer(props.Id.at("todo.row.spacer", index));
-    button.button(.{
+    spacer(props.Id.at("todo.row.spacer", index));
+    button(.{
         .id = props.Id.at("todo.row.delete", index),
         .label = .{ .text = "Delete", .size = t.type_scale.label },
         .bg = t.colors.background,
@@ -164,7 +165,7 @@ fn onDelete(raw: ?*anyopaque) void {
 }
 
 fn footer(scope: *Scope) void {
-    box_mod.box(.{
+    box(.{
         .id = .{ .text = "todo.footer" },
         .w = .grow,
         .h = .{ .fixed = 26 },
@@ -178,11 +179,11 @@ fn footer(scope: *Scope) void {
 fn footerChildren(scope: *Scope) void {
     const t = scope.theme;
     const state = &scope.state;
-    text_mod.label(.{
+    label(.{
         .label = .{ .text = frame.formatText("{d} of {d} done", .{ state.doneCount(), state.count }), .size = t.type_scale.caption, .color = t.colors.text_dim },
     });
-    box_mod.spacer(.{ .text = "todo.footer.spacer" });
-    text_mod.label(.{
+    spacer(.{ .text = "todo.footer.spacer" });
+    label(.{
         .label = .{ .text = "Enter adds  ·  click a row to toggle", .size = t.type_scale.caption, .color = t.colors.text_done },
     });
 }

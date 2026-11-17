@@ -1,6 +1,7 @@
 //! The headless Clay harness every component test shares: one stub measurer, one layout, one command count.
 const std = @import("std");
 const cl = @import("zclay");
+const frame_mod = @import("../frame.zig");
 
 /// A deterministic text measurer: with no font file a box's width is a pure function of its text.
 pub fn stubMeasure(s: []const u8, cfg: *cl.TextElementConfig, _: void) cl.Dimensions {
@@ -16,6 +17,8 @@ pub fn begin(pointer: cl.Vector2, pressed: bool) void {
     const buf = std.heap.page_allocator.alloc(u8, cl.minMemorySize()) catch @panic("headless Clay arena");
     const arena = cl.Arena.init(buf);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
+    // The frame's viewport is what a widget reads instead of being handed the window: a harness says it too.
+    frame_mod.setViewport(frame_mod.viewportOf(720, 480));
     cl.setMeasureTextFunction(void, {}, stubMeasure);
     cl.setPointerState(pointer, pressed);
 }

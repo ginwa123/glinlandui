@@ -3,7 +3,7 @@
 // Every public function here is an INTENT the view or the host may raise: it never draws, never reads a widget, never knows a window exists.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
-const input_mod = glinlandui.components.input;
+const input = glinlandui.components.input;
 const state_mod = @import("state.zig");
 
 const Key = state_mod.Key;
@@ -57,14 +57,14 @@ pub const CalculatorViewModel = struct {
     }
 
     // `fun onKey(code: KeyCode): Boolean`: the Host KeyChain's handler, in the shape the chain calls it. Escape is deliberately NOT consumed — `keyToClose` uses it to quit the window.
-    pub fn onKeycode(self: *CalculatorViewModel, mods: input_mod.Mods, keycode: u32) bool {
-        if (input_mod.keyChar(keycode, mods.shift)) |c| {
+    pub fn onKeycode(self: *CalculatorViewModel, mods: input.Mods, keycode: u32) bool {
+        if (input.keyChar(keycode, mods.shift)) |c| {
             self.feedChar(c);
             return true;
         }
         switch (keycode) {
-            KEY_KP_ENTER, input_mod.KEY_ENTER => self.press(.equals),
-            input_mod.KEY_BACKSPACE, input_mod.KEY_DELETE => self.press(.backspace),
+            KEY_KP_ENTER, input.KEY_ENTER => self.press(.equals),
+            input.KEY_BACKSPACE, input.KEY_DELETE => self.press(.backspace),
             KEY_KP_PLUS => self.press(.plus),
             KEY_KP_MINUS => self.press(.minus),
             KEY_KP_MULTIPLY => self.press(.times),
@@ -84,16 +84,16 @@ pub const CalculatorViewModel = struct {
 
 test "keyChar maps the calculator's printable keycodes" {
     // 0-9 live on the evdev digits row (2..11), '*' is evdev 55.
-    try std.testing.expectEqual(@as(?u8, '7'), input_mod.keyChar(8, false));
-    try std.testing.expectEqual(@as(?u8, '0'), input_mod.keyChar(11, false));
-    try std.testing.expectEqual(@as(?u8, '/'), input_mod.keyChar(53, false));
-    try std.testing.expectEqual(@as(?u8, '.'), input_mod.keyChar(52, false));
+    try std.testing.expectEqual(@as(?u8, '7'), input.keyChar(8, false));
+    try std.testing.expectEqual(@as(?u8, '0'), input.keyChar(11, false));
+    try std.testing.expectEqual(@as(?u8, '/'), input.keyChar(53, false));
+    try std.testing.expectEqual(@as(?u8, '.'), input.keyChar(52, false));
     // '*' is NOT in keyChar's table: evdev 55 is the keypad '*', so it is routed by onKeycode's KEY_KP_MULTIPLY arm instead.
-    try std.testing.expectEqual(@as(?u8, null), input_mod.keyChar(KEY_KP_MULTIPLY, false));
-    try std.testing.expectEqual(@as(?u8, '+'), input_mod.keyChar(13, true));
+    try std.testing.expectEqual(@as(?u8, null), input.keyChar(KEY_KP_MULTIPLY, false));
+    try std.testing.expectEqual(@as(?u8, '+'), input.keyChar(13, true));
     // Non-printables (Enter, Backspace, Escape) are handled by the owner.
-    try std.testing.expectEqual(@as(?u8, null), input_mod.keyChar(input_mod.KEY_ENTER, false));
-    try std.testing.expectEqual(@as(?u8, null), input_mod.keyChar(input_mod.KEY_BACKSPACE, false));
+    try std.testing.expectEqual(@as(?u8, null), input.keyChar(input.KEY_ENTER, false));
+    try std.testing.expectEqual(@as(?u8, null), input.keyChar(input.KEY_BACKSPACE, false));
 }
 
 test "a keypad click and the same key press agree" {

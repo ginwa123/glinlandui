@@ -198,7 +198,7 @@ pub fn toEvdev(wparam: u32) u32 {
 
 // ===================== tests (parity suite — every platform) =====================
 
-const input = @import("../core/components/input.zig");
+const input = @import("../core/component.zig").input;
 const contract = @import("../core/window_contract.zig");
 
 test "letters translate to their evdev codes" {

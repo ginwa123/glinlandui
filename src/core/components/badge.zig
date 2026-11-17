@@ -4,14 +4,16 @@ const std = @import("std");
 const cl = @import("zclay");
 const headless = @import("../testing/headless.zig");
 const prop = @import("../props.zig");
+const theme_mod = @import("../theme.zig");
 const Color = @import("../color.zig").Color;
 
 pub const BadgeProps = struct {
     id: prop.Id,
     label: prop.Label = .{ .size = .{ .px = 11 }, .color = Color.rgb(0x8a, 0x8a, 0x94) },
     bg: Color = Color.rgb(0x26, 0x26, 0x2c),
-    pad: prop.Pad = prop.Pad.axes(1, 6),
-    radius: prop.Radius = prop.Radius.all(4),
+    // A chip is the smallest surface: the theme's chip padding and its small corner unless the app says otherwise.
+    pad: prop.Pad = prop.Pad.themed,
+    radius: prop.Radius = prop.Radius.themed,
 };
 
 /// Declare a badge.
@@ -21,11 +23,11 @@ pub fn badge(props: BadgeProps) void {
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{ .w = .fit, .h = .fit },
-            .padding = props.pad.clay(),
+            .padding = props.pad.resolve(theme_mod.current().metrics.chip_pad).clay(),
             .child_alignment = .{ .x = .center, .y = .center },
         },
         .background_color = props.bg.toClay(),
-        .corner_radius = props.radius.clay(),
+        .corner_radius = props.radius.resolve(theme_mod.current().metrics.corner(.sm)).clay(),
     })({
         cl.text(props.label.text, .{ .font_size = props.label.size.whole(), .color = props.label.color.toClay() });
     });

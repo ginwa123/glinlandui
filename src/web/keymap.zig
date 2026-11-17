@@ -152,7 +152,7 @@ pub fn isMapped(code: []const u8) bool {
 
 // ===================== tests (parity suite — every platform) =====================
 
-const input = @import("../core/components/input.zig");
+const input = @import("../core/component.zig").input;
 const contract = @import("../core/window_contract.zig");
 
 test "letters translate to their evdev codes" {

@@ -17,6 +17,8 @@ pub const Delegate = platform.Delegate;
 pub const render = @import("core/render.zig");
 pub const text = @import("core/text_backend.zig");
 pub const frame = @import("core/frame.zig");
+// The browser-style zoom ladder the Host applies: `Ctrl/Cmd +` / `-` / `0`.
+pub const zoom = @import("core/zoom.zig");
 pub const host = @import("core/host.zig");
 // The library's color type.
 pub const Color = @import("core/color.zig").Color;
@@ -99,37 +101,8 @@ pub const web = struct {
     }
 };
 
-// Agnostic reusable Clay components (moved from qs src/ui/components).
-pub const components = struct {
-    pub const box = @import("core/components/box.zig");
-    pub const button = @import("core/components/button.zig");
-    // The caret primitive: one device pixel, snapped to the grid, floated over the text.
-    pub const caret = @import("core/components/caret.zig");
-    pub const checkbox = @import("core/components/checkbox.zig");
-    pub const click_registry = @import("core/components/click_registry.zig");
-    pub const context_menu = @import("core/components/context_menu.zig");
-    pub const dispatch = @import("core/components/dispatch.zig");
-    pub const dropdown = @import("core/components/dropdown.zig");
-    pub const icon = @import("core/components/icon.zig");
-    pub const image = @import("core/components/image.zig");
-    pub const input = @import("core/components/input.zig");
-    pub const list = @import("core/components/list.zig");
-    // A scrim over the window and a centred card: the toolkit's "answer this before anything else" surface.
-    pub const modal = @import("core/components/modal.zig");
-    pub const radio = @import("core/components/radio.zig");
-    pub const reorder = @import("core/components/reorder.zig");
-    pub const scroll = @import("core/components/scroll.zig");
-    // A resizable, collapsible panel: the app hands it children, it owns the width and the grab line.
-    pub const sidebar = @import("core/components/sidebar.zig");
-    pub const slider = @import("core/components/slider.zig");
-    // A draggable divider between two panes: the app owns the pane's size, the widget owns the drag.
-    pub const split = @import("core/components/split.zig");
-    pub const text = @import("core/components/text.zig");
-    pub const toggle = @import("core/components/toggle.zig");
-    pub const tree = @import("core/components/tree.zig");
-    pub const tabs = @import("core/components/tabs.zig");
-    pub const badge = @import("core/components/badge.zig");
-};
+// Every component, through the façade that is also the list: `core/component.zig` re-exports each one.
+pub const components = @import("core/component.zig");
 
 test {
     // This aggregate test block is the PARITY contract: it imports exactly the same portable modules on every platform, so `zig build test` runs an.
@@ -148,11 +121,8 @@ test {
     _ = @import("core/audit_cases.zig");
     _ = @import("core/font_io.zig");
     _ = @import("core/table.zig");
-    // The reusable sidebar: a panel whose width the pointer owns, and the splitter that does the same for a pane.
-    _ = @import("core/components/sidebar.zig");
-    _ = @import("core/components/split.zig");
-    // The modal card: the surface an app asks a question on before it does something irreversible.
-    _ = @import("core/components/modal.zig");
+    // Every component, once, through the façade: each one's own tests run exactly once and nothing is bypassed.
+    _ = @import("core/component.zig");
     // The MVVM runtime: the ViewModel store and the theme value.
     _ = @import("core/view_model.zig");
     _ = @import("core/theme.zig");
@@ -227,24 +197,8 @@ test {
     _ = @import("web/renderer.zig");
     _ = @import("web/text.zig");
 
-    _ = @import("core/components/box.zig");
-    _ = @import("core/components/button.zig");
-    _ = @import("core/components/checkbox.zig");
-    _ = @import("core/components/click_registry.zig");
-    _ = @import("core/components/dispatch.zig");
-    _ = @import("core/components/dropdown.zig");
-    _ = @import("core/components/icon.zig");
-    _ = @import("core/components/image.zig");
-    _ = @import("core/components/input.zig");
+    // What a field does with the row it sits in: the weight tests, kept beside the component rather than inside it.
+    _ = @import("core/components/input_weight_test.zig");
     // The tab order every focusable component shares.
-    _ = @import("core/components/focus.zig");
-    _ = @import("core/components/list.zig");
-    _ = @import("core/components/radio.zig");
-    _ = @import("core/components/scroll.zig");
-    _ = @import("core/components/slider.zig");
-    _ = @import("core/components/text.zig");
-    _ = @import("core/components/toggle.zig");
-    _ = @import("core/components/tree.zig");
-    _ = @import("core/components/tabs.zig");
-    _ = @import("core/components/badge.zig");
+    _ = @import("core/zoom.zig");
 }

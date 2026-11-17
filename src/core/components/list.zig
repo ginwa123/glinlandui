@@ -3,6 +3,7 @@ const std = @import("std");
 const cl = @import("zclay");
 const headless = @import("../testing/headless.zig");
 const prop = @import("../props.zig");
+const theme_mod = @import("../theme.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const reorder_mod = @import("reorder.zig");
@@ -41,7 +42,8 @@ pub const ListProps = struct {
     row_fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
     selected_fg: Color = Color.rgb(0xff, 0xff, 0xff),
     hover_bg: Color = Color.rgb(0x2d, 0x2d, 0x2d),
-    radius: prop.Len = .{ .px = 4 },
+    // The theme's small corner on every cell unless the app does.
+    radius: prop.Len = prop.Len.themed,
     gap: prop.Len = .{},
     /// Container width clamps (grow axis, 0 = no constraint).
     min_w: prop.Len = .{},
@@ -172,7 +174,7 @@ fn listVertical(
         .layout = .{
             .direction = .top_to_bottom,
             .sizing = .{ .w = listSizingW(props), .h = .fit },
-            .child_gap = props.gap.whole(),
+            .child_gap = props.gap.resolve(theme_mod.current().metrics.control_gap).whole(),
         },
     })({
         for (items, 0..) |item, i| {
@@ -195,7 +197,7 @@ fn listVertical(
                     .child_gap = 8,
                 },
                 .background_color = (if (!props.disabled and !is_sel and cl.hovered()) props.hover_bg else base_bg).toClay(),
-                .corner_radius = .all(props.radius.pts()),
+                .corner_radius = .all(props.radius.resolve(theme_mod.current().metrics.radius_sm).pts()),
                 .border = if (!props.border_width.isNone()) .{
                     .color = props.border_color.toClay(),
                     .width = .outside(props.border_width.whole()),
@@ -220,7 +222,7 @@ fn listHorizontal(
         .layout = .{
             .direction = .left_to_right,
             .sizing = .{ .w = listSizingW(props), .h = .fit },
-            .child_gap = props.gap.whole(),
+            .child_gap = props.gap.resolve(theme_mod.current().metrics.control_gap).whole(),
         },
     })({
         for (items, 0..) |item, i| {
@@ -236,7 +238,7 @@ fn listHorizontal(
                     .child_gap = 8,
                 },
                 .background_color = (if (!props.disabled and !is_sel and cl.hovered()) props.hover_bg else base_bg).toClay(),
-                .corner_radius = .all(props.radius.pts()),
+                .corner_radius = .all(props.radius.resolve(theme_mod.current().metrics.radius_sm).pts()),
                 .border = if (!props.border_width.isNone()) .{
                     .color = props.border_color.toClay(),
                     .width = .outside(props.border_width.whole()),
@@ -260,7 +262,7 @@ fn listGrid(
         .layout = .{
             .direction = .top_to_bottom,
             .sizing = .{ .w = listSizingW(props), .h = .fit },
-            .child_gap = props.gap.whole(),
+            .child_gap = props.gap.resolve(theme_mod.current().metrics.control_gap).whole(),
         },
     })({
         var row: usize = 0;
@@ -270,7 +272,7 @@ fn listGrid(
                 .layout = .{
                     .direction = .left_to_right,
                     .sizing = .{ .w = .grow, .h = .fit },
-                    .child_gap = props.gap.whole(),
+                    .child_gap = props.gap.resolve(theme_mod.current().metrics.control_gap).whole(),
                 },
             })({
                 var col: usize = 0;
@@ -288,7 +290,7 @@ fn listGrid(
                             .child_alignment = .{ .x = .center, .y = .center },
                         },
                         .background_color = if (props.cell_bg) |bg| bg.toClay() else .{ 0, 0, 0, 0 },
-                        .corner_radius = .all(props.radius.pts()),
+                        .corner_radius = .all(props.radius.resolve(theme_mod.current().metrics.radius_sm).pts()),
                         // Selected ring wins; hover ring only on enabled unselected cells (evaluated inside the literal).
                         .border = if (is_sel and !props.selected_border_width.isNone()) .{
                             .color = props.selected_border_color.toClay(),
@@ -414,7 +416,8 @@ test "ListProps carries neutral dark defaults + null selection/callbacks" {
     try std.testing.expectEqual(Color.rgb(0xe8, 0xe8, 0xe8), p.row_fg);
     try std.testing.expectEqual(Color.rgb(0xff, 0xff, 0xff), p.selected_fg);
     try std.testing.expectEqual(Color.rgb(0x2d, 0x2d, 0x2d), p.hover_bg);
-    try std.testing.expectEqual(@as(f32, 4), p.radius.pts());
+    // The corner is the theme's small one now.
+    try std.testing.expectEqual(@as(f32, 4), p.radius.resolve(theme_mod.Metrics.defaults.radius_sm).pts());
     try std.testing.expectEqual(@as(f32, 0), p.gap.pts());
     try std.testing.expect(p.selected == null);
     try std.testing.expect(p.on_select.f == null);

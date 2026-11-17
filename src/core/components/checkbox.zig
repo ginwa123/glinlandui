@@ -3,6 +3,7 @@ const std = @import("std");
 const cl = @import("zclay");
 const headless = @import("../testing/headless.zig");
 const prop = @import("../props.zig");
+const theme_mod = @import("../theme.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
@@ -17,7 +18,8 @@ pub const CheckboxProps = struct {
     src: ?std.builtin.SourceLocation = null,
     checked: bool = false,
     size: prop.Len = .{ .px = 16 },
-    radius: prop.Len = .{ .px = 4 },
+    // The theme's small corner unless the app says otherwise.
+    radius: prop.Len = prop.Len.themed,
     box_bg: Color = Color.rgb(0x1e, 0x1e, 0x1e),
     checked_bg: Color = Color.rgb(0x4c, 0xaf, 0x50),
     check_color: Color = Color.rgb(0xff, 0xff, 0xff),
@@ -44,7 +46,7 @@ pub fn checkbox(props: CheckboxProps) void {
             .child_alignment = .center,
         },
         .background_color = (if (props.disabled) props.disabled_bg else if (cl.hovered()) (props.hover_bg orelse (if (props.checked) props.checked_bg else props.box_bg)) else (if (props.checked) props.checked_bg else props.box_bg)).toClay(),
-        .corner_radius = .all(props.radius.pts()),
+        .corner_radius = .all(props.radius.resolve(theme_mod.current().metrics.radius_sm).pts()),
         .border = if (!props.border_width.isNone()) .{
             .color = props.border_color.toClay(),
             .width = .outside(props.border_width.whole()),
@@ -102,7 +104,8 @@ test "CheckboxProps carries neutral defaults" {
     const p = CheckboxProps{ .id = .{ .text = "x" } };
     try std.testing.expect(!p.checked);
     try std.testing.expectEqual(@as(f32, 16), p.size.pts());
-    try std.testing.expectEqual(@as(f32, 4), p.radius.pts());
+    // The corner is the theme's small one now.
+    try std.testing.expectEqual(@as(f32, 4), p.radius.resolve(theme_mod.Metrics.defaults.radius_sm).pts());
     try std.testing.expectEqual(Color.rgb(0x1e, 0x1e, 0x1e), p.box_bg);
     try std.testing.expectEqual(Color.rgb(0x4c, 0xaf, 0x50), p.checked_bg);
     try std.testing.expectEqual(Color.rgb(0xff, 0xff, 0xff), p.check_color);

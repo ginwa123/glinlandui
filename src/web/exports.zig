@@ -76,9 +76,9 @@ pub fn Exports(
                 .min_height = if (min_h == 0) 1 else min_h,
             });
             win.delegate = host.delegate();
-            // Match the Host's idea of the window to the canvas from the start, so the FIRST frame lays out at the real size rather than at `host.zig`'s 720x480.
-            host.win_w = win.state.win_w;
-            host.win_h = win.state.win_h;
+            // Match the Host to the canvas, so the FIRST frame lays out at the real size; the Host's box is content points.
+            host.win_w = @import("../core/frame.zig").contentWidth(win.state.win_w);
+            host.win_h = @import("../core/frame.zig").contentHeight(win.state.win_h);
             g_window = win;
 
             const scratch = alloc.alloc(u8, key_scratch_len) catch return 0;

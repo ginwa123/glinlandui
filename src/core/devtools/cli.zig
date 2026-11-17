@@ -4,7 +4,7 @@ const cl = @import("zclay");
 const host_mod = @import("../host.zig");
 const testing = @import("../testing/root.zig");
 const finders = @import("../testing/finders.zig");
-const dispatch = @import("../components/dispatch.zig");
+const dispatch = @import("../component.zig").dispatch;
 const snapshot_mod = @import("snapshot.zig");
 
 // How many `--do` actions one run takes, in order.
@@ -459,9 +459,9 @@ test "the last spelling of a flag wins" {
 // ---- An app to act on ----
 
 const components = struct {
-    const box_mod = @import("../components/box.zig");
-    const button_mod = @import("../components/button.zig");
-    const toggle_mod = @import("../components/toggle.zig");
+    const box_mod = @import("../component.zig").box;
+    const button_mod = @import("../component.zig").button;
+    const toggle_mod = @import("../component.zig").toggle;
 };
 
 const ActApp = struct {

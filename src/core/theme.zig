@@ -43,10 +43,87 @@ pub const TypeScale = struct {
     }
 };
 
+// The spacing and shape a component's props fall back to: a role per field, so a theme retunes every widget at once.
+pub const Metrics = struct {
+    // Padding, by the kind of surface a widget is.
+    control_pad: prop.Pad,
+    field_pad: prop.Pad,
+    chip_pad: prop.Pad,
+    card_pad: prop.Pad,
+    action_pad: prop.Pad,
+    // Gaps: inside a control, between two rows, between a card's actions.
+    control_gap: prop.Len,
+    row_gap: prop.Len,
+    action_gap: prop.Len,
+    // Corners, from a ratio bar to a pill.
+    radius_xs: prop.Len,
+    radius_sm: prop.Len,
+    radius_md: prop.Len,
+    radius_lg: prop.Len,
+    radius_pill: prop.Len,
+    // The one-pixel rule a card is outlined with.
+    hairline: prop.Len,
+
+    // The numbers the components had hardcoded before the theme owned them: adopting this changes no pixel.
+    pub const defaults: Metrics = .{
+        .control_pad = prop.Pad.axes(6, 12),
+        .field_pad = prop.Pad.axes(0, 10),
+        .chip_pad = prop.Pad.axes(1, 6),
+        .card_pad = prop.Pad.all(18),
+        .action_pad = prop.Pad.axes(0, 14),
+        .control_gap = prop.Len.of(8),
+        .row_gap = prop.Len.of(12),
+        .action_gap = prop.Len.of(8),
+        .radius_xs = prop.Len.of(2),
+        .radius_sm = prop.Len.of(4),
+        .radius_md = prop.Len.of(6),
+        .radius_lg = prop.Len.of(8),
+        .radius_pill = prop.Len.of(9),
+        .hairline = prop.Len.of(1),
+    };
+
+    // A corner as the radius a component takes: `metrics.corner(.sm)` reads better than picking the field by hand.
+    pub fn corner(self: Metrics, size: Corner) prop.Radius {
+        return prop.Radius.all(switch (size) {
+            .xs => self.radius_xs.pts(),
+            .sm => self.radius_sm.pts(),
+            .md => self.radius_md.pts(),
+            .lg => self.radius_lg.pts(),
+            .pill => self.radius_pill.pts(),
+        });
+    }
+};
+
+// The corner ladder, by name.
+pub const Corner = enum { xs, sm, md, lg, pill };
+
 pub const Theme = struct {
     colors: Colors,
     type_scale: TypeScale,
+    // The padding, gaps and corners a component prop defaults to; `Metrics.defaults` keeps today's numbers.
+    metrics: Metrics,
 };
+
+// The theme in force, set by the Host once per frame from the Activity's own: what an unset prop resolves against.
+var current_theme: Theme = dark;
+
+// The theme a component reads when a prop left the decision to it.
+pub fn current() Theme {
+    return current_theme;
+}
+
+// The Host sets this each frame; an app that never calls it gets `dark`.
+pub fn setCurrent(t: Theme) void {
+    current_theme = t;
+}
+
+// Theme one subtree of a frame: `theme.scoped(compact, scope, drawList)` retunes the widgets inside it, then the outer theme is back.
+pub fn scoped(t: Theme, ctx: anytype, comptime children: fn (@TypeOf(ctx)) void) void {
+    const outer = current_theme;
+    current_theme = t;
+    children(ctx);
+    current_theme = outer;
+}
 
 pub const dark = Theme{
     .colors = .{
@@ -63,6 +140,7 @@ pub const dark = Theme{
         .hover = Color.hexC("#1f1f26"),
     },
     .type_scale = TypeScale.of(18, 14, 13, 12),
+    .metrics = Metrics.defaults,
 };
 
 pub const light = Theme{
@@ -80,6 +158,7 @@ pub const light = Theme{
         .hover = Color.hexC("#f0f0f5"),
     },
     .type_scale = TypeScale.of(18, 14, 13, 12),
+    .metrics = Metrics.defaults,
 };
 
 // Kanagawa Dragon: the same eleven roles, ink on paper — the palette the UI kit specifies.
@@ -98,6 +177,29 @@ pub const dragon = Theme{
         .hover = Color.hexC("#282727"),
     },
     .type_scale = TypeScale.of(18, 14, 13, 12),
+    .metrics = Metrics.defaults,
+};
+
+// A denser kit: the same palette and type, with every spacing role shrunk. One value, and no component changes.
+pub const compact = Theme{
+    .colors = dark.colors,
+    .type_scale = dark.type_scale,
+    .metrics = .{
+        .control_pad = prop.Pad.axes(3, 8),
+        .field_pad = prop.Pad.axes(0, 6),
+        .chip_pad = prop.Pad.axes(0, 4),
+        .card_pad = prop.Pad.all(12),
+        .action_pad = prop.Pad.axes(0, 10),
+        .control_gap = prop.Len.of(6),
+        .row_gap = prop.Len.of(8),
+        .action_gap = prop.Len.of(6),
+        .radius_xs = prop.Len.of(1),
+        .radius_sm = prop.Len.of(3),
+        .radius_md = prop.Len.of(4),
+        .radius_lg = prop.Len.of(6),
+        .radius_pill = prop.Len.of(7),
+        .hairline = prop.Len.of(1),
+    },
 };
 
 // The one tone no role covers: the selected row. A fill is not a cue on its own, so a component draws a bar too.
@@ -138,4 +240,59 @@ test "the type scale is ordered, so a caption is never larger than a title" {
         try std.testing.expect(t.type_scale.body.pts() >= t.type_scale.label.pts());
         try std.testing.expect(t.type_scale.label.pts() > t.type_scale.caption.pts());
     }
+}
+
+test "the built-in themes carry the spacing the components used to hardcode" {
+    // Every number here was a literal inside a component before the theme owned it, so adopting `defaults` moved no pixel.
+    const m = Metrics.defaults;
+    try std.testing.expectEqual(@as(f32, 6), m.control_pad.top.pts());
+    try std.testing.expectEqual(@as(f32, 12), m.control_pad.left.pts());
+    try std.testing.expectEqual(@as(f32, 0), m.field_pad.top.pts());
+    try std.testing.expectEqual(@as(f32, 10), m.field_pad.left.pts());
+    try std.testing.expectEqual(@as(f32, 1), m.chip_pad.top.pts());
+    try std.testing.expectEqual(@as(f32, 18), m.card_pad.top.pts());
+    try std.testing.expectEqual(@as(f32, 14), m.action_pad.left.pts());
+    try std.testing.expectEqual(@as(f32, 8), m.control_gap.pts());
+    try std.testing.expectEqual(@as(f32, 12), m.row_gap.pts());
+    try std.testing.expectEqual(@as(f32, 2), m.radius_xs.pts());
+    try std.testing.expectEqual(@as(f32, 4), m.radius_sm.pts());
+    try std.testing.expectEqual(@as(f32, 6), m.radius_md.pts());
+    try std.testing.expectEqual(@as(f32, 8), m.radius_lg.pts());
+    try std.testing.expectEqual(@as(f32, 9), m.radius_pill.pts());
+    try std.testing.expectEqual(@as(f32, 1), m.hairline.pts());
+    // All three palettes start from them, so a theme is a palette plus metrics, not a palette instead of metrics.
+    try std.testing.expectEqual(m.control_pad.left.pts(), dark.metrics.control_pad.left.pts());
+    try std.testing.expectEqual(m.control_pad.left.pts(), light.metrics.control_pad.left.pts());
+    try std.testing.expectEqual(m.control_pad.left.pts(), dragon.metrics.control_pad.left.pts());
+}
+
+test "a compact theme moves the padding every widget inherits, and leaves an explicit one alone" {
+    // An unset pad follows the theme in force...
+    try std.testing.expectEqual(@as(f32, 8), prop.Pad.themed.resolve(compact.metrics.control_pad).left.pts());
+    try std.testing.expectEqual(@as(f32, 12), prop.Pad.themed.resolve(dark.metrics.control_pad).left.pts());
+    // ...while a pad the app gave is the app's, under any theme.
+    try std.testing.expectEqual(@as(f32, 0), prop.Pad.all(0).resolve(compact.metrics.control_pad).left.pts());
+    // The compact kit is denser everywhere that matters, and never wider.
+    try std.testing.expect(compact.metrics.control_pad.left.pts() < dark.metrics.control_pad.left.pts());
+    try std.testing.expect(compact.metrics.row_gap.pts() < dark.metrics.row_gap.pts());
+    try std.testing.expect(compact.metrics.corner(.lg).top_left.pts() < dark.metrics.corner(.lg).top_left.pts());
+}
+
+test "the theme in force is the window's, and a scoped theme comes back when the subtree ends" {
+    setCurrent(dark);
+    defer setCurrent(dark);
+    const Outer = struct {
+        var seen: f32 = 0;
+        fn draw(_: *u8) void {
+            seen = current().metrics.control_pad.left.pts();
+        }
+    };
+    var ctx: u8 = 0;
+    // The subtree sees the theme it was wrapped in...
+    scoped(compact, &ctx, Outer.draw);
+    try std.testing.expectEqual(@as(f32, 8), Outer.seen);
+    // ...and the frame after it is back on the window's theme.
+    try std.testing.expectEqual(@as(f32, 12), current().metrics.control_pad.left.pts());
+    // An app that never sets one gets `dark`, not an empty theme.
+    try std.testing.expectEqual(@as(f32, 12), current().metrics.control_pad.left.pts());
 }

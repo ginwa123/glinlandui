@@ -2,7 +2,7 @@
 // It owns the ViewModelStore and the theme, declares the screen, and lets the window's events reach the model.
 const std = @import("std");
 const glinlandui = @import("glinlandui");
-const input_mod = glinlandui.components.input;
+const input = glinlandui.components.input;
 
 const view = @import("view.zig");
 const view_model = @import("view_model.zig");
@@ -38,7 +38,7 @@ pub const App = struct {
     }
 
     // Host KeyChain handler (see `dispatch.handleKey`): the mapping is the model's, so this only hands the key over and reports whether it was consumed. Escape is deliberately NOT consumed — the toolkit's own `keyToClose` contract uses it to quit the window.
-    pub fn onKey(ctx: ?*anyopaque, mods: input_mod.Mods, keycode: u32) bool {
+    pub fn onKey(ctx: ?*anyopaque, mods: input.Mods, keycode: u32) bool {
         const self: *App = @ptrCast(@alignCast(ctx.?));
         return self.vm().onKeycode(mods, keycode);
     }
@@ -64,14 +64,14 @@ test "Escape is left unconsumed so the window can still close" {
 test "onKey drives the machine through the Host KeyChain" {
     var app = App{};
     // Enter, Backspace and the arithmetic keypad are non-ASCII keycodes, so they only work via onKey — not via keyChar.
-    try std.testing.expect(App.onKey(&app, .{}, input_mod.KEY_ENTER));
+    try std.testing.expect(App.onKey(&app, .{}, input.KEY_ENTER));
     try std.testing.expectEqualStrings("0", app.vm().display());
 
     // evdev 8 is the "7" key; type it twice through the chain.
     try std.testing.expect(App.onKey(&app, .{}, 8));
     try std.testing.expect(App.onKey(&app, .{}, 8));
     try std.testing.expectEqualStrings("77", app.vm().display());
-    try std.testing.expect(App.onKey(&app, .{}, input_mod.KEY_BACKSPACE));
+    try std.testing.expect(App.onKey(&app, .{}, input.KEY_BACKSPACE));
     try std.testing.expectEqualStrings("7", app.vm().display());
 
     try std.testing.expect(App.onKey(&app, .{}, view_model.KEY_KP_MULTIPLY));

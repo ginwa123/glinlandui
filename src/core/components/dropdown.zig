@@ -3,6 +3,7 @@ const std = @import("std");
 const cl = @import("zclay");
 const headless = @import("../testing/headless.zig");
 const prop = @import("../props.zig");
+const theme_mod = @import("../theme.zig");
 const Color = @import("../color.zig").Color;
 const registry = @import("click_registry.zig");
 const list = @import("list.zig");
@@ -58,8 +59,9 @@ pub const DropdownProps = struct {
     row_fg: Color = Color.rgb(0xe8, 0xe8, 0xe8),
     hover_bg: Color = Color.rgb(0x2d, 0x2d, 0x2d),
     field_bg: Color = Color.rgb(0x26, 0x26, 0x26),
-    radius: prop.Len = .{ .px = 4 },
-    gap: prop.Len = .{ .px = 8 },
+    // The theme decides the list's corner and the gap between its rows unless the app does.
+    radius: prop.Len = prop.Len.themed,
+    gap: prop.Len = prop.Len.themed,
     /// Uniform border for the search field + rows (0 = none) + color.
     border_width: prop.Len = .{},
     border_color: Color = Color.rgb(0x00, 0x00, 0x00),
@@ -148,7 +150,7 @@ pub fn dropdown(
                 .direction = .top_to_bottom,
                 .sizing = .{ .w = .grow, .h = .fit },
                 .padding = .all(props.overlay_pad.whole()),
-                .child_gap = props.gap.whole(),
+                .child_gap = props.gap.resolve(theme_mod.current().metrics.control_gap).whole(),
             },
             .background_color = props.overlay_bg.toClay(),
             .corner_radius = .all(props.overlay_radius.pts()),
@@ -178,7 +180,7 @@ fn dropdownInner(
         field.font_size = props.font_size;
         field.fg = props.row_fg;
         field.bg = props.field_bg;
-        field.radius = prop.Radius.all(props.radius.pts());
+        field.radius = prop.Radius.all(props.radius.resolve(theme_mod.current().metrics.radius_sm).pts());
         field.w = fieldSize(props.field_w, props.field_min_w, props.field_max_w, true);
         // A field with no stated height is a control, not a line of text: the kit's 28, never `.fit`.
         field.h = fieldSize(props.field_h orelse .{ .px = 28 }, props.field_min_h, props.field_max_h, false);
@@ -195,8 +197,8 @@ fn dropdownInner(
         .selected_bg = props.selected_bg,
         .row_fg = props.row_fg,
         .hover_bg = props.hover_bg,
-        .radius = props.radius,
-        .gap = props.gap,
+        .radius = prop.Len.of(props.radius.resolve(theme_mod.current().metrics.radius_sm).pts()),
+        .gap = prop.Len.of(props.gap.resolve(theme_mod.current().metrics.control_gap).pts()),
         .min_w = props.list_min_w,
         .max_w = props.list_max_w,
         .row_min_h = props.row_min_h,

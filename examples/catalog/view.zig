@@ -17,6 +17,9 @@ const tree_mod = components.tree;
 const scroll_mod = components.scroll;
 const dropdown_mod = components.dropdown;
 const icon_mod = components.icon;
+const split_mod = components.split;
+const sidebar_mod = components.sidebar;
+const modal_mod = components.modal;
 const input_mod = components.input;
 const frame = glinlandui.frame;
 
@@ -81,12 +84,33 @@ fn header(scope: *Scope) void {
     box_mod.box(.{
         .id = .{ .text = "catalog.header" },
         .w = .grow,
-        .direction = .column,
-        .gap = .{ .px = 6 },
+        .direction = .row,
+        .gap = .{ .px = 12 },
+        .child_align = .{ .y = .top },
     }, scope, headerChildren);
 }
 
 fn headerChildren(scope: *Scope) void {
+    const t = scope.theme;
+    box_mod.box(.{
+        .id = .{ .text = "catalog.header.text" },
+        .w = .grow,
+        .direction = .column,
+        .gap = .{ .px = 6 },
+    }, scope, headerText);
+    // The one switch: the same palette and type, the kit's denser spacing. Nothing else in this file changes.
+    button.button(.{
+        .id = .{ .text = "catalog.dense" },
+        .label = .{ .text = if (scope.vm.dense) "Spacing: compact" else "Spacing: roomy", .size = t.type_scale.caption, .color = t.colors.text },
+        .bg = t.colors.surface_variant,
+        .fg = t.colors.text,
+        .hover_bg = t.colors.hover,
+        .border = .{ .width = .{ .px = 1 }, .color = t.colors.divider },
+        .on_click = .{ .f = onDense, .ctx = scope.vm },
+    });
+}
+
+fn headerText(scope: *Scope) void {
     const t = scope.theme;
     text_mod.label(.{ .label = .{ .text = "glinlandui · catalog", .size = t.type_scale.title, .color = t.colors.text } });
     text_mod.label(.{
@@ -145,11 +169,16 @@ fn sectionBody(ctx: SectionCtx) void {
         .selection => selectionBody(ctx.scope),
         .roles => rolesBody(ctx.scope),
         .type_scale => typeBody(ctx.scope),
+        .spacing => spacingBody(ctx.scope),
         .badges => badgeBody(ctx.scope),
         .tabs => tabsBody(ctx.scope),
         .list => listBody(ctx.scope),
         .tree => treeBody(ctx.scope),
         .dropdown => dropdownBody(ctx.scope),
+        .scroll => scrollBody(ctx.scope),
+        .split => splitBody(ctx.scope),
+        .sidebar_panel => sidebarBody(ctx.scope),
+        .modal => modalBody(ctx.scope),
         .images => imagesBody(ctx.scope),
     }
 }
@@ -414,7 +443,7 @@ fn rolesBody(scope: *Scope) void {
         .id = .{ .text = "catalog.roles.row" },
         .w = .grow,
         .direction = .row,
-        .gap = .{ .px = 8 },
+        .gap = .{ .px = 4 },
     }, scope.theme, rolesRowChildren);
 }
 
@@ -422,9 +451,12 @@ fn rolesRowChildren(t: Theme) void {
     for (state_mod.swatches) |s| {
         box_mod.box(.{
             .id = .{ .text = s.name },
-            .w = .{ .fixed = 68 },
+            // As wide as its own name, and never wider than the column it shares: eleven roles fit one row.
+            .w = .{ .clamp = .{ .min = 64, .max = 92 } },
             .direction = .column,
             .gap = .{ .px = 4 },
+            // A role name is longer than a swatch: the cell cuts it and wraps it, instead of painting over the next one.
+            .clip = .{ .horizontal = true },
         }, SwatchCtx{ .swatch = s, .theme = t }, swatchChildren);
     }
 }
@@ -440,7 +472,7 @@ fn swatchChildren(ctx: SwatchCtx) void {
         .bg = ctx.swatch.color,
         .border = .{ .width = .{ .px = 1 }, .color = ctx.theme.colors.divider },
     }, {}, noChildren);
-    text_mod.label(.{ .label = .{ .text = ctx.swatch.name, .size = ctx.theme.type_scale.caption, .color = ctx.theme.colors.text_dim } });
+    text_mod.label(.{ .label = .{ .text = ctx.swatch.name, .size = ctx.theme.type_scale.caption, .color = ctx.theme.colors.text_dim }, .wrap = true });
 }
 
 fn noChildren(_: void) void {}
@@ -695,4 +727,231 @@ fn onTree(raw: ?*anyopaque, index: usize) void {
 fn onOption(raw: ?*anyopaque, index: usize) void {
     const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
     vm.selectOption(index);
+}
+
+// ---- theme metrics ----------------------------------------------------------------------------------------------
+
+// Every row is a metric, drawn with the theme's own numbers: a widget that leaves a prop unset gets exactly this.
+fn spacingBody(scope: *Scope) void {
+    const t = scope.theme;
+    const m = t.metrics;
+    spacingLine(scope, "control pad", m.control_pad.top.pts(), m.control_pad.left.pts(), "button");
+    spacingLine(scope, "field pad", m.field_pad.top.pts(), m.field_pad.left.pts(), "text field");
+    spacingLine(scope, "chip pad", m.chip_pad.top.pts(), m.chip_pad.left.pts(), "badge");
+    spacingLine(scope, "card pad", m.card_pad.top.pts(), m.card_pad.left.pts(), "modal card");
+    spacingLine(scope, "control gap", m.control_gap.pts(), m.control_gap.pts(), "dropdown rows");
+    spacingLine(scope, "row gap", m.row_gap.pts(), m.row_gap.pts(), "modal actions");
+    spacingLine(scope, "corner sm/md/lg/pill", m.radius_sm.pts(), m.radius_pill.pts(), "chip / control / card / toggle");
+}
+
+// One metric, as its own row: the values ride in the row's context, so nothing is shared between rows.
+fn spacingLine(scope: *Scope, name: []const u8, a: f32, b: f32, owner: []const u8) void {
+    box_mod.box(.{
+        .id = .{ .text = frame.formatText("catalog.spacing.{s}", .{name}) },
+        .w = .grow,
+        .direction = .row,
+        .gap = .{ .px = 8 },
+        .child_align = .{ .y = .center },
+    }, SpacingCtx{ .theme = scope.theme, .name = name, .a = a, .b = b, .owner = owner }, spacingLineChildren);
+}
+
+const SpacingCtx = struct {
+    theme: Theme,
+    name: []const u8,
+    a: f32,
+    b: f32,
+    owner: []const u8,
+};
+
+fn spacingLineChildren(ctx: SpacingCtx) void {
+    const t = ctx.theme;
+    text_mod.label(.{ .label = .{ .text = ctx.name, .size = t.type_scale.caption, .color = t.colors.text } });
+    const value = if (ctx.a == ctx.b)
+        frame.formatText("{d:.0} pt · {s}", .{ ctx.b, ctx.owner })
+    else
+        frame.formatText("{d:.0} / {d:.0} pt · {s}", .{ ctx.a, ctx.b, ctx.owner });
+    text_mod.label(.{ .label = .{ .text = value, .size = t.type_scale.caption, .color = t.colors.text_dim } });
+}
+
+// ---- scroll -----------------------------------------------------------------------------------------------------
+
+fn scrollBody(scope: *Scope) void {
+    const c = scope.theme.colors;
+    scroll_mod.scroll(.{
+        .id = .{ .text = "catalog.demo.scroll" },
+        .direction = .vertical,
+        .w = .grow,
+        .h = .{ .fixed = 130 },
+        .bg = c.background,
+        .border_width = .{ .px = 1 },
+        .border_color = c.divider,
+        .thumb_bg = c.surface_variant,
+        .thumb_hover_bg = c.text_done,
+    }, scope, scrollRows);
+}
+
+fn scrollRows(scope: *Scope) void {
+    const t = scope.theme;
+    var i: usize = 0;
+    while (i < 20) : (i += 1) {
+        const line = frame.formatText("row {d} — the wheel moves the whole list, and the thumb shows where it is", .{i + 1});
+        text_mod.label(.{ .label = .{ .text = line, .size = t.type_scale.caption, .color = if (i == 0) t.colors.text else t.colors.text_dim } });
+    }
+}
+
+// ---- split ------------------------------------------------------------------------------------------------------
+
+// Two panes and the line between them: the model owns the size, the widget owns the drag.
+fn splitBody(scope: *Scope) void {
+    const t = scope.theme;
+    box_mod.box(.{
+        .id = .{ .text = "catalog.split.frame" },
+        .w = .grow,
+        .h = .{ .fixed = 220 },
+        .direction = .column,
+        .bg = t.colors.background,
+    }, scope, splitPaneTop);
+}
+
+fn splitPaneTop(scope: *Scope) void {
+    const t = scope.theme;
+    box_mod.box(.{
+        .id = .{ .text = "catalog.split.top" },
+        .w = .grow,
+        .h = .grow,
+        .pad = props.Pad.all(10),
+        .bg = t.colors.surface,
+    }, scope, splitTopChildren);
+    split_mod.grip(scope.vm.splitProps(t));
+    box_mod.box(.{
+        .id = .{ .text = "catalog.split.bottom" },
+        .w = .grow,
+        .h = .{ .fixed = split_mod.size(scope.vm.splitProps(t)) },
+        .pad = props.Pad.all(10),
+        .bg = t.colors.surface_variant,
+    }, scope, splitBottomChildren);
+}
+
+fn splitTopChildren(scope: *Scope) void {
+    const t = scope.theme;
+    text_mod.label(.{ .label = .{ .text = "the pane that grows", .size = t.type_scale.caption, .color = t.colors.text_dim } });
+}
+
+fn splitBottomChildren(scope: *Scope) void {
+    const t = scope.theme;
+    const shown = frame.formatText("the pane the line sizes: {d:.0} pt", .{split_mod.size(scope.vm.splitProps(t))});
+    text_mod.label(.{ .label = .{ .text = shown, .size = t.type_scale.caption, .color = t.colors.text } });
+}
+
+// ---- sidebar ----------------------------------------------------------------------------------------------------
+
+fn sidebarBody(scope: *Scope) void {
+    const t = scope.theme;
+    box_mod.box(.{
+        .id = .{ .text = "catalog.sidebar.frame" },
+        .w = .grow,
+        .h = .{ .fixed = 190 },
+        .direction = .row,
+        .bg = t.colors.background,
+    }, scope, sidebarFrameChildren);
+}
+
+fn sidebarFrameChildren(scope: *Scope) void {
+    const t = scope.theme;
+    sidebar_mod.sidebar(scope.vm.sidebarProps(t), scope, sidebarDemoChildren);
+    box_mod.box(.{
+        .id = .{ .text = "catalog.sidebar.fill" },
+        .w = .grow,
+        .h = .grow,
+        .pad = props.Pad.all(10),
+        .bg = t.colors.background,
+    }, scope, sidebarFillChildren);
+}
+
+fn sidebarDemoChildren(scope: *Scope) void {
+    const t = scope.theme;
+    var i: usize = 0;
+    while (i < 6) : (i += 1) {
+        const line = frame.formatText("panel row {d}", .{i + 1});
+        box_mod.box(.{
+            .id = .{ .text = frame.elementId("catalog.sidebar.row", i) },
+            .w = .grow,
+            .pad = props.Pad.axes(4, 8),
+            .bg = if (i == 1) t.colors.hover else t.colors.surface,
+            .radius = t.metrics.corner(.sm),
+        }, SidebarRowCtx{ .theme = t, .text = line }, sidebarRowChildren);
+    }
+}
+
+const SidebarRowCtx = struct { theme: Theme, text: []const u8 };
+
+fn sidebarRowChildren(ctx: SidebarRowCtx) void {
+    text_mod.label(.{ .label = .{ .text = ctx.text, .size = ctx.theme.type_scale.caption, .color = ctx.theme.colors.text } });
+}
+
+fn sidebarFillChildren(scope: *Scope) void {
+    const t = scope.theme;
+    text_mod.label(.{ .label = .{
+        .text = "drag the line to resize the panel; drag past its floor and it shuts, and a click on the edge brings it back",
+        .size = t.type_scale.caption,
+        .color = t.colors.text_dim,
+    }, .wrap = true });
+}
+
+// ---- modal ------------------------------------------------------------------------------------------------------
+
+fn modalBody(scope: *Scope) void {
+    const t = scope.theme;
+    row(scope, "catalog.modal.trigger", modalTrigger);
+    if (scope.state.modal) {
+        const answers = [_]modal_mod.Action{
+            .{ .label = "Cancel" },
+            .{ .label = "Discard" },
+            .{ .label = "Save and close", .primary = true },
+        };
+        modal_mod.modal(.{
+            .id = .{ .text = "catalog.modal.card" },
+            .title = "Unsaved changes",
+            .message = "This query has edits that were never saved. Save it before the window closes?",
+            .actions = &answers,
+            .on_action = .{ .f = onModalAnswer, .ctx = scope.vm },
+            .bg = t.colors.surface,
+            .border = t.colors.divider,
+            .title_fg = t.colors.text,
+            .fg = t.colors.text_dim,
+            .action_bg = t.colors.surface_variant,
+            .action_hover = t.colors.hover,
+            .action_fg = t.colors.text,
+            .primary = t.colors.primary,
+            .primary_hover = t.colors.primary_hover,
+            .primary_fg = t.colors.on_primary,
+        });
+    }
+}
+
+fn modalTrigger(scope: *Scope) void {
+    const c = scope.theme.colors;
+    button.button(.{
+        .id = .{ .text = "catalog.modal.open" },
+        .label = .{ .text = "Ask a question", .color = c.on_primary },
+        .bg = c.primary,
+        .fg = c.on_primary,
+        .hover_bg = c.primary_hover,
+        .on_click = .{ .f = onOpenModal, .ctx = scope.vm },
+    });
+}
+
+fn onOpenModal(raw: ?*anyopaque) void {
+    const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
+    vm.openModal();
+}
+
+fn onModalAnswer(raw: ?*anyopaque, index: usize) void {
+    const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
+    vm.answerModal(index);
+}
+
+fn onDense(raw: ?*anyopaque) void {
+    const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
+    vm.toggleDense();
 }

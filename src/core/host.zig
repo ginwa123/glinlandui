@@ -3,20 +3,28 @@ const std = @import("std");
 const contract = @import("window_contract.zig");
 const render = @import("render.zig");
 const frame_mod = @import("frame.zig");
-const dispatch = @import("components/dispatch.zig");
+const theme_mod = @import("theme.zig");
+const dispatch = @import("component.zig").dispatch;
 
 /// Escape under the xkb/Wayland evdev numbering, which every backend this engine runs on reports.
 const key_escape: u32 = 1;
 /// Tab, in the same numbering: the key that walks the focusable components.
 const key_tab: u32 = 15;
-const focus_mod = @import("components/focus.zig");
-const registry = @import("components/click_registry.zig");
-const image_widgets = @import("components/image.zig");
+/// `0`, `-` and `=` plus the keypad pair, in the same numbering: the five keys a browser zooms with.
+const key_0: u32 = 11;
+const key_minus: u32 = 12;
+const key_equal: u32 = 13;
+const key_kp_minus: u32 = 74;
+const key_kp_plus: u32 = 78;
+const zoom_mod = @import("zoom.zig");
+const focus_mod = @import("component.zig").focus;
+const registry = @import("component.zig").click_registry;
+const image_widgets = @import("component.zig").image;
 const cl = @import("zclay");
-const scroll_mod = @import("components/scroll.zig");
-const input_mod = @import("components/input.zig");
-const context_menu = @import("components/context_menu.zig");
-const reorder_mod = @import("components/reorder.zig");
+const scroll_mod = @import("component.zig").scroll;
+const input_mod = @import("component.zig").input;
+const context_menu = @import("component.zig").context_menu;
+const reorder_mod = @import("component.zig").reorder;
 const semantics = @import("semantics.zig");
 const inspector_mod = @import("devtools/inspector.zig");
 const glyphs = @import("glyphs.zig");
@@ -33,6 +41,9 @@ pub const ServiceHooks = struct {
     end: *const fn (ptr: *anyopaque, host: *Host, w: u32, h: u32) void,
 };
 
+/// A layout's own floor: the size the app needs before its panels stop fitting.
+pub const MinContent = struct { w: u32 = 0, h: u32 = 0 };
+
 pub const Host = struct {
     /// True while a drag that BEGAN over a text target is in flight: selecting text must not also scroll the pane.
     drag_selecting_text: bool = false,
@@ -41,6 +52,15 @@ pub const Host = struct {
     renderer_attempted: bool = false,
     clay_mem: []u8 = &.{},
     clay_ready: bool = false,
+    /// The smallest content box this app can lay out in: the Host caps the zoom there, so a window cannot squeeze the layout past it.
+    min_content: MinContent = .{},
+    /// The window's theme: the Activity hands its own here once, and every component that left a prop to the theme follows it.
+    theme: theme_mod.Theme = theme_mod.dark,
+
+    /// The window's own size, before the zoom divided it: what the cap above is computed from.
+    window_w: u32 = 720,
+    window_h: u32 = 480,
+
     /// Theme-independent default (720x480 literal); caller may override win_w/h after init (same values as ui/theme.zig, the source of truth — no theme.
     win_w: u32 = 720,
     win_h: u32 = 480,
@@ -135,8 +155,13 @@ pub const Host = struct {
     /// Frame variant used by the reusable headless test driver.
     pub fn frameWithOptions(self: *Host, w: u32, h: u32, options: ?*const frame_mod.FrameOptions) u32 {
         if (!self.clay_ready) return frame_mod.shape_default;
-        self.win_w = w;
-        self.win_h = h;
+        // A window too small for the zoom it was left on steps back to a rung that fits.
+        self.window_w = w;
+        self.window_h = h;
+        if (frame_mod.zoom() > self.zoomCeiling()) self.setZoom(frame_mod.zoom());
+        // Everything the app and its components touch is content points: a zoomed window simply holds fewer of them.
+        self.win_w = frame_mod.contentWidth(w);
+        self.win_h = frame_mod.contentHeight(h);
         // The pointer and the clock are frame state, so a component can place a caret from a click and blink it.
         frame_mod.setPointer(self.ptr.x, self.ptr.y);
         // The press origin too, so a field can refuse a drag that began outside it.
@@ -159,6 +184,8 @@ pub const Host = struct {
         var effective: frame_mod.FrameOptions = if (options) |opts| opts.* else .{};
         // A devtool reads the resolved tree, so attaching one turns the resolve on: the app never has to know its frames are being watched.
         if (self.inspect != null or self.service != null) effective.resolve_semantics = true;
+        // The theme in force for this frame: a component resolves the props its app left unset against it.
+        theme_mod.setCurrent(self.theme);
         const shape = frame_mod.clayFrameWithOptions(
             self.alloc,
             &self.renderer,
@@ -181,7 +208,10 @@ pub const Host = struct {
         return shape;
     }
 
-    pub fn onPointerEvent(self: *Host, x: f32, y: f32, pressed: bool, button: u32) void {
+    pub fn onPointerEvent(self: *Host, window_x: f32, window_y: f32, pressed: bool, button: u32) void {
+        // The app declares in content points and the window reports window points: one division, so both spaces agree.
+        const x = window_x / frame_mod.zoom();
+        const y = window_y / frame_mod.zoom();
         // A right press asks the app's components first: a widget offering a menu owns the click it was right-clicked in.
         if (button == dispatch.BTN_RIGHT) {
             if (pressed) {
@@ -215,8 +245,8 @@ pub const Host = struct {
         const thumb_moved = scroll_mod.moveThumb(x, y);
         if (button == dispatch.BTN_LEFT and !pressed) scroll_mod.endThumbGrab();
         if (thumb_moved) return;
-        // Slider-style drag: a press that is HELD and moved nudges the scroll container under the pointer 1:1 — never the press itself.
-        if (!pressed and self.ptr.down and self.ptr.dragging and (x != last_x or y != last_y)) {
+        // Slider-style drag: a press that is HELD and moved nudges the pane 1:1 — a move is button 0, whatever `pressed` the backend calls it.
+        if (button == 0 and self.ptr.down and self.ptr.dragging and (x != last_x or y != last_y)) {
             if (!self.drag_selecting_text and !frame_mod.dragClaimed()) scroll_mod.dragScroll(x, y, x - last_x, y - last_y);
             reorder_mod.move(x, y);
         }
@@ -225,12 +255,31 @@ pub const Host = struct {
     pub fn onScrollEvent(self: *Host, dx: f32, dy: f32) void {
         // A delta this small moves nothing on screen, so it must not make the next frame count as dirty.
         if (@abs(dx) < 0.01 and @abs(dy) < 0.01) return;
-        self.scroll_dx += dx;
-        self.scroll_dy += dy;
+        // Window points to content points: a wheel notch moves the same amount of layout at any zoom.
+        self.scroll_dx += dx / frame_mod.zoom();
+        self.scroll_dy += dy / frame_mod.zoom();
     }
 
     /// The return value is CLOSE INTENT, which the window acts on: a key the focused field typed is never one.
     pub fn onKeyEvent(self: *Host, keycode: u32, pressed: bool) bool {
+        // `Ctrl/Cmd +` / `-` / `0` zoom the content, and the engine owns the gesture: an app routes none of it.
+        if (pressed and self.keys.mods.shortcut()) {
+            switch (keycode) {
+                key_equal, key_kp_plus => {
+                    self.setZoom(zoom_mod.next(frame_mod.zoom(), 1));
+                    return false;
+                },
+                key_minus, key_kp_minus => {
+                    self.setZoom(zoom_mod.next(frame_mod.zoom(), -1));
+                    return false;
+                },
+                key_0 => {
+                    self.setZoom(zoom_mod.reset);
+                    return false;
+                },
+                else => {},
+            }
+        }
         // Escape dismisses an open context menu, and stops there: it is not the app's close intent either.
         if (pressed and keycode == key_escape and context_menu.isOpen()) {
             context_menu.close();
@@ -264,8 +313,11 @@ pub const Host = struct {
     }
 
     pub fn onResizeEvent(self: *Host, w: u32, h: u32) void {
-        self.win_w = w;
-        self.win_h = h;
+        self.window_w = w;
+        self.window_h = h;
+        if (frame_mod.zoom() > self.zoomCeiling()) self.setZoom(frame_mod.zoom());
+        self.win_w = frame_mod.contentWidth(w);
+        self.win_h = frame_mod.contentHeight(h);
     }
 
     pub fn onCloseEvent(self: *Host) void {
@@ -274,6 +326,32 @@ pub const Host = struct {
             if (hook(self.close_ctx)) return;
         }
         self.quit_requested = true;
+    }
+
+    /// The content zoom in force: 1.0 until `Ctrl/Cmd +` / `-` or an app's own control moves it.
+    pub fn zoomFactor(self: *Host) f32 {
+        _ = self;
+        return frame_mod.zoom();
+    }
+
+    /// Set the content zoom, as `Ctrl/Cmd +` / `-` / `0` do; a menu or a settings row calls this instead.
+    pub fn setZoom(self: *Host, factor: f32) void {
+        const ceiling = self.zoomCeiling();
+        if (zoom_mod.clamp(factor) > ceiling) {
+            frame_mod.setZoom(zoom_mod.largestAtMost(ceiling));
+            return;
+        }
+        frame_mod.setZoom(factor);
+    }
+
+    /// The zoom this window can show without squeezing the layout below `min_content`; the ladder's top when no floor is set.
+    fn zoomCeiling(self: *const Host) f32 {
+        if (self.min_content.w == 0 or self.min_content.h == 0) return zoom_mod.steps[zoom_mod.steps.len - 1];
+        const fw: f32 = @floatFromInt(self.window_w);
+        const fh: f32 = @floatFromInt(self.window_h);
+        const cw: f32 = @floatFromInt(self.min_content.w);
+        const ch: f32 = @floatFromInt(self.min_content.h);
+        return @max(1.0, @min(fw / cw, fh / ch));
     }
 
     /// Close the window: what an app calls once its own question is answered.
@@ -576,6 +654,72 @@ test "host: press-drag down scrolls down slider-style (no click)" {
     const y1 = cl.getElementData(cl.getElementId("host-scroll-probe")).bounding_box.y;
     // Slider-style 1:1: pointer down 40 = content up 40.
     try std.testing.expectApproxEqAbs(y0 - 40, y1, 0.5);
+}
+
+test "host: a drag move counts as a move whatever `pressed` the backend calls it" {
+    var h: Host = undefined;
+    try testHost(&h, null, hostScrollProbeRoot);
+    h.frame(720, 480);
+    const y0 = cl.getElementData(cl.getElementId("host-scroll-probe")).bounding_box.y;
+    const box = cl.getElementData(cl.getElementId("host-scroll")).bounding_box;
+    const cx = box.x + box.width * 0.5;
+    const cy = box.y + box.height * 0.5;
+    // macOS and Wayland send a motion with the button still down as pressed=true, button 0: the drag used to test `!pressed` and dropped every one of them.
+    h.onPointerEvent(cx, cy, true, 272);
+    h.onPointerEvent(cx, cy + 20, true, 0);
+    h.onPointerEvent(cx, cy + 40, true, 0);
+    try std.testing.expect(h.ptr.dragging);
+    h.frame(720, 480);
+    const y1 = cl.getElementData(cl.getElementId("host-scroll-probe")).bounding_box.y;
+    try std.testing.expectApproxEqAbs(y0 - 40, y1, 0.5);
+}
+
+test "host: Ctrl/Cmd +/-/0 zoom the content, and the next frame declares the smaller box" {
+    frame_mod.setZoom(1);
+    defer frame_mod.setZoom(1);
+    var rec = FrameRec{};
+    var h: Host = undefined;
+    try testHost(&h, &rec, recRoot);
+    h.frame(720, 480);
+    try std.testing.expectEqual(@as(u32, 720), rec.w);
+    try std.testing.expectEqual(@as(u32, 480), rec.h);
+
+    // Ctrl goes down first, as every backend sends it, so the chain latches it before `=`.
+    _ = h.onKeyEvent(29, true);
+    _ = h.onKeyEvent(key_equal, true);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.1), frame_mod.zoom(), 0.001);
+    h.frame(720, 480);
+    // The app declares in a 655x436 box and the window paints it at 110%.
+    try std.testing.expectEqual(@as(u32, 655), rec.w);
+    try std.testing.expectEqual(@as(u32, 436), rec.h);
+    try std.testing.expectEqual(@as(u32, 655), h.win_w);
+
+    // `0` puts it back; the app never sees any of it.
+    _ = h.onKeyEvent(key_0, true);
+    try std.testing.expectEqual(@as(f32, 1.0), frame_mod.zoom());
+    // And a bare `=` is just a key: an editor types it.
+    _ = h.onKeyEvent(29, false);
+    _ = h.onKeyEvent(key_equal, true);
+    try std.testing.expectEqual(@as(f32, 1.0), frame_mod.zoom());
+}
+
+test "host: a zoom the window cannot show stops at the rung that fits" {
+    frame_mod.setZoom(1);
+    defer frame_mod.setZoom(1);
+    var h: Host = undefined;
+    try testHost(&h, null, noopRoot);
+    h.frame(1280, 840);
+    // The app's own floor: 900x560. At 1280x840 that is 1.42 across and 1.5 down, so 125% fits and 150% does not.
+    h.min_content = .{ .w = 900, .h = 560 };
+    h.setZoom(1.5);
+    try std.testing.expectEqual(@as(f32, 1.25), frame_mod.zoom());
+    h.setZoom(2.0);
+    try std.testing.expectEqual(@as(f32, 1.25), frame_mod.zoom());
+    h.setZoom(1.1);
+    try std.testing.expectEqual(@as(f32, 1.1), frame_mod.zoom());
+    // A window too small for the zoom in force steps it back to a rung that fits.
+    h.onResizeEvent(1000, 560);
+    try std.testing.expectEqual(@as(f32, 1.0), frame_mod.zoom());
 }
 
 test "host: a host starts with a clock, so two clicks can be told from a double click" {
