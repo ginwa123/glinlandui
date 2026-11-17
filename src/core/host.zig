@@ -13,7 +13,7 @@ const key_tab: u32 = 15;
 const key_enter: u32 = 28;
 const key_space: u32 = 57;
 /// Above the ordinary content, below a menu or a dropdown card.
-const ring_z: i16 = 6;
+const ring_z: i16 = 0;
 const focus_mod = @import("components/focus.zig");
 const registry = @import("components/click_registry.zig");
 const image_widgets = @import("components/image.zig");
