@@ -13,6 +13,10 @@ Rules for anyone (human or agent) changing this repository.
    block, so a trailing `// note` after code is always fine.
 4. **No `.zig` file may exceed 3000 lines.** Split the module instead of growing the file. The
    largest today is `src/linux/renderer.zig` at ~1378 lines.
+5. **A component that takes the pointer also takes the keyboard** (WCAG 2.2 AA). Tab and Shift+Tab walk
+   `core/components/focus.zig`; a focusable component calls `focus.declare(id)` while it declares and draws a
+   ring when `frame.isFocused(name)` says the keyboard is on it. Escape always hands the keyboard back, so no
+   component may become a keyboard trap.
 
 ## Verify before you report
 

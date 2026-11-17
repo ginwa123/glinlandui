@@ -7,6 +7,9 @@ const dispatch = @import("components/dispatch.zig");
 
 /// Escape under the xkb/Wayland evdev numbering, which every backend this engine runs on reports.
 const key_escape: u32 = 1;
+/// Tab, in the same numbering: the key that walks the focusable components.
+const key_tab: u32 = 15;
+const focus_mod = @import("components/focus.zig");
 const registry = @import("components/click_registry.zig");
 const image_widgets = @import("components/image.zig");
 const cl = @import("zclay");
@@ -238,6 +241,15 @@ pub const Host = struct {
         // Escape closes the devtool while it is up, and is never read as the app's close intent.
         if (self.inspect) |dev| {
             if (dev.onKey(keycode)) return false;
+        }
+        // Tab walks the focusable components and Escape hands the keyboard back: every control is reachable, and none of them is a trap (WCAG 2.1.1, 2.1.2).
+        if (pressed and keycode == key_tab) {
+            _ = focus_mod.advance(self.keys.mods.shift);
+            return false;
+        }
+        if (pressed and keycode == key_escape and frame_mod.focusedId() != null) {
+            frame_mod.setFocus(null);
+            return false;
         }
         if (dispatch.handleKey(&self.keys, keycode, pressed)) return true;
         // No app handler asked to close: the focused field takes the key, so typing needs no routing code in the app.

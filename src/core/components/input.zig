@@ -14,6 +14,7 @@ const text_editor = @import("../text_editor.zig");
 const text_backend = @import("../text_backend.zig");
 const semantics = @import("../semantics.zig");
 const audit = @import("../audit.zig");
+const focus = @import("focus.zig");
 
 // Raw evdev keycode → printable ASCII under the US layout.
 pub fn keyChar(evdev: u32, shift: bool) ?u8 {
@@ -381,6 +382,9 @@ pub const Field = struct {
     pad: prop.Pad = prop.Pad.axes(0, 10),
     radius: prop.Radius = prop.Radius.all(6),
     border: prop.Border = .{},
+    // The ring a focused field draws: outside the box, so taking the keyboard moves no text, and bright enough to read on any field in the theme.
+    focus_ring: Color = Color.rgb(0x7a, 0xb8, 0xff),
+    focus_ring_w: prop.Len = .{ .px = 1 },
     disabled: bool = false,
     disabled_bg: Color = Color.rgb(0x1a, 0x1a, 0x1a),
     disabled_fg: Color = Color.rgb(0x77, 0x77, 0x77),
@@ -630,6 +634,8 @@ pub fn setTextAllocator(alloc: ?std.mem.Allocator) void {
 // Forget last frame's field: a field that stops being declared must not keep the keyboard.
 pub fn beginFrame() void {
     active = null;
+    // The tab order is this frame's too: a field that is not declared again is not reachable again.
+    focus.beginDeclare();
 }
 
 // Type a composed run into the focused field; false when no field owns the keyboard.
@@ -875,6 +881,8 @@ pub fn textField(field: *Field) void {
     field.bind();
     const input = &field.editor;
     const name = field.rememberName();
+    // Every enabled field is in the tab order: a screen full of fields and no pointer still has to be usable (WCAG 2.1.1).
+    if (!field.disabled and name.len > 0) focus.declare(name);
     // The click and drag handlers need the same origin and metrics the text is drawn with.
     field.pad_lr = field.pad.left;
     // The model's value wins when it CHANGED; an unchanged value leaves the draft and the caret alone.
@@ -902,6 +910,8 @@ pub fn textField(field: *Field) void {
     const fg: Color = if (field.disabled) field.disabled_fg else field.fg;
     // Solid for half a second after the caret moves, then blinking: a caret that blinks while you type is a caret you cannot find.
     const blink_on = text_editor.caretVisible(input) and caretLineOnScreen(field);
+    // The ring's geometry is LAST frame's box, read here: after the declare below, this frame's element has no box yet.
+    const ring_box = if (frame_mod.isFocused(name) and !field.disabled) frame_mod.bounds(field.id.clay()) else null;
     // A hint belongs to an empty single-line field nobody is typing in, so it never competes with a draft or a caret.
     const hint = field.placeholder.len > 0 and draft.len == 0 and !input.focused and !field.disabled;
     // The caret's row is revealed after the layout, mid-declare its box does not exist yet, and only when it MOVED: a reveal every frame pulled the box back to the caret, so a wheel scroll could not stay down.
@@ -951,6 +961,9 @@ pub fn textField(field: *Field) void {
             }
         });
     });
+
+    // The keyboard's position has to be visible (WCAG 2.4.7), and a ring drawn outside the box covers none of the field (2.4.11).
+    if (ring_box) |b| if (field.focus_ring_w.pts() > 0) drawFocusRing(field, name, b);
 
     // Semantics: an editable field declares `set_text`, so a test can type into it by name and a reader can find it.
     if (!field.disabled and name.len > 0) {
@@ -1097,6 +1110,28 @@ pub fn caretId(name: []const u8) cl.ElementId {
 
 // The clip's index under the field: 1 is the selection run, 2 the caret, so the clip takes 3.
 const text_clip_index: u32 = 3;
+
+// The focus ring's index: 1 the selection, 2 the caret, 3 the clip, 4 the ring, 4096+ the multiline rows.
+const focus_ring_index: u32 = 4;
+
+// One floating box around the field's own box, a frame behind: a box read mid-declare has not been laid out yet.
+fn drawFocusRing(field: *Field, name: []const u8, b: frame_mod.Bounds) void {
+    // A ring is a hairline on the device grid: a fractional width would paint two half-lit columns (the audit says so too).
+    const width: u16 = @intFromFloat(@max(1, @round(field.focus_ring_w.pts())));
+    if (b.width < 1 or b.height < 1) return;
+    cl.UI()(.{
+        .id = .IDI(name, focus_ring_index),
+        .floating = .{
+            .attach_to = .to_root,
+            .offset = .{ .x = b.x, .y = b.y },
+            // Above the field, and passthrough: a ring is a sign of where the keyboard is, never a target of its own.
+            .z_index = field.click_z + 1,
+            .pointer_capture_mode = .passthrough,
+        },
+        .layout = .{ .sizing = .{ .w = .fixed(b.width), .h = .fixed(b.height) } },
+        .border = .{ .color = field.focus_ring.toClay(), .width = .outside(width) },
+    })({});
+}
 
 // The clip's Clay id, which is also the box whose width is the room the text has before it has to slide.
 pub fn textClipId(name: []const u8) cl.ElementId {
@@ -2828,4 +2863,50 @@ test "an edit past the inline length is still reported, because the snapshot cov
     const before = snapshot(&head);
     try std.testing.expect(changed(before, &edited));
     try std.testing.expect(!changed(before, &head));
+}
+
+// ---- the keyboard walk (WCAG 2.2, SC 2.1.1): Tab reaches every field, and the one that holds the keyboard says so ----
+
+var tab_a: Field = .{ .id = .{ .text = "test-tab-a" }, .value = "a", .h = .{ .fixed = 30 } };
+var tab_b: Field = .{ .id = .{ .text = "test-tab-b" }, .value = "b", .h = .{ .fixed = 30 } };
+
+fn declareTabFields() void {
+    textField(&tab_a);
+    textField(&tab_b);
+}
+
+test "Tab walks the fields a frame declared, and the focused one draws its ring" {
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.ptr_down = false;
+    beginFrame();
+    // One Clay context, two frames: the first fills the order and lays the boxes out, and a ring reads the box before it.
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    const unfocused = try layoutFrame(declareTabFields);
+    for (unfocused) |c| try std.testing.expect(c.command_type != .border);
+    try std.testing.expectEqual(@as(usize, 2), focus.focusable());
+    try std.testing.expectEqualStrings("test-tab-a", focus.at(0));
+
+    // The keyboard reaches the first field, and Tab alone is the route to the second: no pointer needed anywhere.
+    try std.testing.expect(focus.advance(false));
+    try std.testing.expect(frame_mod.isFocused("test-tab-a"));
+    const cmds = try layoutFrame(declareTabFields);
+    const box = frame_mod.bounds(cl.getElementId("test-tab-a")) orelse return error.NoFieldBox;
+    var ring: ?cl.RenderCommand = null;
+    for (cmds) |c| if (c.command_type == .border) {
+        ring = c;
+    };
+    const drawn = ring orelse return error.NoFocusRing;
+    // The ring is the field's OWN rect, and `outside` paints it there rather than inside: taking the keyboard moves no text.
+    try std.testing.expectApproxEqAbs(box.x, drawn.bounding_box.x, 0.01);
+    try std.testing.expect(drawn.render_data.border.width.left > 0);
+
+    try std.testing.expect(focus.advance(false));
+    try std.testing.expect(frame_mod.isFocused("test-tab-b"));
+    // Shift+Tab goes back, and from the first field it wraps to the last, so a trap cannot form at either end.
+    try std.testing.expect(focus.advance(true));
+    try std.testing.expect(frame_mod.isFocused("test-tab-a"));
+    try std.testing.expect(focus.advance(true));
+    try std.testing.expect(frame_mod.isFocused("test-tab-b"));
+    frame_mod.setFocus(null);
 }
