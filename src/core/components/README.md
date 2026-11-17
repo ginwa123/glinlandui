@@ -50,6 +50,25 @@ application owns (`SliderProps.value/min/max`), and the payload *inside* a vocab
 derived from it (`ToggleProps.h`, which decides the knob) is a `Len`, because the component
 has to compute with the number and a growing axis gives it none.
 
+## Sizing a row: `grow` is Compose's `weight`
+
+A row lays out its fixed children first and hands the rest to its `grow` ones.
+
+| written | meaning | Compose |
+|---|---|---|
+| `.w = .grow` | the whole remainder, or an equal share of it when several siblings grow | `Modifier.weight(1f)` |
+| `.w = .growing(160, 0)` | the same, but never narrower than 160; `0` max means no ceiling | `Modifier.weight(1f).widthIn(min = 160.dp)` |
+| `.w = .between(90, 220)` | as wide as the content, clamped to those bounds | `Modifier.widthIn(...)` |
+| `.w = .{ .fixed = 70 }` | exactly 70 | `Modifier.width(70.dp)` |
+
+A `grow` widget does **not** push its row wider, even when its content is: a text field clips its
+own value (every field is a horizontal clip), so a 900 pt URL in a 200 pt field is clipped and
+scrolled rather than laid out past the window. That is why an app never has to cap a field, and
+it is what the two weight tests in `input.zig` pin down.
+
+Clay cannot weight siblings by RATIO: `grow` distributes the remainder equally, so `.grow` twice
+is 50/50 and there is no `weight(2f)`.
+
 ## The catalogue
 
 | file | what it declares |

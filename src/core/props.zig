@@ -255,13 +255,13 @@ pub const Radius = struct {
 pub const Size = union(enum) {
     // As small as the content allows.
     fit,
-    // Fill the parent.
+    // The weight: the room the row has left after its fixed children, split evenly between every grow sibling.
     grow,
     // Exactly this many points.
     fixed: f32,
     // This fraction of the parent.
     percent: f32,
-    // Fit or grow, clamped; 0 means unbounded on that side.
+    // Fit or grow, clamped; 0 means unbounded on that side. `growing(min, 0)` is a weight with a floor.
     clamp: struct { min: f32 = 0, max: f32 = 0, grow: bool = false },
 
     pub fn px(v: f32) Size {

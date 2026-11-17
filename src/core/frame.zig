@@ -96,6 +96,8 @@ pub const Bounds = struct {
 
 // The box Clay laid out for an element this frame, or null when it was not declared.
 pub fn bounds(id: cl.ElementId) ?Bounds {
+    // Before the first frame Clay has no context at all, and its own lookup would dereference NULL: a box is simply not known yet.
+    if (@intFromPtr(cl.getCurrentContext()) == 0) return null;
     const data = cl.getElementData(id);
     if (!data.found) return null;
     return .{
@@ -164,6 +166,26 @@ pub fn contentWidth(w: u32) u32 {
 pub fn contentHeight(h: u32) u32 {
     const scaled = @as(f32, @floatFromInt(h)) / content_zoom;
     return @intFromFloat(@max(1, @round(scaled)));
+}
+
+// The box a frame is declaring in, in content points: the window divided by the zoom.
+pub const Viewport = struct { w: f32 = 0, h: f32 = 0 };
+
+var viewport_now: Viewport = .{};
+
+// The content points this frame has, so a widget that needs the window reads it here instead of being handed it.
+pub fn viewport() Viewport {
+    return viewport_now;
+}
+
+// The frame sets this every frame; a harness that lays out on its own says the same thing here.
+pub fn setViewport(v: Viewport) void {
+    viewport_now = v;
+}
+
+// The viewport a window of this size gives, which is the whole zoom correction in one place.
+pub fn viewportOf(w: u32, h: u32) Viewport {
+    return .{ .w = @floatFromInt(contentWidth(w)), .h = @floatFromInt(contentHeight(h)) };
 }
 
 // Snap a caret's left edge to the device pixel grid. A 1 pt bar at a fractional x is antialiased across two device pixels, and the half-covered one
@@ -681,6 +703,7 @@ pub fn clayFrameWithOptions(
     // A zoomed window shows fewer content points: the layout is computed for the smaller box the app declares in.
     const lw = contentWidth(w);
     const lh = contentHeight(h);
+    viewport_now = viewportOf(w, h);
     cl.setLayoutDimensions(.{ .w = @floatFromInt(lw), .h = @floatFromInt(lh) });
     if (options.measure) |_| {
         cl.setMeasureTextFunction(*const FrameOptions, options, measureWithOptions);
@@ -771,6 +794,8 @@ test "a zoomed window holds fewer content points, and the ladder clamps" {
     defer setZoom(1.0);
     try std.testing.expectEqual(@as(u32, 360), contentWidth(720));
     try std.testing.expectEqual(@as(u32, 240), contentHeight(480));
+    // The same correction in one value: a widget reads content points and never divides by the zoom itself.
+    try std.testing.expectEqual(Viewport{ .w = 360, .h = 240 }, viewportOf(720, 480));
     // Never zero, whatever the rounding says: a layout of no points is not a layout.
     setZoom(3.0);
     try std.testing.expectEqual(@as(u32, 1), contentWidth(1));
@@ -779,6 +804,20 @@ test "a zoomed window holds fewer content points, and the ladder clamps" {
     try std.testing.expectEqual(@as(f32, 3.0), zoom());
     setZoom(0);
     try std.testing.expectEqual(@as(f32, 1.0), zoom());
+}
+
+test "the viewport a frame reports is the box it was last given, and zero before any frame" {
+    setZoom(1.0);
+    setViewport(.{});
+    try std.testing.expectEqual(Viewport{ .w = 0, .h = 0 }, viewport());
+    setViewport(viewportOf(1280, 840));
+    try std.testing.expectEqual(Viewport{ .w = 1280, .h = 840 }, viewport());
+    setZoom(1.5);
+    defer setZoom(1.0);
+    setViewport(viewportOf(1280, 840));
+    // 1280 / 1.5 = 853.3 points, so a window at 150% has 853 points to declare in.
+    try std.testing.expectEqual(@as(f32, 853), viewport().w);
+    try std.testing.expectEqual(@as(f32, 560), viewport().h);
 }
 
 test "hashCommands is stable for identical output" {

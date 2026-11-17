@@ -32,8 +32,12 @@ pub const Props = struct {
     /// A pane below a horizontal line (or right of a vertical one) grows when the line is dragged towards it.
     side: Side = .after,
     min: f32 = 120,
-    /// The most the pane may take; 0 means "whatever is left", so the app passes the room it has.
+    /// The most the pane may take; 0 means the box it divides, less `other_min`.
     max: f32 = 0,
+    /// The box the two panes share; null means the frame's own viewport.
+    within: ?prop.Id = null,
+    /// How much of that box the OTHER pane must keep, so dragging can never squeeze it out.
+    other_min: f32 = 0,
     thickness: u16 = 6,
     /// How far either side of the line a press still grabs it, in points: a 6-point line is a small target.
     slop: f32 = 3,
@@ -48,10 +52,36 @@ pub fn size(p: Props) f32 {
 }
 
 fn clampSize(p: Props, want: f32) f32 {
-    var v = want;
-    if (v < p.min) v = p.min;
-    if (p.max > p.min and v > p.max) v = p.max;
-    return v;
+    // Its own floor wins: a pane is never squeezed below the minimum it was given, however little room is left.
+    return @max(p.min, @min(want, ceiling(p)));
+}
+
+// The room the pane may take: the max it was given, or the box it divides less the other pane's floor.
+fn ceiling(p: Props) f32 {
+    if (p.max > 0) return p.max;
+    const room = extent(p);
+    // Nothing is known about the room yet, so nothing is taken away: the second frame knows the box.
+    if (room <= 0) return std.math.floatMax(f32);
+    return @max(p.min, room - @as(f32, @floatFromInt(p.thickness)) - p.other_min);
+}
+
+// How long the shared box is along the axis this line drags: the one the app named, else the frame's viewport.
+fn extent(p: Props) f32 {
+    if (p.within) |id| {
+        // A box with no size yet is the one being declared right now: that frame falls back to the viewport.
+        if (frame_mod.bounds(id.clay())) |b| {
+            const len = switch (p.axis) {
+                .horizontal => b.height,
+                .vertical => b.width,
+            };
+            if (len > 0) return len;
+        }
+    }
+    const v = frame_mod.viewport();
+    return switch (p.axis) {
+        .horizontal => v.h,
+        .vertical => v.w,
+    };
 }
 
 fn cursorFor(axis: Axis) prop.Cursor {
@@ -63,8 +93,7 @@ fn cursorFor(axis: Axis) prop.Cursor {
 
 /// Declare the line. The app gives its pane `size(...)` and lays the two panes out around this call.
 pub fn grip(p: Props) void {
-    // The limits are props, so they are applied here every frame instead of being remembered in the state.
-    p.state.size = clampSize(p, p.state.size);
+    // The limits are props and only ever READ: a clamp written back into the state would ratchet the pane down for good.
     trackDrag(p);
     const id = p.id.clay();
     cl.UI()(.{
@@ -303,4 +332,61 @@ test "the line is a hover target with a resize cursor, and registers no click" {
     // Nothing to click: a line resizes nothing on a click, so it must not swallow one either.
     try std.testing.expect(!registry.dispatchClick(200, line.y + line.height * 0.5));
     try std.testing.expectEqual(prop.Cursor.ns_resize, registry.hoverCursorAt(200, line.y + line.height * 0.5));
+}
+
+// A pane that takes all the room it is given, inside a column that names itself as the box the two panes share.
+var capped_state: State = .{ .size = 900 };
+
+fn cappedProps() Props {
+    return .{
+        .id = .{ .text = "test-capped" },
+        .state = &capped_state,
+        .min = 120,
+        .within = .{ .text = "test-capped.root" },
+        .other_min = 160,
+    };
+}
+
+fn declareCapped() void {
+    cl.UI()(.{
+        .id = cl.getElementId("test-capped.root"),
+        .layout = .{ .direction = .top_to_bottom, .sizing = .{ .w = .fixed(400), .h = .fixed(600) } },
+    })({
+        pane("test-capped.editor", .grow);
+        grip(cappedProps());
+        pane("test-capped.pane", cl.SizingAxis.fixed(size(cappedProps())));
+    });
+}
+
+test "a pane with no max is capped by the box it divides, so the other pane keeps its floor" {
+    capped_state = .{ .size = 900 };
+    registry.beginFrame();
+    frame_mod.setPointer(99999, 99999);
+    frame_mod.setPointerButton(false, 0, 0);
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    // The first frame knows no box yet, so it caps against the frame's viewport (480 pt here) instead of nothing.
+    cl.beginLayout();
+    declareCapped();
+    _ = cl.endLayout();
+    try std.testing.expectApproxEqAbs(@as(f32, 314), boxOf("test-capped.pane").height, 0.01);
+
+    // The second frame knows the column: 600 pt, the line takes 6 and the editor keeps 160.
+    cl.beginLayout();
+    declareCapped();
+    _ = cl.endLayout();
+    try std.testing.expectApproxEqAbs(@as(f32, 434), size(cappedProps()), 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 434), boxOf("test-capped.pane").height, 0.01);
+    // The editor keeps exactly its floor once the cap binds, and the column itself is untouched.
+    try std.testing.expectApproxEqAbs(@as(f32, 160), boxOf("test-capped.editor").height, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 600), boxOf("test-capped.root").height, 0.01);
+}
+
+test "an explicit max still wins over the box it divides" {
+    capped_state = .{ .size = 900 };
+    var p = cappedProps();
+    p.max = 200;
+    try std.testing.expectApproxEqAbs(@as(f32, 200), size(p), 0.01);
+    // And a min above the cap holds: a pane is never squashed below its own floor by the other pane's.
+    p.min = 500;
+    try std.testing.expectApproxEqAbs(@as(f32, 500), size(p), 0.01);
 }

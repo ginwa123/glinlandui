@@ -238,6 +238,8 @@ test {
     _ = @import("core/components/icon.zig");
     _ = @import("core/components/image.zig");
     _ = @import("core/components/input.zig");
+    // The weight tests: what a field does with the row it sits in, kept beside the component rather than inside it.
+    _ = @import("core/components/input_weight_test.zig");
     // The tab order every focusable component shares.
     _ = @import("core/components/focus.zig");
     _ = @import("core/components/list.zig");

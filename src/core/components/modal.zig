@@ -28,9 +28,9 @@ pub const Props = struct {
     actions: []const Action = &.{},
     /// Called with the index of the action that was pressed, on the frame AFTER the press.
     on_action: prop.Select = .{},
-    // The window, so the scrim covers all of it and the card has something to centre in.
-    window_w: f32,
-    window_h: f32,
+    // The scrim's size, for a card that does NOT cover the window; 0 means the whole window, which is what an app wants.
+    window_w: f32 = 0,
+    window_h: f32 = 0,
     card_w: f32 = 420,
     pad: u16 = 18,
     gap: u16 = 12,
@@ -86,7 +86,11 @@ pub fn modal(p: Props) void {
     // The scrim first: it is below the card, so the card's own targets win the hit test.
     cl.UI()(.{
         .id = .ID(scrim_prefix),
-        .layout = .{ .sizing = .{ .w = .fixed(p.window_w), .h = .fixed(p.window_h) } },
+        // No size asked for means the root itself: a floating element that grows takes the dimensions it attaches to.
+        .layout = .{ .sizing = .{
+            .w = if (p.window_w > 0) .fixed(p.window_w) else .grow,
+            .h = if (p.window_h > 0) .fixed(p.window_h) else .grow,
+        } },
         .floating = .{
             .attach_to = .to_root,
             .attach_points = .{ .element = .left_top, .parent = .left_top },
@@ -188,8 +192,6 @@ fn draw() []cl.RenderCommand {
         .message = "This endpoint is not saved yet.",
         .actions = &actions,
         .on_action = .{ .f = onPick, .ctx = null },
-        .window_w = @floatFromInt(canvas_w),
-        .window_h = @floatFromInt(canvas_h),
     });
     return cl.endLayout();
 }
@@ -203,6 +205,12 @@ test "a modal draws its title, its sentence and one row per action, centred in t
     try testing.expect(card.width > 0 and card.height > 0);
     try testing.expectApproxEqAbs(@as(f32, @floatFromInt(canvas_w)) / 2, card.x + card.width / 2, 1.5);
     try testing.expectApproxEqAbs(@as(f32, @floatFromInt(canvas_h)) / 2, card.y + card.height / 2, 1.5);
+    // No window size was handed in: the scrim took the whole root, which is what an app should get for free.
+    const scrim = cl.getElementData(.ID(scrim_prefix)).bounding_box;
+    try testing.expectApproxEqAbs(@as(f32, 0), scrim.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 0), scrim.y, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, @floatFromInt(canvas_w)), scrim.width, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, @floatFromInt(canvas_h)), scrim.height, 0.5);
     for (actions, 0..) |_, i| try testing.expect(cl.getElementData(actionId(i)).found);
 
     // Every action sits inside the card it belongs to, in the order it was handed in.
