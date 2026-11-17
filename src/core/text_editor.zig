@@ -217,6 +217,26 @@ pub const Editor = struct {
         self.splice(self.caret.offset, codepointLen(self.text(), self.caret.offset));
     }
 
+    // Delete the word before the caret: Ctrl/Cmd+Backspace, which is the keyboard equivalent of dragging over a word and deleting it.
+    pub fn deleteWordLeft(self: *Editor) void {
+        if (self.deleteSelection()) return;
+        const from = self.caret.offset;
+        self.moveWordLeft(false);
+        const to = self.caret.offset;
+        if (to < from) self.splice(to, from - to);
+    }
+
+    // Delete the word after the caret: Ctrl/Cmd+Delete.
+    pub fn deleteWordRight(self: *Editor) void {
+        if (self.deleteSelection()) return;
+        const from = self.caret.offset;
+        self.moveWordRight(false);
+        const to = self.caret.offset;
+        // The caret goes back to where the deletion started, so the next word is the one under the pen.
+        self.caret.offset = from;
+        if (to > from) self.splice(from, to - from);
+    }
+
     // Remove `count` bytes at `at`, closing the gap.
     fn splice(self: *Editor, at: usize, count: usize) void {
         // Deleting is an edit too, so the caret is solid while a key is held down.
@@ -459,11 +479,12 @@ pub fn handleKey(
     // Navigation keys, using the same evdev codes glinlandui exposes.
     switch (keycode) {
         KEY_LEFT => {
-            editor.moveLeft(shift);
+            // Ctrl/Cmd+Left is a word: the same reach a pointer gets by dragging over one, and the reason a long URL is editable by keyboard.
+            if (ctrl) editor.moveWordLeft(shift) else editor.moveLeft(shift);
             return .edited;
         },
         KEY_RIGHT => {
-            editor.moveRight(shift);
+            if (ctrl) editor.moveWordRight(shift) else editor.moveRight(shift);
             return .edited;
         },
         KEY_HOME => {
@@ -475,7 +496,8 @@ pub fn handleKey(
             return .edited;
         },
         KEY_END => {
-            editor.moveEnd(shift);
+            // Ctrl/Cmd+End is the end of the WHOLE text in a multiline field, not the end of the line under the caret.
+            if (ctrl) editor.setCaret(editor.len, shift) else editor.moveEnd(shift);
             return .edited;
         },
         KEY_UP => {
@@ -488,11 +510,11 @@ pub fn handleKey(
         },
         KEY_BACKSPACE => {
             if (editor.len == 0) return .ignored;
-            editor.backspace();
+            if (ctrl) editor.deleteWordLeft() else editor.backspace();
             return .edited;
         },
         KEY_DELETE => {
-            editor.deleteForward();
+            if (ctrl) editor.deleteWordRight() else editor.deleteForward();
             return .edited;
         },
         KEY_ENTER => {
@@ -1363,4 +1385,29 @@ test "clampTo never writes past the buffer" {
 
 fn isWordByte(b: u8) bool {
     return (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z') or (b >= '0' and b <= '9') or b == '_';
+}
+
+test "ctrl+arrow, ctrl+end and ctrl+backspace reach a word, not a byte" {
+    var buf: [64]u8 = undefined;
+    var e = Editor.init(&buf);
+    _ = e.insertSlice("one two\nthree four");
+    try testing.expectEqual(@as(usize, 18), e.len);
+
+    // A bare arrow moves one byte; with ctrl it moves a word, which is what a keyboard user needs in a long URL.
+    e.setCaret(0, false);
+    _ = handleKey(&e, KEY_RIGHT, false, false);
+    try testing.expectEqual(@as(usize, 1), e.caret.offset);
+    _ = handleKey(&e, KEY_RIGHT, false, true);
+    try testing.expectEqual(@as(usize, 4), e.caret.offset);
+    _ = handleKey(&e, KEY_RIGHT, false, true);
+    try testing.expectEqual(@as(usize, 8), e.caret.offset);
+
+    // Ctrl+End is the end of the whole text, not of the line the caret is on.
+    _ = handleKey(&e, KEY_END, false, true);
+    try testing.expectEqual(@as(usize, 18), e.caret.offset);
+
+    // Ctrl+Backspace takes the word before the caret, and leaves the rest alone.
+    _ = handleKey(&e, KEY_BACKSPACE, false, true);
+    try testing.expectEqualStrings("one two\nthree ", e.text());
+    try testing.expectEqual(@as(usize, 14), e.caret.offset);
 }
