@@ -60,7 +60,7 @@ has to compute with the number and a growing axis gives it none.
 | `input.zig` | ONE text field: `textField(&field)` draws a `Field`, which carries its look, its draft, the caret and the selection, and raises `on_change`/`on_submit`. The engine types into the focused one, so an app routes no keys. `value` is the declared text and wins whenever it changes, and `placeholder` is drawn while the draft is empty. `click_z` lifts the field's own hit target above an overlay that swallows clicks. Every field raises its own card — Cut, Copy, Paste, Select All always, then `Field.menu`'s rows with the app's own indices |
 | `list.zig` | rows, cells or a grid, with selection, hover and per-row click targets — registered BEFORE each row, so a widget inside it wins the hit test |
 | `tree.zig` | hierarchical rows: depth indent, caret, expansion state, selection, right-aligned meta |
-| `tabs.zig` | a tab bar: active state, optional accent dot, optional close button |
+| `tabs.zig` | a tab bar: per-tab hover, an active line, a bottom rule, an unsaved dot in the close slot, optional accent dot, drag-to-reorder |
 | `badge.zig` | a short label in a rounded pill — a type, a count, a state |
 | `modal.zig` | a scrim over the window and a centred card with a title, a sentence and action rows |
 | `scroll.zig` | a scroll container with a scrollbar, plus `scrollBy` |

@@ -59,6 +59,14 @@ pub const TabsProps = struct {
     active_fg: Color = Color.rgb(0xf0, 0xf0, 0xf4),
     close_fg: Color = Color.rgb(0x5a, 0x5a, 0x64),
     close_hover: Color = Color.rgb(0x33, 0x33, 0x3c),
+    // The dot an unsaved tab wears in its close slot; null draws it in the tab's own label tone.
+    dirty_fg: ?Color = null,
+    // A line along the bottom of the active tab: the cue that stays legible when the fill is a subtle step.
+    active_line: ?Color = null,
+    // A 1 pt rule under the whole strip, so a bar of tabs reads as a bar and not as floating words.
+    divider: ?Color = null,
+    // Tabs are rounded along their top edge: with the 1 pt gap, a hovered tab reads as a tab.
+    tab_radius: prop.Radius = .{ .top_left = .{ .px = 6 }, .top_right = .{ .px = 6 } },
     label_size: prop.Len = .{ .px = 13 },
     pad_lr: prop.Len = .{ .px = 11 },
     // The bar a drop would land on, drawn across the strip.
@@ -89,6 +97,11 @@ fn stripId(base: []const u8) cl.ElementId {
 
 fn stripRowId(base: []const u8) cl.ElementId {
     return cl.ElementId.IDI(base, 0xF001);
+}
+
+/// The rule along the bar's bottom edge, and the line under the active tab: ids no tab index can reach.
+fn dividerId(base: []const u8) cl.ElementId {
+    return cl.ElementId.IDI(base, 0xF002);
 }
 
 /// The most bars one app may keep a scroll position for, and the most tabs one bar may offer a card for.
@@ -160,7 +173,7 @@ pub fn tabs(props: TabsProps) void {
     cl.UI()(.{
         .id = props.id.clay(),
         .layout = .{
-            .direction = .left_to_right,
+            .direction = .top_to_bottom,
             .sizing = .{ .w = .grow, .h = props.h.clay() },
             .child_gap = 0,
         },
@@ -191,6 +204,12 @@ pub fn tabs(props: TabsProps) void {
                 registry.popClip();
             });
         });
+        // The seam between the bar and the pane it opens: a strip with no rule under it floats over the editor.
+        if (props.divider) |d| cl.UI()(.{
+            .id = dividerId(name),
+            .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(1) } },
+            .background_color = d.toClay(),
+        })({});
     });
 }
 
@@ -229,76 +248,84 @@ fn wheelScroll(strip: *Strip, clip: cl.ElementId, content_w: f32) void {
 }
 
 fn tabUi(props: TabsProps, strip: *Strip, tab: Tab, i: usize) void {
-    const fg = if (tab.active) props.active_fg else props.fg;
-    const bg = if (tab.active) props.active_bg else if (cl.hovered()) props.hover_bg else props.bg;
+    const name = props.id.str();
+    // The pointer over THIS tab, asked by id: `cl.hovered()` would answer for the strip row, and light up every tab at once.
+    const hovered = cl.pointerOver(tabId(name, i));
+    const fg = if (tab.active or hovered) props.active_fg else props.fg;
+    const bg = if (tab.active) props.active_bg else if (hovered) props.hover_bg else props.bg;
     const size = props.label_size.whole();
 
     cl.UI()(.{
-        .id = tabId(props.id.str(), i),
+        .id = tabId(name, i),
         .layout = .{
-            .direction = .left_to_right,
+            .direction = .top_to_bottom,
             .sizing = .{ .w = .fixed(props.tab_w.pts()), .h = .grow },
-            .padding = .{ .left = props.pad_lr.whole(), .right = props.pad_lr.whole() },
-            .child_alignment = .{ .x = .left, .y = .center },
-            .child_gap = 8,
+            .child_gap = 0,
         },
         .background_color = bg.toClay(),
+        .corner_radius = props.tab_radius.clay(),
     })({
-        if (tab.accent) |accent| {
-            cl.UI()(.{
-                .id = innerId(props.id.str(), i, 1),
-                .layout = .{ .sizing = .{ .w = .fixed(5), .h = .fixed(5) } },
-                .background_color = accent.toClay(),
-                .corner_radius = .all(3),
-            })({});
-        }
-        // The label takes whatever the dot and the close leave, and is cut to it: a tab never grows a second line.
         cl.UI()(.{
-            .id = innerId(props.id.str(), i, 3),
+            .id = innerId(name, i, 5),
             .layout = .{
                 .direction = .left_to_right,
                 .sizing = .{ .w = .grow, .h = .grow },
+                .padding = .{ .left = props.pad_lr.whole(), .right = props.pad_lr.whole() },
                 .child_alignment = .{ .x = .left, .y = .center },
-                .child_gap = 0,
+                .child_gap = 8,
             },
         })({
-            const fitted = text_fit.fit(tab.label, size, labelBudget(props, tab));
-            cl.text(tab.label[0..fitted.keep], .{ .font_size = size, .color = fg.toClay() });
-            // Three dots rather than U+2026: the bundled face has Latin-1, and a missing glyph reads worse than a short name.
-            if (fitted.dots) cl.text(text_fit.dots, .{ .font_size = size, .color = fg.toClay() });
-        });
-        if (tab.closable) {
+            if (tab.accent) |accent| {
+                cl.UI()(.{
+                    .id = innerId(name, i, 1),
+                    .layout = .{ .sizing = .{ .w = .fixed(5), .h = .fixed(5) } },
+                    .background_color = accent.toClay(),
+                    .corner_radius = .all(3),
+                })({});
+            }
+            // The label takes whatever the dot and the close leave, and is cut to it: a tab never grows a second line.
             cl.UI()(.{
-                .id = innerId(props.id.str(), i, 2),
+                .id = innerId(name, i, 3),
                 .layout = .{
-                    .sizing = .{ .w = .fixed(16), .h = .fixed(16) },
-                    .child_alignment = .{ .x = .center, .y = .center },
+                    .direction = .left_to_right,
+                    .sizing = .{ .w = .grow, .h = .grow },
+                    .child_alignment = .{ .x = .left, .y = .center },
+                    .child_gap = 0,
                 },
-                .background_color = (if (cl.hovered()) props.close_hover else Color.rgb(0x00, 0x00, 0x00)).toClay(),
-                .corner_radius = .all(4),
             })({
-                cl.text("x", .{ .font_size = 11, .color = props.close_fg.toClay() });
+                const fitted = text_fit.fit(tab.label, size, labelBudget(props, tab));
+                cl.text(tab.label[0..fitted.keep], .{ .font_size = size, .color = fg.toClay() });
+                // Three dots rather than U+2026: the bundled face has Latin-1, and a missing glyph reads worse than a short name.
+                if (fitted.dots) cl.text(text_fit.dots, .{ .font_size = size, .color = fg.toClay() });
             });
-        }
+            // Where the close box would be: a clean tab offers "x", a tab with unsaved work offers the dot until it is hovered.
+            if (tab.closable) closeSlot(props, tab, hovered, fg, i);
+        });
+        // The active tab's own line, under its label: the fill is a subtle step, so one bright edge is what a glance finds.
+        if (tab.active) if (props.active_line) |line| cl.UI()(.{
+            .id = innerId(name, i, 4),
+            .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(2) } },
+            .background_color = line.toClay(),
+        })({});
     });
 
     semantics.registerAt(@src(), .{
         .declared = semantics.declaredAt(props.src),
-        .id = tabId(props.id.str(), i),
+        .id = tabId(name, i),
         .role = .list_item,
         .flags = .{ .enabled = true, .selected = tab.active },
     });
     if (props.on_select.f) |cb| {
-        registry.registerZCursor(tabId(props.id.str(), i), cb, props.on_select.ctx, i, props.click_z, .pointer);
+        registry.registerZCursor(tabId(name, i), cb, props.on_select.ctx, i, props.click_z, .pointer);
     }
     if (tab.closable) {
         if (props.on_close.f) |cb| {
-            registry.registerZCursor(innerId(props.id.str(), i, 2), cb, props.on_close.ctx, i, props.click_z, .pointer);
+            registry.registerZCursor(innerId(name, i, 2), cb, props.on_close.ctx, i, props.click_z, .pointer);
         }
     }
     // The Host already routes press/move/release to `reorder`, so a registered tab is draggable with no pointer code here.
     if (props.on_move) |move_fn| {
-        reorder_mod.register(props.id.str(), tabId(props.id.str(), i), i, .{
+        reorder_mod.register(name, tabId(name, i), i, .{
             .on_move = move_fn,
             .ctx = props.ctx,
             .axis = .horizontal,
@@ -306,6 +333,33 @@ fn tabUi(props: TabsProps, strip: *Strip, tab: Tab, i: usize) void {
         });
     }
     if (strip.menu_base + i < menu_slots.len) registerCard(props, strip.menu_base + i, tab, i);
+}
+
+// The 16 pt slot at a tab's right edge: the dot while the tab has edits and nobody points at it, "x" otherwise.
+fn closeSlot(props: TabsProps, tab: Tab, hovered: bool, fg: Color, i: usize) void {
+    const name = props.id.str();
+    // A box with nothing drawn in it must paint nothing at all: a transparent fill emits no rectangle in Clay.
+    const background = if (cl.hovered()) props.close_hover else Color.rgba(0, 0, 0, 0);
+    cl.UI()(.{
+        .id = innerId(name, i, 2),
+        .layout = .{
+            .sizing = .{ .w = .fixed(16), .h = .fixed(16) },
+            .child_alignment = .{ .x = .center, .y = .center },
+        },
+        .background_color = background.toClay(),
+        .corner_radius = .all(4),
+    })({
+        if (tab.dirty and !hovered) {
+            cl.UI()(.{
+                .id = innerId(name, i, 6),
+                .layout = .{ .sizing = .{ .w = .fixed(6), .h = .fixed(6) } },
+                .background_color = (props.dirty_fg orelse fg).toClay(),
+                .corner_radius = .all(3),
+            })({});
+        } else {
+            cl.text("x", .{ .font_size = 11, .color = props.close_fg.toClay() });
+        }
+    });
 }
 
 // What a tab's label may spend: its own width less the dot, the close box, the two paddings and the gaps between them.
@@ -370,8 +424,8 @@ test "a tab bar draws a box per tab plus the container" {
     var rects: usize = 0;
     var texts: usize = 0;
     try headless.countCommands(declareSample, &rects, &texts);
-    // Container + one box per tab + a dot on two + a close box on two. The clip, the strip and the label's row draw nothing.
-    try std.testing.expectEqual(@as(usize, 1 + 3 + 2 + 2), rects);
+    // Container + one box per tab + a dot on two. The strip and the label's row draw nothing, and an idle close box is transparent.
+    try std.testing.expectEqual(@as(usize, 1 + 3 + 2), rects);
     // A label per tab, plus an "x" on the two closable ones.
     try std.testing.expectEqual(@as(usize, 3 + 2), texts);
 }
@@ -569,4 +623,148 @@ test "dragging a tab across the strip reports the index it lands on" {
     try std.testing.expectEqual(@as(usize, 1), move_ctx.calls);
     try std.testing.expectEqual(@as(usize, 0), move_ctx.from);
     try std.testing.expectEqual(@as(usize, 2), move_ctx.to);
+}
+
+// ---- the look: which tab lights up, what an unsaved tab offers, and the two rules ------------------------------
+
+fn rectColorOf(cmds: []cl.RenderCommand, id: u32) ?cl.Color {
+    for (cmds) |c| {
+        if (c.command_type != .rectangle) continue;
+        if (c.id != id) continue;
+        return c.render_data.rectangle.background_color;
+    }
+    return null;
+}
+
+fn countTextOf(cmds: []cl.RenderCommand, needle: []const u8) usize {
+    var n: usize = 0;
+    for (cmds) |c| {
+        if (c.command_type != .text) continue;
+        const run = c.render_data.text.string_contents;
+        if (std.mem.eql(u8, run.chars[0..@intCast(run.length)], needle)) n += 1;
+    }
+    return n;
+}
+
+const bar_bg = Color.rgb(0x10, 0x10, 0x12);
+const hover_tone = Color.rgb(0x30, 0x30, 0x34);
+const active_tone = Color.rgb(0x20, 0x20, 0x24);
+
+const hover_tabs = [_]Tab{
+    .{ .label = "one", .closable = false },
+    .{ .label = "two", .closable = false },
+    .{ .label = "three", .closable = false },
+};
+
+test "the hover tone belongs to the tab under the pointer, not to the whole strip" {
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.setLayoutDimensions(.{ .w = 480, .h = 200 });
+    fx = .{
+        .id = .{ .text = "tabs-hover" },
+        .tabs = &hover_tabs,
+        .tab_w = .{ .px = 100 },
+        .h = .{ .fixed = 30 },
+        .bg = bar_bg,
+        .hover_bg = hover_tone,
+        .active_bg = active_tone,
+    };
+    // The first frame lays the tabs out; the second one can ask where they are.
+    _ = frame(99999, 99999);
+    const second = boxOf(tabId("tabs-hover", 1));
+    const cmds = frame(second.x + 20, second.y + 10);
+    // One tab lights up, and the two beside it keep the bar's own tone.
+    try std.testing.expectEqual(hover_tone.toClay(), rectColorOf(cmds, tabId("tabs-hover", 1).id).?);
+    try std.testing.expectEqual(bar_bg.toClay(), rectColorOf(cmds, tabId("tabs-hover", 0).id).?);
+    try std.testing.expectEqual(bar_bg.toClay(), rectColorOf(cmds, tabId("tabs-hover", 2).id).?);
+}
+
+const dirty_tabs = [_]Tab{
+    .{ .label = "clean" },
+    .{ .label = "edited", .dirty = true },
+};
+
+test "an unsaved tab offers a dot where its close box sits, and the x comes back under the pointer" {
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.setLayoutDimensions(.{ .w = 480, .h = 200 });
+    const dot_tone = Color.rgb(0x87, 0xa9, 0x87);
+    fx = .{
+        .id = .{ .text = "tabs-dirty" },
+        .tabs = &dirty_tabs,
+        .tab_w = .{ .px = 120 },
+        .h = .{ .fixed = 30 },
+        .dirty_fg = dot_tone,
+    };
+    _ = frame(99999, 99999);
+    const idle = frame(99999, 99999);
+    // Two labels, and one x: the tab with edits keeps its close box until the pointer arrives.
+    try std.testing.expectEqual(@as(usize, 1), countTextOf(idle, "x"));
+    // The dot sits in the close slot, and it is the app's own tone.
+    const slot = innerId("tabs-dirty", 1, 2);
+    const dot = innerId("tabs-dirty", 1, 6);
+    const dot_box = boxOf(dot);
+    const slot_box = boxOf(slot);
+    try std.testing.expect(dot_box.width > 0);
+    try std.testing.expect(dot_box.x >= slot_box.x and dot_box.x + dot_box.width <= slot_box.x + slot_box.width);
+    try std.testing.expectEqual(dot_tone.toClay(), rectColorOf(idle, dot.id).?);
+
+    // The pointer over that tab swaps the dot for its close box.
+    const edited = boxOf(tabId("tabs-dirty", 1));
+    const over = frame(edited.x + 20, edited.y + 10);
+    try std.testing.expectEqual(@as(usize, 2), countTextOf(over, "x"));
+    try std.testing.expect(rectColorOf(over, dot.id) == null);
+}
+
+test "an idle close box paints nothing, and the hovered one paints its own tone" {
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.setLayoutDimensions(.{ .w = 480, .h = 200 });
+    const close_tone = Color.rgb(0x3a, 0x3a, 0x42);
+    fx = .{
+        .id = .{ .text = "tabs-close" },
+        .tabs = &dirty_tabs,
+        .tab_w = .{ .px = 120 },
+        .h = .{ .fixed = 30 },
+        .close_hover = close_tone,
+    };
+    _ = frame(99999, 99999);
+    const idle = frame(99999, 99999);
+    // Not hovered: the slot is transparent, so Clay emits no rectangle for it at all.
+    try std.testing.expect(rectColorOf(idle, innerId("tabs-close", 0, 2).id) == null);
+    // Over the close box: the box shows itself, while the other tab keeps the dot it was showing.
+    const slot = boxOf(innerId("tabs-close", 0, 2));
+    const over = frame(slot.x + slot.width * 0.5, slot.y + slot.height * 0.5);
+    try std.testing.expectEqual(close_tone.toClay(), rectColorOf(over, innerId("tabs-close", 0, 2).id).?);
+    try std.testing.expectEqual(@as(usize, 1), countTextOf(over, "x"));
+    try std.testing.expect(rectColorOf(over, innerId("tabs-close", 1, 6).id) != null);
+}
+
+const line_tabs = [_]Tab{
+    .{ .label = "one" },
+    .{ .label = "two", .active = true },
+};
+
+test "the active tab wears its line, and the bar its rule along the bottom" {
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.setLayoutDimensions(.{ .w = 480, .h = 200 });
+    const line_tone = Color.rgb(0x8b, 0xa4, 0xb0);
+    const divider_tone = Color.rgb(0x39, 0x38, 0x36);
+    fx = .{
+        .id = .{ .text = "tabs-line" },
+        .tabs = &line_tabs,
+        .tab_w = .{ .px = 120 },
+        .h = .{ .fixed = 32 },
+        .active_line = line_tone,
+        .divider = divider_tone,
+    };
+    const cmds = frame(99999, 99999);
+    const line = rectColorOf(cmds, innerId("tabs-line", 1, 4).id).?;
+    try std.testing.expectEqual(line_tone.toClay(), line);
+    // The inactive tab has no line, so nothing is drawn in its slot.
+    try std.testing.expect(rectColorOf(cmds, innerId("tabs-line", 0, 4).id) == null);
+    // The rule spans the bar's bottom edge, and the strip above it ends where the rule starts.
+    const divider = boxOf(dividerId("tabs-line"));
+    const bar = boxOf(cl.getElementId("tabs-line"));
+    try std.testing.expectEqual(@as(f32, 1), divider.height);
+    try std.testing.expectApproxEqAbs(bar.y + bar.height, divider.y + divider.height, 0.5);
+    try std.testing.expectApproxEqAbs(bar.width, divider.width, 0.5);
+    try std.testing.expectApproxEqAbs(divider.y, boxOf(tabId("tabs-line", 1)).y + boxOf(tabId("tabs-line", 1)).height, 0.5);
 }
