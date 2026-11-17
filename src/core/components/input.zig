@@ -134,6 +134,8 @@ pub const Field = struct {
     revealed_caret: ?usize = null,
     // The clip's width in the previous frame: the room the caret has before the text has to slide.
     inner_w: f32 = 0,
+    // The viewports this field was declared inside, by element id: a field scrolled out of its box answers no press there, ring or no ring.
+    clip: ?registry.Clip = null,
     bound: bool = false,
     // True when the text lives in a buffer the caller owns and sized, so this field never grows into the engine's allocator.
     fixed_storage: bool = false,
@@ -589,9 +591,10 @@ fn visibleBox(field: *const Field) ?cl.BoundingBox {
     return .{ .x = x0, .y = y0, .width = @max(x1 - x0, 0), .height = @max(y1 - y0, 0) };
 }
 
-// True when (x, y) is on the part of the field the user can actually see.
+// True when (x, y) is on the part of the field the user can actually see: its own box, inside every viewport it was declared in.
 fn pointInField(field: *const Field, x: f32, y: f32) bool {
     const bb = visibleBox(field) orelse return false;
+    if (!registry.insideClip(field.clip, x, y)) return false;
     return x >= bb.x and x < bb.x + bb.width and y >= bb.y and y < bb.y + bb.height;
 }
 
@@ -707,7 +710,7 @@ pub fn textField(field: *Field) void {
     });
 
     // The keyboard's position has to be visible (WCAG 2.4.7), and a ring drawn outside the box covers none of the field (2.4.11).
-    if (ring_box) |b| if (field.focus_ring_w.pts() > 0) drawFocusRing(field, name, b);
+    if (ring_box) |b| if (field.focus_ring_w.pts() > 0 and ringOnScreen(field, b)) drawFocusRing(field, name, b);
 
     // Semantics: an editable field declares `set_text`, so a test can type into it by name and a reader can find it.
     if (!field.disabled and name.len > 0) {
@@ -721,6 +724,8 @@ pub fn textField(field: *Field) void {
             .actions = .{ .set_text = true },
         });
     }
+    // The viewports this field lives in, so a press and the ring obey them: the registry clips the target, and the press path asks the same question.
+    field.clip = registry.currentClip();
     // A field paints its own surface: a click inside it is the field's, and never the widget the field covers.
     registry.occludeFill(field.id.clay(), if (field.disabled) field.disabled_bg else field.bg);
     registry.registerClickDoubleCursorZ(field.id.clay(), onFieldClick, onFieldDoubleClick, field, .text, field.click_z);
@@ -860,7 +865,11 @@ const text_clip_index: u32 = 3;
 // The focus ring's index: 1 the selection, 2 the caret, 3 the clip, 4 the ring, 4096+ the multiline rows.
 const focus_ring_index: u32 = 4;
 
-// One floating box around the field's own box, a frame behind: a box read mid-declare has not been laid out yet.
+// A ring floats over everything, so a scissor cannot cut it: it is drawn only while the field it belongs to is inside its viewports, the rule the caret follows.
+fn ringOnScreen(field: *const Field, b: frame_mod.Bounds) bool {
+    return registry.insideClip(field.clip, b.x + b.width * 0.5, b.y + b.height * 0.5);
+}
+
 fn drawFocusRing(field: *Field, name: []const u8, b: frame_mod.Bounds) void {
     // A ring is a hairline on the device grid: a fractional width would paint two half-lit columns (the audit says so too).
     const width: u16 = @intFromFloat(@max(1, @round(field.focus_ring_w.pts())));
@@ -2466,4 +2475,59 @@ test "typing a word with a frame between the keystrokes is still one step" {
     try std.testing.expectEqual(@as(usize, 1), test_field.editor.hist.undo.items.len);
     try std.testing.expect(dispatchKey(.{ .ctrl = true }, text_editor.KEY_Z));
     try std.testing.expectEqualStrings("", test_field.text());
+}
+
+// ---- a field scrolled out of its box is not there -------------------------------------------- The reported bug in Kurir: a press in the response pane focused a header field whose row sits below the sheet's viewport, and that field's focus ring — which floats, so no scissor cuts it — painted over the pane.
+
+var offscreen_field: Field = .{ .id = .{ .text = "test-offscreen-field" } };
+
+fn declareOffscreenField() void {
+    cl.UI()(.{
+        .id = .ID("test-offscreen-viewport"),
+        .layout = .{ .direction = .top_to_bottom, .sizing = .{ .w = .fixed(300), .h = .fixed(60) } },
+        .clip = .{ .vertical = true },
+    })({
+        registry.pushClip(.ID("test-offscreen-viewport"));
+        // A row's worth of content above it, so the field's own box lands BELOW the 60 pt viewport.
+        cl.UI()(.{ .id = .ID("test-offscreen-spacer"), .layout = .{ .sizing = .{ .w = .fixed(10), .h = .fixed(100) } } })({});
+        textField(&offscreen_field);
+        registry.popClip();
+    });
+}
+
+// A second layout on the SAME Clay context: the frame in which a box declared last time is readable, which is the frame a press lands in.
+fn offscreenAgain() []cl.RenderCommand {
+    cl.beginLayout();
+    declareOffscreenField();
+    return cl.endLayout();
+}
+
+fn startOffscreenField() !void {
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.ptr_down = false;
+    beginFrame();
+    offscreen_field = .{ .id = .{ .text = "test-offscreen-field" }, .value = "typed", .w = .{ .fixed = 200 }, .h = .{ .fixed = 30 } };
+    offscreen_field.bind();
+    _ = try layoutCommands(declareOffscreenField);
+    frame_mod.ptr_down = false;
+}
+
+test "a field scrolled out of its box takes no press there" {
+    try startOffscreenField();
+    const bb = cl.getElementData(cl.getElementId("test-offscreen-field")).bounding_box;
+    const view = cl.getElementData(cl.getElementId("test-offscreen-viewport")).bounding_box;
+    // The field really is below the viewport, which is what makes this the reported shape.
+    try std.testing.expect(bb.y > view.y + view.height);
+    const cx = bb.x + bb.width * 0.5;
+    const cy = bb.y + bb.height * 0.5;
+
+    // A press on the spot the field's box occupies does not reach it: no caret move, no keyboard.
+    frame_mod.resetFocus();
+    frame_mod.setPointer(cx, cy);
+    frame_mod.setPointerButton(true, cx, cy);
+    _ = offscreenAgain();
+    try std.testing.expect(frame_mod.focusedId() == null);
+    try std.testing.expectEqual(@as(usize, 0), offscreen_field.editor.caret.offset);
+    frame_mod.setPointerButton(false, 0, 0);
 }
