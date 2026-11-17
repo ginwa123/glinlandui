@@ -91,21 +91,34 @@ pub fn reset() void {
     face = null;
 }
 
-// Width and line height of `text` at `font_size`, measured with the face that draws it. The width is the sum of the glyph advances — exactly what the
+// Device pixels per point, as the window reported it: the rasteriser draws a run at round(size * this), not at size.
+var pixel_scale: f32 = 1;
 
-// rasteriser advances its pen by, so a run can never be wider than the box the layout gave it, and a caret placed at a measured offset lands on the
+/// The scale the renderer will draw at, so a measured width is the width that is actually painted.
+pub fn setPixelScale(s: f32) void {
+    pixel_scale = if (s > 0) s else 1;
+}
 
-// glyph boundary.
+/// The whole device size a run of `font_size` points is drawn at: the same rounding the rasteriser does.
+pub fn deviceSize(font_size: u16) u16 {
+    if (font_size == 0) return 16;
+    const scaled = @as(f32, @floatFromInt(font_size)) * pixel_scale;
+    return @intFromFloat(@max(1, @round(scaled)));
+}
+
+// Width and line height of `text` at `font_size`, measured at the device size the rasteriser draws it at: the same pen.
 pub fn measureText(text: []const u8, font_size: u16) TextExtent {
     const h = lineHeight(font_size);
     if (text.len == 0) return .{ .w = 0, .h = h };
     const f = font() orelse return estimator.measureText(text, font_size);
 
-    const hash = estimator.hashMeasureKey(text, font_size);
-    if (cacheGet(hash)) |w| return .{ .w = w, .h = h };
-    const m = glyphs.measure(f, text, font_size);
+    // Keyed and cached in DEVICE pixels, so a width measured for one scale is never handed to another.
+    const device = deviceSize(font_size);
+    const hash = estimator.hashMeasureKey(text, device);
+    if (cacheGet(hash)) |dev_w| return .{ .w = dev_w / pixel_scale, .h = h };
+    const m = glyphs.measure(f, text, device);
     cachePut(hash, m.width);
-    return .{ .w = m.width, .h = h };
+    return .{ .w = m.width / pixel_scale, .h = h };
 }
 
 // ===================== tests =====================
@@ -116,6 +129,19 @@ test "measureText agrees with the glyph advances it will be drawn with" {
     const f = font() orelse return error.SkipZigTest;
     const m = measureText("Invoice", 14);
     try std.testing.expectApproxEqAbs(glyphs.measure(f, "Invoice", 14).width, m.w, 0.001);
+}
+
+test "a width is measured at the device size the run is drawn at" {
+    // page_allocator: the face is a process-lifetime singleton, so it is deliberately never freed (same rule as the Clay arena).
+    setAllocator(std.heap.page_allocator);
+    const f = font() orelse return error.SkipZigTest;
+    setPixelScale(1.25);
+    defer setPixelScale(1);
+    // 14 pt at 125% is drawn at round(17.5) = 18 device px, so the layout must be told 18 / 1.25 = 14.4 points.
+    try std.testing.expectEqual(@as(u16, 18), deviceSize(14));
+    const m = measureText("Invoice", 14);
+    const drawn = glyphs.measure(f, "Invoice", deviceSize(14)).width;
+    try std.testing.expectApproxEqAbs(drawn / 1.25, m.w, 0.01);
 }
 
 test "measureText is additive for a monospace run and empty text is zero wide" {

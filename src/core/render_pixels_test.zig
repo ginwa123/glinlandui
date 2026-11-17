@@ -684,3 +684,27 @@ test "pixel: resize grows the framebuffer and clears it" {
     try expectPx(s, 7, 7, .{ 1, 2, 3, 255 });
     try expectPx(s, 0, 0, .{ 1, 2, 3, 255 });
 }
+
+test "pixel: a run's ink ends where the layout measured it, at 125%" {
+    if (!soft.hasGlyphFont()) return error.SkipZigTest;
+    const text_backend = @import("text_backend.zig");
+    soft.setRenderScale(1.25);
+    defer soft.setRenderScale(1.0);
+    var s = try surface(900, 64);
+    defer s.deinit();
+    // A 13 pt run at 125% is drawn at round(16.25) = 16 px; measuring at 13 made the layout 1.5% wide, which put the caret six pixels past the ink.
+    const text = "Bearer <PASTE_ACCESS_TOKEN>";
+    s.drawTextRun(0, 0, 40, text, 16, .{ 255, 255, 255, 255 });
+    var right: usize = 0;
+    for (0..64) |y| {
+        for (0..900) |x| {
+            const p = s.px(@intCast(x), @intCast(y));
+            if (p[0] > 0 or p[1] > 0 or p[2] > 0) right = @max(right, x);
+        }
+    }
+    const want = text_backend.runWidth(text, 13) * 1.25;
+    const inked: f32 = @floatFromInt(right);
+    // Ink stops at the last glyph's right bearing, so a pixel or two short of the pen is correct; six was the drift.
+    try std.testing.expect(inked <= want);
+    try std.testing.expect(want - inked <= 3);
+}
