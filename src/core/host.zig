@@ -12,8 +12,6 @@ const key_tab: u32 = 15;
 /// Enter and Space: the keys that activate whatever the keyboard is on.
 const key_enter: u32 = 28;
 const key_space: u32 = 57;
-/// Above the ordinary content, below a menu or a dropdown card.
-const ring_z: i16 = 0;
 const focus_mod = @import("components/focus.zig");
 const registry = @import("components/click_registry.zig");
 const image_widgets = @import("components/image.zig");
@@ -112,9 +110,6 @@ pub const Host = struct {
     pub fn declareFrame(self: *Host, w: u32, h: u32) void {
         // A devtool client is waiting: fire its action BEFORE the registries are cleared, so it lands in the targets the last frame declared.
         if (self.service) |svc| svc.begin(svc.ptr, self);
-        // The ring a focused non-field element gets is drawn at the END of this declare, from the box the frame before it left.
-        const ring_target = focus_mod.hostRingElement();
-        const ring_box = if (ring_target) |id| frame_mod.bounds(id) else null;
         // Fresh registries per frame (components self-register during declare; stale boxes must never ghost-fire).
         frame_mod.beginDragFrame();
         registry.beginFrame();
@@ -126,7 +121,6 @@ pub const Host = struct {
         semantics.beginFrame();
         self.root_fn(self.root_ctx, w, h);
         // Every focusable that does not colour its own ring gets the same one here, so the whole toolkit agrees on what focus looks like (WCAG 2.4.7).
-        if (ring_box) |b| if (ring_target) |id| focus_mod.drawRing(id, b, focus_mod.ring_color, focus_mod.ring_width, ring_z);
         // The context menu is the engine's, so it needs no declaration from the app: it floats over the tree it was raised from.
         context_menu.declare();
         // The devtool declares last, so its overlay paints over the app; it registers no semantics node, so it never shows up in its own tree.
