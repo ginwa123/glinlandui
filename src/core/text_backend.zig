@@ -27,6 +27,9 @@ pub fn runWidth(bytes: []const u8, font_size: u16) f32 {
 }
 // True when text is measured with real metrics; false on a host with no font file (a bare CI runner, wasm).
 pub const fontAvailable = face.fontAvailable;
+// The scale the renderer draws at: a measured width must be the width that is painted.
+pub const setPixelScale = face.setPixelScale;
+pub const deviceSize = face.deviceSize;
 // The face itself, so a rasteriser draws with the same one the layout measured with.
 pub const face_font = face.font;
 pub const extent_hits = native.extent_hits;

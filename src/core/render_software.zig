@@ -797,6 +797,8 @@ var render_scale: f32 = 1.0;
 // Set the device scale. Values at or below zero are ignored.
 pub fn setRenderScale(s: f32) void {
     render_scale = if (s > 0) s else 1.0;
+    // Every backend reports its scale here, so the measured width follows the size the glyphs are drawn at.
+    text_face.setPixelScale(render_scale);
 }
 
 // The current device scale.

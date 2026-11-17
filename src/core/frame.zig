@@ -131,6 +131,8 @@ pub var pixel_scale: f32 = 1;
 // Record the window's backing scale, so a hairline can be snapped to real device pixels.
 pub fn setPixelScale(s: f32) void {
     pixel_scale = if (s > 0) s else 1;
+    // The rasteriser draws a run at round(size * scale), so the layout must measure that size or a caret drifts off it.
+    text.setPixelScale(pixel_scale);
 }
 
 // Snap a caret's left edge to the device pixel grid. A 1 pt bar at a fractional x is antialiased across two device pixels, and the half-covered one
