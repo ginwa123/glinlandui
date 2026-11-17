@@ -84,6 +84,8 @@ pub const Window = struct {
     have_ptr: bool = false,
     /// Is the primary button currently held?
     left_held: bool = false,
+    /// The cursor shape last handed to Win32, so a frame that did not change it costs nothing.
+    last_shape: u32 = frame_mod.shape_sentinel,
     /// Frames composited so far.
     diag_frames: u32 = 0,
 
@@ -205,6 +207,8 @@ pub const Window = struct {
         // Record the space those boxes were laid out in, so a pointer event that arrives before the next frame translates in it.
         self.layout_w = w;
         self.layout_h = h;
+        // The frame resolved the hover cursor from the registries it just declared, so hand it to Win32 BEFORE the GPU early-return below.
+        self.applyCursor();
         // When the renderer drew this frame on the GPU it has already presented it; uploading the CPU surface now would paint the previous frame back over it.
         if (renderer.drewOnGpu()) return;
         self.presentFrame();
@@ -232,6 +236,19 @@ pub const Window = struct {
         self.diag_frames += 1;
         // Reported AFTER the present, and only once, because this frame may be the one that made the shim fall back from D3D11 to GDI — a report taken before.
         if (self.diag_frames == 1) reportFirstFrame(handle, self.blit_buf, surface);
+    }
+
+    /// Hand the shape the frame resolved to Win32, when it changed: the hand over a button, the I-beam over a field, the resize arrows on a grab line.
+    fn applyCursor(self: *Window) void {
+        const handle = self.handle orelse return;
+        const shape = frame_mod.currentShape();
+        if (!frame_mod.shouldApplyShape(self.last_shape, shape)) return;
+        self.last_shape = shape;
+        c.glin_win_set_cursor(handle, adapter.cursorId(shape));
+        // `GLIN_CURSOR_TRACE=1`: the one line that says whether the shape came out of the registry at all, before blaming Win32.
+        if (std.c.getenv("GLIN_CURSOR_TRACE") != null) {
+            std.debug.print("[cursor] shape {d} -> id {d}\n", .{ shape, adapter.cursorId(shape) });
+        }
     }
 
     /// Apply a coalesced resize.
@@ -272,6 +289,10 @@ pub const Window = struct {
 
         self.state.needs_draw = true;
         d.on_pointer(d.ptr, t.x, t.y, t.pressed, t.button);
+        // `GLIN_CURSOR_TRACE=1`: the pointer half of the same question — did the move that should change the cursor arrive at all?
+        if (std.c.getenv("GLIN_CURSOR_TRACE") != null) {
+            std.debug.print("[ptr] kind {d} {d:.1},{d:.1} pressed={}\n", .{ kind_u8, t.x, t.y, t.pressed });
+        }
         // WM_PAINT only arrives when something invalidates the window, and a toolkit that owns its own frame loop never invalidates on its own.
         c.glin_win_invalidate(self.handle);
     }

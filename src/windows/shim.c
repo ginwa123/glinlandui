@@ -151,6 +151,10 @@ static const wchar_t *const kGlinWindowTitle = L"glinlandui";
 
 struct GlinWinWindow {
     HWND hwnd;
+    // The cursor shape the host last asked for. WM_SETCURSOR answers the client
+    // area from here, because DefWindowProc would otherwise put the class arrow
+    // back on the next pointer move.
+    HCURSOR cursor;
 
     GlinWinOnFrame on_frame;
     GlinWinOnPointer on_pointer;
@@ -878,6 +882,18 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
 
+    case WM_SETCURSOR:
+        // DefWindowProc answers every WM_SETCURSOR with the window CLASS cursor
+        // (the arrow), so a SetCursor() from inside the frame would be undone on
+        // the very next pointer move. Answer the client area from the stored
+        // handle instead, and let everything else (frame, resize borders, the
+        // menu bar) keep the default behaviour.
+        if (LOWORD(lp) == HTCLIENT && w->cursor != NULL) {
+            SetCursor(w->cursor);
+            return 1;
+        }
+        break;
+
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
     case WM_KEYUP:
@@ -1096,6 +1112,23 @@ void glin_win_invalidate(GlinWinWindow *win) {
     // never goes idle (a drag, a live resize) never paints at all.
     InvalidateRect(win->hwnd, NULL, FALSE);
     UpdateWindow(win->hwnd);
+}
+
+void glin_win_set_cursor(GlinWinWindow *win, unsigned int id) {
+    if (win == NULL) {
+        return;
+    }
+    // `id` is the numeric `IDC_*` resource the host picked (see
+    // windows/adapter.zig), so MAKEINTRESOURCE turns it back into the pointer
+    // LoadCursorW expects and no IDC_ name has to be known here.
+    HCURSOR shape = LoadCursorW(NULL, MAKEINTRESOURCEW(id));
+    if (shape == NULL) {
+        return;
+    }
+    // Stored as well as set: WM_SETCURSOR must keep answering with this handle,
+    // or the class arrow comes back the moment the pointer moves again.
+    win->cursor = shape;
+    SetCursor(shape);
 }
 
 void glin_win_quit(GlinWinWindow *win) {

@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const contract = @import("../core/window_contract.zig");
+const consts = @import("../core/protocol_consts.zig");
 
 // ============================== coordinates ==============================
 
@@ -102,6 +103,26 @@ pub fn resolveQuit(state: *contract.WindowState) bool {
 /// Mark the window as quitting (the close button, or a delegate request).
 pub fn requestQuit(state: *contract.WindowState) void {
     state.quit = true;
+}
+
+// ============================== cursor ==============================
+
+/// Win32's `IDC_*` ids, which are `MAKEINTRESOURCE` values rather than handles: the shim hands one to `LoadCursorW`.
+pub const cursor_arrow: u32 = 32512;
+pub const cursor_ibeam: u32 = 32513;
+pub const cursor_sizewe: u32 = 32644;
+pub const cursor_sizens: u32 = 32645;
+pub const cursor_hand: u32 = 32649;
+
+/// The Win32 cursor for a toolkit shape (cursor-shape-v1 numbering), so the OS mapping is tested instead of living in the shim's C.
+pub fn cursorId(shape: u32) u32 {
+    return switch (shape) {
+        consts.CursorShape.pointer => cursor_hand,
+        consts.CursorShape.text => cursor_ibeam,
+        consts.CursorShape.ew_resize => cursor_sizewe,
+        consts.CursorShape.ns_resize => cursor_sizens,
+        else => cursor_arrow,
+    };
 }
 
 // ===================== tests (parity suite — every platform) =====================
@@ -398,4 +419,34 @@ test "resolveQuit latches a delegate-driven quit" {
     // Latched: the backend's own flag is set too, so it stays quit.
     try std.testing.expect(st.quit);
     try std.testing.expect(resolveQuit(&st));
+}
+
+test "cursorId maps every shape a component registers" {
+    // The four cursors the base components ask for: a button's hand, a field's I-beam, a slider/sidebar handle and a split divider.
+    try std.testing.expectEqual(cursor_hand, cursorId(consts.CursorShape.pointer));
+    try std.testing.expectEqual(cursor_ibeam, cursorId(consts.CursorShape.text));
+    try std.testing.expectEqual(cursor_sizewe, cursorId(consts.CursorShape.ew_resize));
+    try std.testing.expectEqual(cursor_sizens, cursorId(consts.CursorShape.ns_resize));
+    try std.testing.expectEqual(cursor_arrow, cursorId(consts.CursorShape.default));
+}
+
+test "cursorId falls back to the arrow for a shape Windows has no cursor for" {
+    // The sentinel (0) is not a shape, and neither is a value a future protocol adds; neither may leave the previous cursor latched.
+    try std.testing.expectEqual(cursor_arrow, cursorId(0));
+    try std.testing.expectEqual(cursor_arrow, cursorId(999));
+}
+
+test "each toolkit shape maps to a cursor of its own" {
+    const shapes = [_]u32{
+        consts.CursorShape.default,
+        consts.CursorShape.pointer,
+        consts.CursorShape.text,
+        consts.CursorShape.ew_resize,
+        consts.CursorShape.ns_resize,
+    };
+    for (shapes, 0..) |a, i| {
+        for (shapes[i + 1 ..]) |b| {
+            try std.testing.expect(cursorId(a) != cursorId(b));
+        }
+    }
 }
