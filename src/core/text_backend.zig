@@ -32,5 +32,7 @@ pub const setPixelScale = face.setPixelScale;
 pub const deviceSize = face.deviceSize;
 // The face itself, so a rasteriser draws with the same one the layout measured with.
 pub const face_font = face.font;
+// Adopt a face the APPLICATION supplies, so an app can bring its own typeface instead of the bundled one.
+pub const installFaceBytes = face.installFaceBytes;
 pub const extent_hits = native.extent_hits;
 pub const extent_misses = native.extent_misses;
