@@ -174,6 +174,8 @@ var pixels: ?std.heap.ArenaAllocator = null;
 /// Point the glyph cache at the app's allocator. `Host.init` calls this with the allocator it was given.
 pub fn initCache(alloc: std.mem.Allocator) void {
     clearGlyphCache();
+    // A second init (a second host in one process, or a test) must return the previous arena's chunks, not drop them.
+    if (pixels) |*p| p.deinit();
     cache_alloc = alloc;
     pixels = .init(alloc);
 }

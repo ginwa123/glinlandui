@@ -62,6 +62,8 @@ pub const Host = struct {
     root_fn: RootFn,
     /// The devtool. Non-null turns the app into one that answers a right click with its own component tree; the app's own code is untouched.
     inspect: ?*inspector_mod.Inspector = null,
+    /// The allocator `devtools.attach` made the inspector with, so the shutdown frees it with the same one.
+    inspect_alloc: ?std.mem.Allocator = null,
     /// The devtool service. Non-null means a client may be waiting on this frame, so the loop fires its request before declaring and answers after resolving.
     service: ?ServiceHooks = null,
 
@@ -87,6 +89,15 @@ pub const Host = struct {
         if (self.clay_mem.len > 0) self.alloc.free(self.clay_mem);
         self.clay_mem = &.{};
         self.clay_ready = false;
+        // The devtool is heap memory made with `attach`'s allocator: free it, or a debug allocator reports it as a leak.
+        if (self.inspect) |dev| {
+            dev.search.deinit();
+            (self.inspect_alloc orelse self.alloc).destroy(dev);
+        }
+        self.inspect = null;
+        // The glyph cache and the measured face are process-lifetime singletons that spent THIS host's allocator, so a shutdown gives them back.
+        glyphs.deinitCache();
+        text_face.deinitFace();
     }
 
     /// The per-frame declare phase: reset the per-frame registries, then run the app's root callback.
@@ -354,6 +365,22 @@ test "host: init defaults headless (Clay only, renderer stays null)" {
     try std.testing.expect(!d.clay_ready);
     try std.testing.expect(d.renderer == null);
     try std.testing.expectEqual(@as(usize, 0), d.clay_mem.len);
+}
+
+test "host: deinit hands back the glyph cache, the face and the devtool it latched" {
+    var d = Host{ .alloc = std.testing.allocator, .root_fn = noopRoot };
+    glyphs.initCache(std.testing.allocator);
+    text_face.setAllocator(std.testing.allocator);
+    defer text_face.setAllocator(std.heap.page_allocator);
+    // One cached mask and one devtool, so the shutdown has something that would leak if it were skipped.
+    if (text_face.font()) |f| _ = glyphs.cachedGlyph(f, 'K', 14);
+    d.inspect = std.testing.allocator.create(inspector_mod.Inspector) catch return error.OutOfMemory;
+    d.inspect.?.* = .{};
+    d.inspect_alloc = std.testing.allocator;
+    d.deinit();
+    try std.testing.expect(d.inspect == null);
+    try std.testing.expectEqual(@as(usize, 0), glyphs.cachedGlyphCount());
+    // testing.allocator fails this test if the arena, the map, the face's bytes or the devtool are still live.
 }
 
 test "host: delegate drives every event (shape + wiring)" {

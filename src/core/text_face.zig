@@ -18,6 +18,8 @@ pub const TextExtent = estimator.TextExtent;
 
 // The process-wide face. Loaded once, from the installed font or the platform's candidate list.
 var face: ?glyphs.Font = null;
+// True when `face` was loaded HERE, so its bytes are this module's to free; a backend-installed font owns its own.
+var face_owned: bool = false;
 var load_tried: bool = false;
 // The allocator the application's `main` supplied. `Host.init` sets it before the first frame.
 var face_alloc: ?std.mem.Allocator = null;
@@ -33,6 +35,8 @@ pub fn font() ?*glyphs.Font {
 
     // measurement.
     if (glyphs.installedFont()) |f| {
+        // The installed struct replaces the one in use: a face loaded here is given back rather than dropped.
+        releaseFace();
         face = f.*;
         load_tried = true;
         return &face.?;
@@ -42,6 +46,7 @@ pub fn font() ?*glyphs.Font {
         if (face_alloc) |a| {
             load_tried = true;
             face = glyphs.Font.loadDefault(a);
+            face_owned = face != null;
         }
     }
     if (face) |*f| return f;
@@ -87,8 +92,21 @@ fn cachePut(hash: u64, w: f32) void {
 pub fn reset() void {
     for (&cache) |*e| e.valid = false;
     cache_next = 0;
-    load_tried = false;
+    deinitFace();
+}
+
+// Free the face this module loaded, if the bytes are its own; an installed face is left alone.
+fn releaseFace() void {
+    if (!face_owned) return;
+    if (face) |*f| f.deinit();
+    face_owned = false;
+}
+
+// Release the face for good: a host shutting down hands its allocator's memory back, so a debug allocator reports no leak.
+pub fn deinitFace() void {
+    releaseFace();
     face = null;
+    load_tried = false;
 }
 
 // Device pixels per point, as the window reported it: the rasteriser draws a run at round(size * this), not at size.
@@ -156,4 +174,18 @@ test "the line height is stable whatever the font is" {
     // 1.2 * size, the number every layout in every consumer is tuned to.
     try std.testing.expectApproxEqAbs(@as(f32, 16.8), lineHeight(14), 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 26.4), lineHeight(22), 0.001);
+}
+
+test "deinitFace returns the face's bytes to the allocator that was handed in" {
+    // A backend's installed face owns its own bytes, so only the face loaded HERE is this module's to free.
+    if (glyphs.installedFont() != null) return error.SkipZigTest;
+    reset();
+    setAllocator(std.testing.allocator);
+    defer setAllocator(std.heap.page_allocator);
+    if (font() == null) return error.SkipZigTest;
+    try std.testing.expect(face_owned);
+    // testing.allocator fails this test if the font's bytes are still live when it ends.
+    deinitFace();
+    try std.testing.expect(face == null);
+    try std.testing.expect(!face_owned);
 }

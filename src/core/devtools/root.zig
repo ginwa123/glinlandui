@@ -55,10 +55,11 @@ pub fn wakeWindow(window: anytype, fd: ?i32) void {
 
 // Attach the devtool to a host: right-click now inspects, and every frame resolves the tree the devtool reads.
 pub fn attach(alloc: std.mem.Allocator, host: *host_mod.Host) ?*Inspector {
-    // Process-lifetime by design, like the Clay arena: a devtool outlives every frame and is never torn down mid-run.
+    // Process-lifetime while the app runs, and freed by `Host.deinit` with this same allocator, so a debug build reports no leak.
     const insp = alloc.create(Inspector) catch return null;
     insp.* = .{};
     host.inspect = insp;
+    host.inspect_alloc = alloc;
     return insp;
 }
 
