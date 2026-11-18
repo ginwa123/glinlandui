@@ -368,6 +368,7 @@ pub fn beginFrame() void {
     active = null;
     // The tab order is this frame's too: a field that is not declared again is not reachable again.
     focus.beginDeclare();
+    syntax_runs_left = syntax_run_budget;
 }
 
 // Type a composed run into the focused field; false when no field owns the keyboard.
@@ -993,6 +994,10 @@ fn spanCovering(spans: []const SyntaxSpan, at: usize) usize {
     return lo;
 }
 
+// A frame colours at most this many runs: each is a Clay element, and the element array is finite, so a body drawn in full on its first frame must not fill it.
+pub const syntax_run_budget: usize = 4096;
+var syntax_runs_left: usize = syntax_run_budget;
+
 // A line of text as the runs it is made of: one command per syntax span it meets, and one for each gap between them.
 fn textRuns(field: *Field, line: []const u8, line_start: usize, fg: Color) void {
     const size = field.font_size.whole();
@@ -1007,6 +1012,9 @@ fn textRuns(field: *Field, line: []const u8, line_start: usize, fg: Color) void 
         const from = @max(if (span.start > line_start) span.start - line_start else 0, cursor);
         const to = @min(span.end - line_start, line.len);
         if (to <= from) continue;
+        // The frame's run budget is spent: the rest of this line keeps the field's ink, which never looks broken.
+        if (syntax_runs_left == 0) return drawRun(line[from..], size, fg);
+        syntax_runs_left -= 1;
         if (from > cursor) drawRun(line[cursor..from], size, fg);
         drawRun(line[from..to], size, span.color);
         cursor = to;
