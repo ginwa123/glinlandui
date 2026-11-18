@@ -657,8 +657,8 @@ pub fn textField(field: *Field) void {
     const fg: Color = if (field.disabled) field.disabled_fg else field.fg;
     // Solid for half a second after the caret moves, then blinking: a caret that blinks while you type is a caret you cannot find.
     const blink_on = text_editor.caretVisible(input) and caretLineOnScreen(field);
-    // The ring's geometry is LAST frame's box, read here: after the declare below, this frame's element has no box yet.
-    const ring_box = if (frame_mod.isFocused(name) and !field.disabled) frame_mod.bounds(field.id.clay()) else null;
+    // The keyboard's sign is the field's OWN border, drawn `outside`: a floating ring needs a root-space position and no scroll can cut it.
+    const show_ring = frame_mod.isFocused(name) and !field.disabled and !field.focus_ring_w.isNone();
     // A hint belongs to an empty single-line field nobody is typing in, so it never competes with a draft or a caret.
     const hint = field.placeholder.len > 0 and draft.len == 0 and !input.focused and !field.disabled;
     // The caret's row is revealed after the layout, mid-declare its box does not exist yet, and only when it MOVED: a reveal every frame pulled the box back to the caret, so a wheel scroll could not stay down.
@@ -688,7 +688,10 @@ pub fn textField(field: *Field) void {
         },
         .background_color = (if (field.disabled) field.disabled_bg else field.bg).toClay(),
         .corner_radius = field.radius.resolve(theme_mod.current().metrics.corner(.md)).clay(),
-        .border = field.border.clay(),
+        .border = if (show_ring)
+            cl.BorderElementConfig{ .color = field.focus_ring.toClay(), .width = .outside(field.focus_ring_w.whole()) }
+        else
+            field.border.clay(),
     })({
         // The value rides inside ONE horizontal clip, so it slides under the field's right edge instead of over a neighbour.
         cl.UI()(.{
@@ -708,9 +711,6 @@ pub fn textField(field: *Field) void {
             }
         });
     });
-
-    // The keyboard's position has to be visible (WCAG 2.4.7), and a ring drawn outside the box covers none of the field (2.4.11).
-    if (ring_box) |b| if (field.focus_ring_w.pts() > 0 and ringOnScreen(field, b)) drawFocusRing(field, name, b);
 
     // Semantics: an editable field declares `set_text`, so a test can type into it by name and a reader can find it.
     if (!field.disabled and name.len > 0) {
@@ -861,32 +861,6 @@ pub fn caretId(name: []const u8) cl.ElementId {
 
 // The clip's index under the field: 1 is the selection run, 2 the caret, so the clip takes 3.
 const text_clip_index: u32 = 3;
-
-// The focus ring's index: 1 the selection, 2 the caret, 3 the clip, 4 the ring, 4096+ the multiline rows.
-const focus_ring_index: u32 = 4;
-
-// A ring floats over everything, so a scissor cannot cut it: it is drawn only while the field it belongs to is inside its viewports, the rule the caret follows.
-fn ringOnScreen(field: *const Field, b: frame_mod.Bounds) bool {
-    return registry.insideClip(field.clip, b.x + b.width * 0.5, b.y + b.height * 0.5);
-}
-
-fn drawFocusRing(field: *Field, name: []const u8, b: frame_mod.Bounds) void {
-    // A ring is a hairline on the device grid: a fractional width would paint two half-lit columns (the audit says so too).
-    const width: u16 = @intFromFloat(@max(1, @round(field.focus_ring_w.pts())));
-    if (b.width < 1 or b.height < 1) return;
-    cl.UI()(.{
-        .id = .IDI(name, focus_ring_index),
-        .floating = .{
-            .attach_to = .to_root,
-            .offset = .{ .x = b.x, .y = b.y },
-            // Above the field, and passthrough: a ring is a sign of where the keyboard is, never a target of its own.
-            .z_index = field.click_z + 1,
-            .pointer_capture_mode = .passthrough,
-        },
-        .layout = .{ .sizing = .{ .w = .fixed(b.width), .h = .fixed(b.height) } },
-        .border = .{ .color = field.focus_ring.toClay(), .width = .outside(width) },
-    })({});
-}
 
 // The clip's Clay id, which is also the box whose width is the room the text has before it has to slide.
 pub fn textClipId(name: []const u8) cl.ElementId {
