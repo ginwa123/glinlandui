@@ -117,6 +117,8 @@ pub fn elementId2(prefix: []const u8, a: usize, b: usize) []const u8 {
 pub var ptr_down: bool = false;
 pub var ptr_press_x: f32 = 0;
 pub var ptr_press_y: f32 = 0;
+// Whether Shift was held for that press: a shift-click EXTENDS the selection instead of placing a caret.
+pub var ptr_shift: bool = false;
 
 // The wheel this frame consumed, in points: a strip with its own axis reads it, since a wheel has no horizontal one.
 pub var scroll_dx: f32 = 0;
@@ -206,6 +208,11 @@ pub fn setPointerButton(down: bool, press_x: f32, press_y: f32) void {
     ptr_down = down;
     ptr_press_x = press_x;
     ptr_press_y = press_y;
+}
+
+// Record whether Shift is held, so the click a release dispatches knows it is an extension and not a plain click.
+pub fn setPointerShift(shift: bool) void {
+    ptr_shift = shift;
 }
 
 // True while a component owns the pointer's drag: the Host must not ALSO drag-scroll the pane under it.

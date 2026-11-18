@@ -613,7 +613,9 @@ fn dragSelect(field: *Field) void {
     // `extend` is false on the anchoring frame (place the caret) and true after it (grow the selection from that anchor).
     const x = frame_mod.ptr_x - bb.x - field.pad_lr.pts() + field.h_scroll;
     const y = frame_mod.ptr_y - bb.y - field.pad_tb.pts();
-    field.editor.setCaret(field.caretOffsetAtPoint(x, y), field.dragging);
+    // A press made with Shift grows the run the field already had, so the anchor stays where the last click left it.
+    const extend = field.dragging or (frame_mod.ptr_shift and frame_mod.isFocused(field.name()));
+    field.editor.setCaret(field.caretOffsetAtPoint(x, y), extend);
     if (!field.dragging) {
         field.dragging = true;
         frame_mod.setFocus(field.name());
@@ -1042,7 +1044,9 @@ fn onFieldClick(ctx: ?*anyopaque) void {
     // The clip slid the text left by `h_scroll`, so the point is measured from where the text now starts.
     const x = frame_mod.ptr_x - data.bounding_box.x - field.pad_lr.pts() + field.h_scroll;
     const y = frame_mod.ptr_y - data.bounding_box.y - field.pad_tb.pts();
-    field.editor.setCaret(field.caretOffsetAtPoint(x, y), false);
+    // A click made with Shift held extends the run the field already had, so the anchor the earlier click left survives.
+    const extend = frame_mod.ptr_shift and frame_mod.isFocused(field.name());
+    field.editor.setCaret(field.caretOffsetAtPoint(x, y), extend);
     field.editor.idle = 0;
     frame_mod.setFocus(field.name());
     if (field.on_focus.f) |f| f(field.on_focus.ctx);
