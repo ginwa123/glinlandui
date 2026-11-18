@@ -254,7 +254,8 @@ pub fn sbixBitmap(face_bytes: []const u8, glyph: u16, size: u16) ?Bitmap {
     const glyph_at = strike.off + 4 + @as(usize, glyph) * 4;
     const start = u32At(sbix, glyph_at) orelse return null;
     const end = u32At(sbix, glyph_at + 4) orelse return null;
-    if (end <= start) return null;
+    // A record is 8 bytes of origin and tag before its payload, so an `end` inside that header is truncated, not a PNG.
+    if (@as(u64, end) < @as(u64, start) + 8) return null;
     const blob = strike.off + start;
     if (blob + 8 > sbix.len) return null;
     const ox = i16At(sbix, blob) orelse return null;
@@ -290,9 +291,29 @@ fn decodePng(png: []const u8, alloc: std.mem.Allocator) ?struct { pixels: []u8, 
 
 const Key = struct { face: usize, cp: u21, size: u16 };
 
+/// What a miss is stored as: zero width, which `cached` answers null for, so a caller's null-means-mask path is unchanged.
+const miss = Rgba{ .pixels = &.{}, .w = 0, .h = 0, .xoff = 0, .yoff = 0, .advance = 0 };
+
 var cache: std.AutoHashMapUnmanaged(Key, Rgba) = .empty;
 var cache_alloc: ?std.mem.Allocator = null;
 var arena: ?std.heap.ArenaAllocator = null;
+
+// "Does this face carry colour at all", memoised by its bytes pointer: `cached` runs per codepoint per frame.
+const FaceMemo = struct { at: usize = 0, yes: bool = false };
+var face_memo: [4]FaceMemo = [_]FaceMemo{.{}} ** 4;
+var face_memo_next: usize = 0;
+
+fn hasColour(face: *const glyphs.Font) bool {
+    const at = @intFromPtr(face.bytes.ptr);
+    // An empty slot holds 0, which no loaded face's bytes ever are, so a bare compare is the whole test.
+    for (face_memo) |m| {
+        if (m.at == at) return m.yes;
+    }
+    const yes = hasColourTable(face.bytes);
+    face_memo[face_memo_next] = .{ .at = at, .yes = yes };
+    face_memo_next = (face_memo_next + 1) % face_memo.len;
+    return yes;
+}
 
 /// Point the cache at the app's allocator, the way the glyph cache is pointed at it.
 pub fn initCache(alloc: std.mem.Allocator) void {
@@ -308,6 +329,8 @@ pub fn deinitCache() void {
     if (cache_alloc) |a| cache.deinit(a);
     cache = .empty;
     cache_alloc = null;
+    face_memo = [_]FaceMemo{.{}} ** 4;
+    face_memo_next = 0;
 }
 
 pub fn clearCache() void {
@@ -315,20 +338,26 @@ pub fn clearCache() void {
     cache = .empty;
     // Keep the arena's pages: a font switch rasterises the same emoji again immediately.
     if (arena) |*a| _ = a.reset(.retain_capacity);
+    face_memo = [_]FaceMemo{.{}} ** 4;
+    face_memo_next = 0;
 }
 
 /// The colour image for `cp` in `face`, or null when that face has none (a plain glyph, or no colour table at all).
 pub fn cached(face: *const glyphs.Font, cp: u21, size: u16) ?*const Rgba {
     if (cache_alloc == null) initCache(face.alloc);
     const key = Key{ .face = @intFromPtr(face.bytes.ptr), .cp = cp, .size = size };
-    if (cache.getPtr(key)) |g| return g;
-    if (!hasColourTable(face.bytes)) return null;
-    // A codepoint the face cannot name is not a colour glyph it can draw.
-    const glyph = face.glyphIndex(cp);
-    if (glyph == 0) return null;
-    const image = rasterize(face, glyph, size) orelse return null;
+    if (cache.getPtr(key)) |g| return if (g.w == 0) null else g;
+    if (!hasColour(face)) return null;
+    // A miss is remembered too: an emoji this face cannot draw would otherwise be decoded again on every frame it appears in.
+    const image = blk: {
+        // A codepoint the face cannot name is not a colour glyph it can draw.
+        const glyph = face.glyphIndex(cp);
+        if (glyph == 0) break :blk miss;
+        break :blk rasterize(face, glyph, size) orelse miss;
+    };
     cache.put(cache_alloc.?, key, image) catch return null;
-    return cache.getPtr(key);
+    const stored = cache.getPtr(key) orelse return null;
+    return if (stored.w == 0) null else stored;
 }
 
 /// Turn one glyph of one face into RGBA: layers for a COLR font, a decoded PNG for CBDT or sbix.
@@ -343,8 +372,9 @@ pub fn rasterize(face: *const glyphs.Font, glyph: u16, size: u16) ?Rgba {
 
 // A PNG strike is drawn at its own ppem; the quad is scaled to the size asked for, so the offset and advance scale too.
 fn fromBitmap(face: *const glyphs.Font, glyph: u16, bitmap: Bitmap, size: u16) ?Rgba {
-    var alloc = arena orelse return null;
-    const decoded = decodePng(bitmap.png, alloc.allocator()) orelse return null;
+    // The GLOBAL arena, never a copy of it: an arena owns its buffer list, so chunks a copy allocates are orphaned on free.
+    const a = if (arena) |*ar| ar.allocator() else return null;
+    const decoded = decodePng(bitmap.png, a) orelse return null;
     const k: f32 = if (bitmap.ppem == 0) 1.0 else @as(f32, @floatFromInt(size)) / @as(f32, @floatFromInt(bitmap.ppem));
     const advance = if (bitmap.advance > 0) bitmap.advance * k else face.glyphAdvance(glyph, size);
     return .{
@@ -361,7 +391,8 @@ fn fromBitmap(face: *const glyphs.Font, glyph: u16, bitmap: Bitmap, size: u16) ?
 fn composeLayers(face: *const glyphs.Font, colr: Colr, glyph: u16, size: u16) ?Rgba {
     const records = colr.layersOf(glyph) orelse return null;
     const cpal = table(face.bytes, "CPAL") orelse return null;
-    var alloc = arena orelse return null;
+    // Same rule as `fromBitmap`: the global arena, or the chunk holding the pixels is orphaned when the cache is freed.
+    const arena_alloc = if (arena) |*ar| ar.allocator() else return null;
 
     const max_layers = 64;
     var masks: [max_layers]struct { mask: glyphs.Mask, color: [4]u8 } = undefined;
@@ -399,10 +430,10 @@ fn composeLayers(face: *const glyphs.Font, colr: Colr, glyph: u16, size: u16) ?R
     const h: usize = @intFromFloat(@ceil(max_y - min_y));
     if (w == 0 or h == 0) return null;
 
-    // Premultiplied float accumulation: a layer over a layer over a layer is the whole definition of a COLR glyph.
-    const a = alloc.allocator();
-    const acc = a.alloc(f32, w * h * 4) catch return null;
-    defer a.free(acc);
+    // Scratch from the cache's allocator, not the arena: an arena's free is a no-op, so 16 bytes per pixel would stay for good.
+    const scratch = cache_alloc orelse arena_alloc;
+    const acc = scratch.alloc(f32, w * h * 4) catch return null;
+    defer scratch.free(acc);
     @memset(acc, 0);
     for (masks[0..n]) |m| {
         const gx: i64 = @intFromFloat(@round(m.mask.xoff - min_x));
@@ -425,7 +456,7 @@ fn composeLayers(face: *const glyphs.Font, colr: Colr, glyph: u16, size: u16) ?R
         }
     }
 
-    const pixels = a.alloc(u8, w * h * 4) catch return null;
+    const pixels = arena_alloc.alloc(u8, w * h * 4) catch return null;
     for (0..w * h) |i| {
         const alpha = acc[i * 4 + 3];
         // Straight alpha out: a blitter multiplies by alpha itself, and a premultiplied pixel would go dark.
@@ -612,4 +643,25 @@ test "an sbix strike reads a PNG record's origin, and refuses a record with no i
     // A glyph with no PNG payload answers nothing, and a glyph past maxp answers nothing either.
     try testing.expect(sbixBitmap(sfnt, 0, 32) == null);
     try testing.expect(sbixBitmap(sfnt, 5, 32) == null);
+}
+
+test "an sbix record that ends inside its own header is refused instead of sliced backwards" {
+    // Glyph 1's record says it ends 4 bytes past its start, but the origin and tag are 8: [blob + 8 .. blob + 4] is a panic.
+    const strike_at = 12;
+    const offs_at = strike_at + 4;
+    const glyph1_at = 16;
+    var sbix: [strike_at + 32]u8 = undefined;
+    @memset(&sbix, 0);
+    sbix[7] = 1; // numStrikes
+    putU32(&sbix, 8, strike_at);
+    sbix[strike_at + 1] = 32; // ppem
+    sbix[strike_at + 3] = 72; // resolution
+    putU32(&sbix, offs_at + 0, 0); // glyph 0 starts at 0 (no payload)
+    putU32(&sbix, offs_at + 4, glyph1_at);
+    putU32(&sbix, offs_at + 8, glyph1_at + 4); // end, INSIDE the header
+    var maxp: [6]u8 = .{ 0, 1, 0, 0, 0, 2 };
+
+    var buf: [1024]u8 = undefined;
+    const sfnt = buildSfnt(2, [_][4]u8{ "sbix".*, "maxp".* }, [_][]const u8{ &sbix, &maxp }, &buf);
+    try testing.expect(sbixBitmap(sfnt, 1, 32) == null);
 }

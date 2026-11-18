@@ -564,14 +564,24 @@ pub const Renderer = struct {
         self.seg_texture = 0;
     }
 
+    /// The next free texture slot: when the fixed table is exhausted the maps that name one are forgotten, so no id means two pictures.
+    fn nextTexId(self: *Renderer) u32 {
+        if (self.next_image_id + 1 >= max_images) {
+            self.colour_map.clearRetainingCapacity();
+            self.images.clearRetainingCapacity();
+            self.next_image_id = 1;
+        }
+        const id = self.next_image_id;
+        self.next_image_id += 1;
+        return id;
+    }
+
     /// Upload one RGBA texture per (codepoint, size) from the same decoded image the CPU path blits.
     fn colourTex(self: *Renderer, g: *gpu.c.GlinWinGpu, cp: u21, size: u16, image: *const color_glyphs.Rgba) ?ImageTex {
         const key = GlyphKey{ .cp = cp, .size = size };
         if (self.colour_map.get(key)) |t| return t;
         if (image.w == 0 or image.h == 0) return null;
-        const id = self.next_image_id;
-        // The shader's slot table is fixed (GLIN_MAX_IMAGES), and the glyph atlas is slot 0, so wrap rather than grow.
-        if (self.next_image_id + 1 >= max_images) self.next_image_id = 1 else self.next_image_id += 1;
+        const id = self.nextTexId();
         gpu.c.glin_win_gpu_set_image(g, @intCast(id), image.pixels.ptr, @intCast(image.w), @intCast(image.h));
         const tex = ImageTex{ .id = id, .w = @intCast(image.w), .h = @intCast(image.h) };
         self.colour_map.put(self.alloc, key, tex) catch {};
@@ -585,9 +595,7 @@ pub const Renderer = struct {
         if (self.images.get(key)) |t| return t;
         const cpu = self.cpuRenderer() orelse return null;
         const img = cpu.imageFor(path, max_dim) orelse return null;
-        const id = self.next_image_id;
-        // The shader's slot table is fixed (GLIN_MAX_IMAGES, 0 is the glyph atlas), so wrap rather than grow.
-        if (self.next_image_id + 1 >= max_images) self.next_image_id = 1 else self.next_image_id += 1;
+        const id = self.nextTexId();
         gpu.c.glin_win_gpu_set_image(g, @intCast(id), img.pixels.ptr, @intCast(img.width), @intCast(img.height));
         const tex = ImageTex{ .id = id, .w = img.width, .h = img.height };
         self.images.put(self.alloc, key, tex) catch {};
@@ -632,3 +640,17 @@ pub const Renderer = struct {
         return .{ .x = slot.x, .y = slot.y, .w = slot.w, .h = slot.h, .xoff = mask.xoff, .yoff = mask.yoff };
     }
 };
+
+test "an exhausted texture table forgets its entries instead of letting one slot name two pictures" {
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    try r.colour_map.put(std.testing.allocator, .{ .cp = 'A', .size = 12 }, .{ .id = 3, .w = 8, .h = 8 });
+    try r.images.put(std.testing.allocator, @as(u64, 99), .{ .id = 4, .w = 8, .h = 8 });
+    r.next_image_id = max_images - 1;
+    // The last usable slot is exhausted, so the next ask starts the table over rather than reusing an id a map still names.
+    try std.testing.expectEqual(@as(u32, 1), r.nextTexId());
+    try std.testing.expectEqual(@as(usize, 0), r.colour_map.count());
+    try std.testing.expectEqual(@as(usize, 0), r.images.count());
+    // Slot 0 is the mask atlas, so a fresh table hands out 1 and then 2.
+    try std.testing.expectEqual(@as(u32, 2), r.nextTexId());
+}

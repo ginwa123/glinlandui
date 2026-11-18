@@ -132,6 +132,8 @@ pub fn deinitFace() void {
     app_face_alloc = null;
     glyphs.clearInstalledFont();
     releaseColorFace();
+    // The colour cache's arena spent this host's allocator too, so a shutdown gives it back rather than leaving it to the process.
+    color_glyphs.deinitCache();
 }
 
 // ---- the colour face: where an emoji comes from when the text face has no glyph for it ----
@@ -166,6 +168,8 @@ fn releaseColorFace() void {
     if (colour_face) |*f| f.deinit();
     colour_face = null;
     colour_tried = false;
+    // The cache is keyed by the face's BYTES pointer, so a released face's images must not answer for the next one.
+    color_glyphs.clearCache();
 }
 
 /// The colour image for `cp` at `size`: the text face's own when it has one, else the emoji face's.
@@ -303,4 +307,38 @@ test "an application's face is what measures, and deinitFace hands its bytes bac
     try std.testing.expect(app_face == null);
     // The slot that points into those bytes is cleared too, so a later measurement cannot read freed memory.
     try std.testing.expect(glyphs.installedFont() == null);
+}
+
+test "the colour face and its cache are given back at shutdown" {
+    // A debug allocator turns a forgotten arena into a leak report, which is the only honest proof of a shutdown path.
+    reset();
+    setAllocator(std.testing.allocator);
+    defer setAllocator(std.heap.page_allocator);
+    glyphs.initCache(std.testing.allocator);
+    defer glyphs.deinitCache();
+    const emoji = colorFace() orelse return error.SkipZigTest;
+    try std.testing.expect(emoji.bytes.len > 0);
+    // One real emoji decodes a PNG or composites layers, and one miss stores the negative entry: both spend the cache's arena.
+    _ = colorGlyph(0x1F600, 20);
+    _ = color_glyphs.cached(emoji, 'A', 20);
+    try std.testing.expect(color_glyphs.cachedCount() > 0);
+    // testing.allocator fails this test if the arena, the map or the 12 MB face is still live when it ends.
+    deinitFace();
+    try std.testing.expect(colour_face == null);
+}
+
+test "a codepoint the colour face cannot draw is remembered, not re-rasterised every frame" {
+    reset();
+    setAllocator(std.testing.allocator);
+    defer setAllocator(std.heap.page_allocator);
+    glyphs.initCache(std.testing.allocator);
+    defer glyphs.deinitCache();
+    const emoji = colorFace() orelse return error.SkipZigTest;
+    // A letter is not a colour glyph in an emoji face: the first ask is a real lookup, every later one must be a map hit.
+    try std.testing.expect(color_glyphs.cached(emoji, 'A', 13) == null);
+    const after_first = color_glyphs.cachedCount();
+    try std.testing.expect(after_first > 0);
+    try std.testing.expect(color_glyphs.cached(emoji, 'A', 13) == null);
+    try std.testing.expectEqual(after_first, color_glyphs.cachedCount());
+    deinitFace();
 }
