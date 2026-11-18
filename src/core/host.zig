@@ -212,6 +212,8 @@ pub const Host = struct {
         // The app declares in content points and the window reports window points: one division, so both spaces agree.
         const x = window_x / frame_mod.zoom();
         const y = window_y / frame_mod.zoom();
+        // A click carries the keyboard modifiers it was made with, which is what makes a shift-click extend a run.
+        frame_mod.setPointerShift(self.keys.mods.shift);
         // A right press asks the app's components first: a widget offering a menu owns the click it was right-clicked in.
         if (button == dispatch.BTN_RIGHT) {
             if (pressed) {

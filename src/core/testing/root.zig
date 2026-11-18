@@ -10,6 +10,7 @@ const assertions = @import("assertions.zig");
 const action_plan = @import("actions.zig");
 const cl = @import("zclay");
 const props = @import("../props.zig");
+const input_component = @import("../component.zig").input;
 
 pub const Host = host_mod.Host;
 // The toolkit's own box type: a test asserts on this, never on Clay's struct.
@@ -212,6 +213,17 @@ pub const Driver = struct {
         _ = self.host.onKeyEvent(keycode, false);
         self.frame();
         return consumed;
+    }
+
+    /// Hold a key down without releasing it, which is how a modifier stays latched across a pointer gesture.
+    pub fn keyDown(self: *Driver, keycode: u32) void {
+        _ = self.host.onKeyEvent(keycode, true);
+    }
+
+    /// Release a key held by `keyDown`.
+    pub fn keyUp(self: *Driver, keycode: u32) void {
+        _ = self.host.onKeyEvent(keycode, false);
+        self.frame();
     }
 
     /// A `Ctrl/Cmd` shortcut as a keyboard sends it: the modifier goes down, the key is typed, the modifier comes up.
@@ -1032,4 +1044,98 @@ test "the driver keeps the pointer bookkeeping a cross-frame gesture reads" {
 
     driver.releaseAt(40, 34);
     try std.testing.expect(!frame_mod.ptr_down);
+}
+
+// ---- Shift extends a selection, from the keyboard and from a second click ----
+
+var shift_field: input_component.Field = .{ .id = .{ .text = "shift-field" } };
+
+const ShiftApp = struct {
+    fn root(_: ?*anyopaque, _: u32, _: u32) void {
+        input_component.textField(&shift_field);
+    }
+};
+
+// A driver with one focused-by-click field holding "hello world", and the module state a gesture reads reset.
+fn shiftDriver() !Driver {
+    shift_field = .{
+        .id = .{ .text = "shift-field" },
+        .value = "hello world",
+        .w = .{ .fixed = 220 },
+        .h = .{ .fixed = 30 },
+    };
+    shift_field.bind();
+    frame_mod.resetFocus();
+    frame_mod.setPointerShift(false);
+    var driver = try Driver.initOwned(std.heap.page_allocator, null, ShiftApp.root);
+    try driver.start(.{ .width = 240, .height = 80 });
+    return driver;
+}
+
+// The pointer position that lands the caret in `prefix`, measured from the text's own origin inside the field.
+fn shiftPoint(driver: *Driver, prefix: []const u8) struct { x: f32, y: f32 } {
+    const bb = driver.box("shift-field").?;
+    return .{
+        .x = bb.x + shift_field.pad_lr.pts() + shift_field.measure(prefix, shift_field.font_size.whole()) + 2,
+        .y = bb.y + bb.height * 0.5,
+    };
+}
+
+test "e2e: a shift-click extends the selection from the caret the click before it placed" {
+    var driver = try shiftDriver();
+    defer driver.deinit();
+
+    const first = shiftPoint(&driver, "hello ");
+    driver.clickAt(first.x, first.y);
+    const anchor = shift_field.editor.caret.offset;
+    try std.testing.expect(anchor > 0);
+    try std.testing.expect(!shift_field.editor.caret.hasSelection());
+
+    // Shift held across the second click: the run grows from the anchor instead of the anchor being thrown away.
+    const second = shiftPoint(&driver, "hello wor");
+    driver.keyDown(key_shift);
+    driver.clickAt(second.x, second.y);
+    driver.keyUp(key_shift);
+
+    const span = shift_field.editor.caret.selection() orelse return error.NoSelection;
+    try std.testing.expectEqual(anchor, span.start);
+    try std.testing.expect(span.end > span.start);
+    try std.testing.expectEqual(shift_field.editor.caret.offset, span.end);
+}
+
+test "e2e: shift and an arrow extend the selection the click anchored" {
+    var driver = try shiftDriver();
+    defer driver.deinit();
+
+    const at = shiftPoint(&driver, "hello ");
+    driver.clickAt(at.x, at.y);
+    const anchor = shift_field.editor.caret.offset;
+    try std.testing.expect(anchor > 0);
+
+    driver.keyDown(key_shift);
+    _ = try driver.key(input_component.KEY_LEFT);
+    driver.keyUp(key_shift);
+
+    const span = shift_field.editor.caret.selection() orelse return error.NoSelection;
+    try std.testing.expectEqual(anchor, span.end);
+    try std.testing.expectEqual(anchor - 1, span.start);
+}
+
+test "e2e: a plain click after a shift-click collapses the selection again" {
+    var driver = try shiftDriver();
+    defer driver.deinit();
+
+    const first = shiftPoint(&driver, "hello ");
+    driver.clickAt(first.x, first.y);
+    const second = shiftPoint(&driver, "hello wor");
+    driver.keyDown(key_shift);
+    driver.clickAt(second.x, second.y);
+    driver.keyUp(key_shift);
+    try std.testing.expect(shift_field.editor.caret.hasSelection());
+
+    // No Shift: the click places the caret and drops the band, which is what a text field has always done.
+    const third = shiftPoint(&driver, "hello wo");
+    driver.clickAt(third.x, third.y);
+    try std.testing.expect(!shift_field.editor.caret.hasSelection());
+    try std.testing.expectEqual(@as(usize, 8), shift_field.editor.caret.offset);
 }
