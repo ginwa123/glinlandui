@@ -5,6 +5,7 @@ const cl = @import("zclay");
 const soft = @import("../core/render_software.zig");
 const glyphs = @import("../core/glyphs.zig");
 const text_face = @import("../core/text_face.zig");
+const color_glyphs = @import("../core/color_glyphs.zig");
 const scale_mod = @import("../core/scale.zig");
 const common = @import("../core/render_common.zig");
 
@@ -91,6 +92,10 @@ pub const Renderer = struct {
     atlas_dirty: bool = true,
     glyph_map: std.AutoHashMapUnmanaged(GlyphKey, GlyphSlot) = .empty,
     images: std.AutoHashMapUnmanaged(u64, ImageTex) = .empty,
+    // One RGBA texture per colour glyph (an emoji), because the mask atlas is 8-bit and cannot carry colour.
+    colour_map: std.AutoHashMapUnmanaged(GlyphKey, ImageTex) = .empty,
+    // The device this frame is drawing into: a colour glyph needs it to upload, and `pushText` has no frame parameter.
+    gpu_now: ?*anyopaque = null,
     next_image_id: u32 = 1,
     shelf_x: u32 = 0,
     shelf_y: u32 = 0,
@@ -112,6 +117,7 @@ pub const Renderer = struct {
         self.segs.deinit(self.alloc);
         self.glyph_map.deinit(self.alloc);
         self.images.deinit(self.alloc);
+        self.colour_map.deinit(self.alloc);
         if (self.atlas.len > 0) self.alloc.free(self.atlas);
         self.atlas = &.{};
     }
@@ -166,6 +172,8 @@ pub const Renderer = struct {
     fn drawGpu(self: *Renderer, handle: *anyopaque, commands: []cl.RenderCommand, win_w: i32, win_h: i32) bool {
         if (win_w <= 0 or win_h <= 0) return false;
         const h: *gpu.c.GlinWinGpu = @ptrCast(@alignCast(handle));
+        // `pushText` reaches the device through this, because a colour glyph has to upload its own texture.
+        self.gpu_now = handle;
 
         self.verts.clearRetainingCapacity();
         self.segs.clearRetainingCapacity();
@@ -443,6 +451,14 @@ pub const Renderer = struct {
         var i: usize = 0;
         while (i < bytes.len) {
             const cp = glyphs.nextCodepoint(bytes, &i);
+            // An emoji is a colour image, not a mask: its own texture, its own segment, its own advance.
+            if (self.gpu_now) |dev| {
+                if (text_face.colorGlyph(cp, size)) |image| {
+                    self.pushColourGlyph(@ptrCast(@alignCast(dev)), cp, size, image, pen, baseline);
+                    pen += image.advance;
+                    continue;
+                }
+            }
             const gm = face.glyphMetrics(cp, size);
             if (self.glyphSlot(face, cp, size)) |slot| {
                 const gx = @floor(pen + slot.xoff);
@@ -521,6 +537,57 @@ pub const Renderer = struct {
         self.seg_texture = 0;
     }
 
+    /// One colour glyph as its own untinted quad: the image path's trick, once per emoji, with its own advance.
+    fn pushColourGlyph(self: *Renderer, g: *gpu.c.GlinWinGpu, cp: u21, size: u16, image: *const color_glyphs.Rgba, pen: f32, baseline: f32) void {
+        const tex = self.colourTex(g, cp, size, image) orelse return;
+        const qx = @floor(pen + @as(f32, @floatFromInt(image.xoff)));
+        const qy = @floor(baseline + @as(f32, @floatFromInt(image.yoff)));
+        const qw: f32 = @floatFromInt(tex.w);
+        const qh: f32 = @floatFromInt(tex.h);
+        if (qw <= 0 or qh <= 0) return;
+        // Its own segment, because the texture changes and the mask atlas must be bound again after it.
+        self.closeSegment();
+        self.seg_texture = @intCast(tex.id);
+        const white = [4]f32{ 1, 1, 1, 1 };
+        const a = Vertex{ .pos = .{ qx, qy }, .local = .{ 0, 0 }, .size = .{ 0, 0 }, .radius = .{ 0, 0, 0, 0 }, .color = white, .mode = 0, .border = 0, .kind = 2 };
+        var b = a;
+        var c2 = a;
+        var d = a;
+        b.pos = .{ qx + qw, qy };
+        b.local = .{ 1, 0 };
+        c2.pos = .{ qx + qw, qy + qh };
+        c2.local = .{ 1, 1 };
+        d.pos = .{ qx, qy + qh };
+        d.local = .{ 0, 1 };
+        self.verts.appendSlice(self.alloc, &.{ a, b, c2, a, c2, d }) catch {};
+        self.closeSegment();
+        self.seg_texture = 0;
+    }
+
+    /// The next free texture slot: when the fixed table is exhausted the maps that name one are forgotten, so no id means two pictures.
+    fn nextTexId(self: *Renderer) u32 {
+        if (self.next_image_id + 1 >= max_images) {
+            self.colour_map.clearRetainingCapacity();
+            self.images.clearRetainingCapacity();
+            self.next_image_id = 1;
+        }
+        const id = self.next_image_id;
+        self.next_image_id += 1;
+        return id;
+    }
+
+    /// Upload one RGBA texture per (codepoint, size) from the same decoded image the CPU path blits.
+    fn colourTex(self: *Renderer, g: *gpu.c.GlinWinGpu, cp: u21, size: u16, image: *const color_glyphs.Rgba) ?ImageTex {
+        const key = GlyphKey{ .cp = cp, .size = size };
+        if (self.colour_map.get(key)) |t| return t;
+        if (image.w == 0 or image.h == 0) return null;
+        const id = self.nextTexId();
+        gpu.c.glin_win_gpu_set_image(g, @intCast(id), image.pixels.ptr, @intCast(image.w), @intCast(image.h));
+        const tex = ImageTex{ .id = id, .w = @intCast(image.w), .h = @intCast(image.h) };
+        self.colour_map.put(self.alloc, key, tex) catch {};
+        return tex;
+    }
+
     /// The pixels come from the CPU surface's own decode cache, so the GPU and the reference cannot disagree about the bitmap.
     fn imageTex(self: *Renderer, g: *gpu.c.GlinWinGpu, path: []const u8, max_dim: u16) ?ImageTex {
         if (path.len == 0) return null;
@@ -528,9 +595,7 @@ pub const Renderer = struct {
         if (self.images.get(key)) |t| return t;
         const cpu = self.cpuRenderer() orelse return null;
         const img = cpu.imageFor(path, max_dim) orelse return null;
-        const id = self.next_image_id;
-        // The shader's slot table is fixed (GLIN_MAX_IMAGES, 0 is the glyph atlas), so wrap rather than grow.
-        if (self.next_image_id + 1 >= max_images) self.next_image_id = 1 else self.next_image_id += 1;
+        const id = self.nextTexId();
         gpu.c.glin_win_gpu_set_image(g, @intCast(id), img.pixels.ptr, @intCast(img.width), @intCast(img.height));
         const tex = ImageTex{ .id = id, .w = img.width, .h = img.height };
         self.images.put(self.alloc, key, tex) catch {};
@@ -575,3 +640,17 @@ pub const Renderer = struct {
         return .{ .x = slot.x, .y = slot.y, .w = slot.w, .h = slot.h, .xoff = mask.xoff, .yoff = mask.yoff };
     }
 };
+
+test "an exhausted texture table forgets its entries instead of letting one slot name two pictures" {
+    var r = try Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    try r.colour_map.put(std.testing.allocator, .{ .cp = 'A', .size = 12 }, .{ .id = 3, .w = 8, .h = 8 });
+    try r.images.put(std.testing.allocator, @as(u64, 99), .{ .id = 4, .w = 8, .h = 8 });
+    r.next_image_id = max_images - 1;
+    // The last usable slot is exhausted, so the next ask starts the table over rather than reusing an id a map still names.
+    try std.testing.expectEqual(@as(u32, 1), r.nextTexId());
+    try std.testing.expectEqual(@as(usize, 0), r.colour_map.count());
+    try std.testing.expectEqual(@as(usize, 0), r.images.count());
+    // Slot 0 is the mask atlas, so a fresh table hands out 1 and then 2.
+    try std.testing.expectEqual(@as(u32, 2), r.nextTexId());
+}

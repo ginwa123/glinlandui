@@ -12,6 +12,7 @@
 
 const std = @import("std");
 const glyphs = @import("glyphs.zig");
+const color_glyphs = @import("color_glyphs.zig");
 const font_io = @import("font_io.zig");
 const estimator = @import("text_estimator.zig");
 
@@ -130,6 +131,66 @@ pub fn deinitFace() void {
     app_face = null;
     app_face_alloc = null;
     glyphs.clearInstalledFont();
+    releaseColorFace();
+    // The colour cache's arena spent this host's allocator too, so a shutdown gives it back rather than leaving it to the process.
+    color_glyphs.deinitCache();
+}
+
+// ---- the colour face: where an emoji comes from when the text face has no glyph for it ----
+
+var colour_face: ?glyphs.Font = null;
+var colour_tried: bool = false;
+
+// The emoji face this platform ships, loaded once: Segoe UI Emoji, Noto Color Emoji, Apple Color Emoji.
+pub fn colorFace() ?*glyphs.Font {
+    if (!colour_tried) {
+        colour_tried = true;
+        if (face_alloc) |a| {
+            for (font_io.colorCandidates()) |path| {
+                const loaded = glyphs.Font.load(a, path) catch continue;
+                if (!color_glyphs.hasColourTable(loaded.bytes)) {
+                    var skip = loaded;
+                    skip.deinit();
+                    continue;
+                }
+                colour_face = loaded;
+                break;
+            }
+            // The colour cache is pointed at the same allocator as the text cache, once.
+            if (colour_face != null) color_glyphs.initCache(a);
+        }
+    }
+    if (colour_face) |*f| return f;
+    return null;
+}
+
+fn releaseColorFace() void {
+    if (colour_face) |*f| f.deinit();
+    colour_face = null;
+    colour_tried = false;
+    // The cache is keyed by the face's BYTES pointer, so a released face's images must not answer for the next one.
+    color_glyphs.clearCache();
+}
+
+/// The colour image for `cp` at `size`: the text face's own when it has one, else the emoji face's.
+pub fn colorGlyph(cp: u21, font_size: u16) ?*const color_glyphs.Rgba {
+    if (font()) |f| {
+        if (color_glyphs.cached(f, cp, font_size)) |image| return image;
+        // A real glyph in the text face means the app meant to draw that codepoint monochrome.
+        if (f.glyphIndex(cp) != 0) return null;
+    }
+    const emoji_face = colorFace() orelse return null;
+    return color_glyphs.cached(emoji_face, cp, font_size);
+}
+
+/// The advance a colour glyph takes, so the layout leaves it the room it will actually paint into.
+pub fn colorAdvance(cp: u21, font_size: u16) ?f32 {
+    const text = font() orelse return null;
+    if (text.glyphIndex(cp) != 0) return null;
+    const emoji_face = colorFace() orelse return null;
+    const glyph = emoji_face.glyphIndex(cp);
+    if (glyph == 0) return null;
+    return emoji_face.glyphAdvance(glyph, font_size);
 }
 
 // Device pixels per point, as the window reported it: the rasteriser draws a run at round(size * this), not at size.
@@ -158,8 +219,27 @@ pub fn measureText(text: []const u8, font_size: u16) TextExtent {
     const hash = estimator.hashMeasureKey(text, device);
     if (cacheGet(hash)) |dev_w| return .{ .w = dev_w / pixel_scale, .h = h };
     const m = glyphs.measure(f, text, device);
-    cachePut(hash, m.width);
-    return .{ .w = m.width / pixel_scale, .h = h };
+    // An emoji is drawn from the colour face, so its own advance replaces the `.notdef` the text face measured.
+    const width = m.width + colorWidthDelta(f, text, device);
+    cachePut(hash, width);
+    return .{ .w = width / pixel_scale, .h = h };
+}
+
+// How much wider the run is once every colour glyph takes its own advance: zero for ASCII, a scan for anything else.
+fn colorWidthDelta(f: *const glyphs.Font, text: []const u8, device: u16) f32 {
+    var non_ascii = false;
+    for (text) |b| {
+        if (b >= 0x80) non_ascii = true;
+    }
+    if (!non_ascii) return 0;
+    var delta: f32 = 0;
+    var i: usize = 0;
+    while (i < text.len) {
+        const cp = glyphs.nextCodepoint(text, &i);
+        const advance = colorAdvance(cp, device) orelse continue;
+        delta += advance - f.glyphMetrics(cp, device).advance;
+    }
+    return delta;
 }
 
 // ===================== tests =====================
@@ -227,4 +307,38 @@ test "an application's face is what measures, and deinitFace hands its bytes bac
     try std.testing.expect(app_face == null);
     // The slot that points into those bytes is cleared too, so a later measurement cannot read freed memory.
     try std.testing.expect(glyphs.installedFont() == null);
+}
+
+test "the colour face and its cache are given back at shutdown" {
+    // A debug allocator turns a forgotten arena into a leak report, which is the only honest proof of a shutdown path.
+    reset();
+    setAllocator(std.testing.allocator);
+    defer setAllocator(std.heap.page_allocator);
+    glyphs.initCache(std.testing.allocator);
+    defer glyphs.deinitCache();
+    const emoji = colorFace() orelse return error.SkipZigTest;
+    try std.testing.expect(emoji.bytes.len > 0);
+    // One real emoji decodes a PNG or composites layers, and one miss stores the negative entry: both spend the cache's arena.
+    _ = colorGlyph(0x1F600, 20);
+    _ = color_glyphs.cached(emoji, 'A', 20);
+    try std.testing.expect(color_glyphs.cachedCount() > 0);
+    // testing.allocator fails this test if the arena, the map or the 12 MB face is still live when it ends.
+    deinitFace();
+    try std.testing.expect(colour_face == null);
+}
+
+test "a codepoint the colour face cannot draw is remembered, not re-rasterised every frame" {
+    reset();
+    setAllocator(std.testing.allocator);
+    defer setAllocator(std.heap.page_allocator);
+    glyphs.initCache(std.testing.allocator);
+    defer glyphs.deinitCache();
+    const emoji = colorFace() orelse return error.SkipZigTest;
+    // A letter is not a colour glyph in an emoji face: the first ask is a real lookup, every later one must be a map hit.
+    try std.testing.expect(color_glyphs.cached(emoji, 'A', 13) == null);
+    const after_first = color_glyphs.cachedCount();
+    try std.testing.expect(after_first > 0);
+    try std.testing.expect(color_glyphs.cached(emoji, 'A', 13) == null);
+    try std.testing.expectEqual(after_first, color_glyphs.cachedCount());
+    deinitFace();
 }
