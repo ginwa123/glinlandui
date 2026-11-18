@@ -705,9 +705,9 @@ pub fn textField(field: *Field) void {
             .clip = .{ .horizontal = true, .child_offset = .{ .x = -field.h_scroll, .y = 0 } },
         })({
             if (field.multiline) {
-                drawLines(field, draft, blink_on, fg, name, reveal_pending);
+                drawLines(field, draft, blink_on, fg, name, reveal_pending, input.focused);
             } else {
-                drawSingleLine(field, draft, blink_on, fg, name, hint);
+                drawSingleLine(field, draft, blink_on, fg, name, hint, input.focused);
             }
         });
     });
@@ -868,9 +868,10 @@ pub fn textClipId(name: []const u8) cl.ElementId {
 }
 
 // The single-line body of a field: the selection as three runs, or the draft as one with the caret floated after it.
-fn drawSingleLine(field: *Field, draft: []const u8, blink_on: bool, fg: Color, name: []const u8, hint: bool) void {
+fn drawSingleLine(field: *Field, draft: []const u8, blink_on: bool, fg: Color, name: []const u8, hint: bool, focused: bool) void {
     const input = &field.editor;
-    if (input.caret.hasSelection()) {
+    // The band belongs to the field that owns the keyboard: a highlight left on a blurred field reads as a second selection.
+    if (focused and input.caret.hasSelection()) {
         const span = input.caret.selection().?;
         const s = span.start;
         const e = span.end;
@@ -896,9 +897,10 @@ fn drawSingleLine(field: *Field, draft: []const u8, blink_on: bool, fg: Color, n
 }
 
 // A multiline field: one row per line, and the caret floated on the line the caret is actually on.
-fn drawLines(field: *Field, draft: []const u8, blink_on: bool, fg: Color, name: []const u8, keep_caret: bool) void {
+fn drawLines(field: *Field, draft: []const u8, blink_on: bool, fg: Color, name: []const u8, keep_caret: bool, focused: bool) void {
     const ed = &field.editor;
-    const sel = ed.caret.selection();
+    // The same rule as the single line: only the field holding the keyboard shows a band.
+    const sel = if (focused) ed.caret.selection() else null;
     const line_h = field.lineHeight();
     const caret_offset = @min(ed.caret.offset, ed.len);
     const caret_line = lineIndexAt(field, caret_offset);
@@ -1916,6 +1918,8 @@ test "a selection highlights the text without moving it or resizing the field" {
 
     sel_field.editor.setCaret(0, false);
     sel_field.editor.setCaret(5, true);
+    // The band is the keyboard's sign, so the field that owns it is the one that draws one.
+    frame_mod.setFocus("test-sel-field");
     const marked = try layoutCommands(declareSelField);
     const field_b = cl.getElementData(cl.getElementId("test-sel-field")).bounding_box;
     const text_b = firstTextRun(marked);
@@ -1947,12 +1951,37 @@ test "a selection in a multiline field leaves every line row where it was" {
     // The first line and the newline after it: the span runs into the second line.
     sel_field.editor.setCaret(0, false);
     sel_field.editor.setCaret(4, true);
+    frame_mod.setFocus("test-sel-multi");
     const marked = try layoutCommands(declareSelField);
     const row_b = cl.getElementData(lineBoxId("test-sel-multi", 0)).bounding_box;
 
     try std.testing.expect(hasRect(marked, cl.ElementId.IDI("test-sel-multi", lineSelIndex(0)).id));
     try std.testing.expectApproxEqAbs(row_a.y, row_b.y, 0.01);
     try std.testing.expectApproxEqAbs(row_a.height, row_b.height, 0.01);
+}
+
+test "a field that lost the keyboard drops its band and keeps its selection" {
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.ptr_down = false;
+    beginFrame();
+    sel_field = .{ .id = .{ .text = "test-sel-blur" }, .value = "hello world", .w = .{ .fixed = 200 }, .h = .{ .fixed = 30 } };
+    sel_field.bind();
+    // One plain frame first: adopting the model value resets the caret, so the span comes after it.
+    _ = try layoutCommands(declareSelField);
+    sel_field.editor.setCaret(0, false);
+    sel_field.editor.setCaret(5, true);
+
+    frame_mod.setFocus("test-sel-blur");
+    const owned = try layoutCommands(declareSelField);
+    try std.testing.expect(hasRect(owned, cl.ElementId.IDI("test-sel-blur", 1).id));
+
+    // Another component takes the keyboard: the highlight goes, because a band on two fields at once reads as two selections.
+    frame_mod.setFocus("someone-else");
+    const blurred = try layoutCommands(declareSelField);
+    try std.testing.expect(!hasRect(blurred, cl.ElementId.IDI("test-sel-blur", 1).id));
+    // The span itself survives, so Cut and Copy on a blurred field still have the run they act on.
+    try std.testing.expect(sel_field.editor.caret.hasSelection());
 }
 
 // ---- the field's own context menu: Cut, Copy, Paste and Select All are mandatory, and an app's rows follow them ----
