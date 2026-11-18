@@ -840,11 +840,14 @@ fn lineEndOf(field: *const Field, line: usize) usize {
         if (index.len == 0) return 0;
         var end = index[@min(line + 1, index.len - 1)];
         if (end > 0 and end <= ed.len and ed.buf[end - 1] == '\n') end -= 1;
+        // A CRLF body keeps its CR inside the line, and a byte with no glyph is drawn as a box: the line ends before it.
+        if (end > 0 and end <= ed.len and ed.buf[end - 1] == '\r') end -= 1;
         return @min(end, ed.len);
     }
     const start = lineStartOf(field, line);
     var end = start;
     while (end < ed.len and ed.buf[end] != '\n') end += 1;
+    if (end > start and ed.buf[end - 1] == '\r') end -= 1;
     return end;
 }
 
@@ -2106,6 +2109,34 @@ test "a selection takes the band over the syntax, and the rest of the line keeps
     try std.testing.expectEqual(syntax_number.toClay(), colorOfRun(cmds, "1").?);
     // And the band is one box for the line, which is what keeps every box id unique.
     try std.testing.expect(hasRect(cmds, cl.ElementId.IDI("test-syntax-field", lineSelIndex(0)).id));
+}
+
+test "a CRLF body draws no carriage return, which the font has no glyph for" {
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.ptr_down = false;
+    beginFrame();
+    // A body pasted from Windows: each line ends "\r\n", and the CR must not reach a run as a tofu box.
+    syntax_field = .{
+        .id = .{ .text = "test-syntax-field" },
+        .value = "{\r\n  \"a\": 1\r\n}",
+        .multiline = true,
+        .w = .{ .fixed = 200 },
+        .h = .{ .fixed = 90 },
+    };
+    syntax_field.bind();
+    frame_mod.setFocus("test-syntax-field");
+    const cmds = try layoutCommands(declareSyntaxField);
+    var drawn: usize = 0;
+    for (cmds) |c| {
+        if (c.command_type != .text) continue;
+        const run_text = c.render_data.text.string_contents;
+        const bytes = run_text.chars[0..@intCast(run_text.length)];
+        try std.testing.expect(std.mem.indexOfScalar(u8, bytes, '\r') == null);
+        drawn += bytes.len;
+    }
+    // The three lines are still drawn whole, minus their carriage returns.
+    try std.testing.expectEqual(@as(usize, "{  \"a\": 1}".len), drawn);
 }
 
 test "a field that lost the keyboard drops its band and keeps its selection" {
