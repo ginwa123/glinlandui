@@ -67,6 +67,8 @@ pub const Driver = struct {
     last_command_len: usize = 0,
     last_texts: [text_storage_cap][text_storage_bytes]u8 = undefined,
     last_text_lens: [text_storage_cap]usize = undefined,
+    // The baseline of each run, so a text assertion can tell runs on ONE line from runs on two.
+    last_text_ys: [text_storage_cap]f32 = undefined,
     last_text_count: usize = 0,
     options: frame_mod.FrameOptions = .{},
     // Run frames without a renderer, which is what a shipping headless CLI needs (`is_test` only covers the test binaries).
@@ -274,8 +276,20 @@ pub const Driver = struct {
     }
 
     pub fn hasText(self: *const Driver, expected: []const u8) bool {
-        for (self.last_texts[0..self.last_text_count], 0..) |*bytes, i| {
-            if (std.mem.eql(u8, bytes[0..self.last_text_lens[i]], expected)) return true;
+        // A syntax-coloured line is drawn as several runs, so a match may join neighbours that sit on one baseline.
+        var joined: [1024]u8 = undefined;
+        var i: usize = 0;
+        while (i < self.last_text_count) : (i += 1) {
+            var len: usize = 0;
+            var j = i;
+            while (j < self.last_text_count and len < expected.len) : (j += 1) {
+                if (j > i and self.last_text_ys[j] != self.last_text_ys[i]) break;
+                const piece = self.last_text_lens[j];
+                if (len + piece > joined.len) break;
+                @memcpy(joined[len..][0..piece], self.last_texts[j][0..piece]);
+                len += piece;
+            }
+            if (std.mem.eql(u8, joined[0..len], expected)) return true;
         }
         return false;
     }
@@ -427,6 +441,7 @@ pub const Driver = struct {
                         const len = @min(@as(usize, @intCast(src.length)), text_storage_bytes);
                         @memcpy(self.last_texts[self.last_text_count][0..len], src.chars[0..len]);
                         self.last_text_lens[self.last_text_count] = len;
+                        self.last_text_ys[self.last_text_count] = cmd.bounding_box.y;
                         self.last_text_count += 1;
                     }
                 },
