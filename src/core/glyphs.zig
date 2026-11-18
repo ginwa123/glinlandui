@@ -120,6 +120,33 @@ pub const Font = struct {
             .yoff = @floatFromInt(yoff),
         };
     }
+
+    /// Rasterize a GLYPH ID at `font_size`, which is what a colour font's layers are addressed by.
+    pub fn glyphBitmapById(self: *const Font, glyph: u16, font_size: u16) ?Mask {
+        const scale = self.scaleFor(font_size);
+        var w: c_int = 0;
+        var h: c_int = 0;
+        var xoff: c_int = 0;
+        var yoff: c_int = 0;
+        const data = stb.stbtt_GetGlyphBitmap(&self.info, 0, scale, glyph, &w, &h, &xoff, &yoff);
+        if (data == null or w <= 0 or h <= 0) return null;
+        return .{ .data = data, .w = @intCast(w), .h = @intCast(h), .xoff = @floatFromInt(xoff), .yoff = @floatFromInt(yoff) };
+    }
+
+    /// The glyph id a codepoint maps to, or 0 when the face has no glyph for it (`.notdef`).
+    pub fn glyphIndex(self: *const Font, cp: u21) u16 {
+        const idx = stb.stbtt_FindGlyphIndex(&self.info, @intCast(cp));
+        return if (idx <= 0) 0 else @intCast(idx);
+    }
+
+    /// Horizontal advance of a GLYPH ID, in pixels: the colour face's own idea of how wide an emoji is.
+    pub fn glyphAdvance(self: *const Font, glyph: u16, font_size: u16) f32 {
+        const scale = self.scaleFor(font_size);
+        var adv: c_int = 0;
+        var lsb: c_int = 0;
+        stb.stbtt_GetGlyphHMetrics(&self.info, glyph, &adv, &lsb);
+        return @as(f32, @floatFromInt(adv)) * scale;
+    }
 };
 
 /// The four sfnt signatures `stbtt_InitFont` is happy to parse at offset 0.

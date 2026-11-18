@@ -9,6 +9,7 @@ const stbi = @cImport({
 const cl = @import("zclay");
 const glyphs = @import("glyphs.zig");
 const text_face = @import("text_face.zig");
+const color_glyphs = @import("color_glyphs.zig");
 const common = @import("render_common.zig");
 const Color = @import("color.zig").Color;
 // The disk half of image decoding is native-only: a browser has no filesystem, and `std.fs.max_path_bytes` cannot even be analysed for freestanding.
@@ -578,6 +579,12 @@ pub const Surface = struct {
         var i: usize = 0;
         while (i < text_bytes.len) {
             const cp = glyphs.nextCodepoint(text_bytes, &i);
+            // An emoji the text face cannot draw comes back as a colour image, blitted at its own offset and advance.
+            if (text_face.colorGlyph(cp, fs)) |image| {
+                self.drawColourGlyph(image, pen, baseline);
+                pen += image.advance;
+                continue;
+            }
             const gm = font.glyphMetrics(cp, fs);
             if (glyphs.cachedGlyph(font, cp, fs)) |mask| {
                 const gx: isize = @intFromFloat(@floor(pen + mask.xoff));
@@ -608,6 +615,34 @@ pub const Surface = struct {
                 }
             }
             pen += gm.advance;
+        }
+    }
+
+    // One colour glyph: its own pixels, straight alpha, at the offset the font gave it from the pen and the baseline.
+    fn drawColourGlyph(self: *Surface, image: *const color_glyphs.Rgba, pen: f32, baseline: f32) void {
+        @setRuntimeSafety(false);
+        if (image.w == 0 or image.h == 0) return;
+        const gx: isize = @intFromFloat(@floor(pen + @as(f32, @floatFromInt(image.xoff))));
+        const gy: isize = @intFromFloat(@floor(baseline + @as(f32, @floatFromInt(image.yoff))));
+        for (0..image.h) |row| {
+            for (0..image.w) |col| {
+                const at = (row * image.w + col) * 4;
+                const a = @as(f32, @floatFromInt(image.pixels[at + 3])) / 255.0;
+                if (a <= 0) continue;
+                const x: isize = gx + @as(isize, @intCast(col));
+                const y: isize = gy + @as(isize, @intCast(row));
+                if (x < 0 or y < 0) continue;
+                if (x >= @as(isize, @intCast(self.width)) or y >= @as(isize, @intCast(self.height))) continue;
+                if (self.scissor) |sc| {
+                    if (x < sc.x0 or x >= sc.x1 or y < sc.y0 or y >= sc.y1) continue;
+                }
+                const rgb = .{
+                    @as(f32, @floatFromInt(image.pixels[at + 0])) / 255.0,
+                    @as(f32, @floatFromInt(image.pixels[at + 1])) / 255.0,
+                    @as(f32, @floatFromInt(image.pixels[at + 2])) / 255.0,
+                };
+                self.blend(@intCast(x), @intCast(y), rgb, a);
+            }
         }
     }
 

@@ -12,6 +12,7 @@
 
 const std = @import("std");
 const glyphs = @import("glyphs.zig");
+const color_glyphs = @import("color_glyphs.zig");
 const font_io = @import("font_io.zig");
 const estimator = @import("text_estimator.zig");
 
@@ -130,6 +131,62 @@ pub fn deinitFace() void {
     app_face = null;
     app_face_alloc = null;
     glyphs.clearInstalledFont();
+    releaseColorFace();
+}
+
+// ---- the colour face: where an emoji comes from when the text face has no glyph for it ----
+
+var colour_face: ?glyphs.Font = null;
+var colour_tried: bool = false;
+
+// The emoji face this platform ships, loaded once: Segoe UI Emoji, Noto Color Emoji, Apple Color Emoji.
+pub fn colorFace() ?*glyphs.Font {
+    if (!colour_tried) {
+        colour_tried = true;
+        if (face_alloc) |a| {
+            for (font_io.colorCandidates()) |path| {
+                const loaded = glyphs.Font.load(a, path) catch continue;
+                if (!color_glyphs.hasColourTable(loaded.bytes)) {
+                    var skip = loaded;
+                    skip.deinit();
+                    continue;
+                }
+                colour_face = loaded;
+                break;
+            }
+            // The colour cache is pointed at the same allocator as the text cache, once.
+            if (colour_face != null) color_glyphs.initCache(a);
+        }
+    }
+    if (colour_face) |*f| return f;
+    return null;
+}
+
+fn releaseColorFace() void {
+    if (colour_face) |*f| f.deinit();
+    colour_face = null;
+    colour_tried = false;
+}
+
+/// The colour image for `cp` at `size`: the text face's own when it has one, else the emoji face's.
+pub fn colorGlyph(cp: u21, font_size: u16) ?*const color_glyphs.Rgba {
+    if (font()) |f| {
+        if (color_glyphs.cached(f, cp, font_size)) |image| return image;
+        // A real glyph in the text face means the app meant to draw that codepoint monochrome.
+        if (f.glyphIndex(cp) != 0) return null;
+    }
+    const emoji_face = colorFace() orelse return null;
+    return color_glyphs.cached(emoji_face, cp, font_size);
+}
+
+/// The advance a colour glyph takes, so the layout leaves it the room it will actually paint into.
+pub fn colorAdvance(cp: u21, font_size: u16) ?f32 {
+    const text = font() orelse return null;
+    if (text.glyphIndex(cp) != 0) return null;
+    const emoji_face = colorFace() orelse return null;
+    const glyph = emoji_face.glyphIndex(cp);
+    if (glyph == 0) return null;
+    return emoji_face.glyphAdvance(glyph, font_size);
 }
 
 // Device pixels per point, as the window reported it: the rasteriser draws a run at round(size * this), not at size.
@@ -158,8 +215,27 @@ pub fn measureText(text: []const u8, font_size: u16) TextExtent {
     const hash = estimator.hashMeasureKey(text, device);
     if (cacheGet(hash)) |dev_w| return .{ .w = dev_w / pixel_scale, .h = h };
     const m = glyphs.measure(f, text, device);
-    cachePut(hash, m.width);
-    return .{ .w = m.width / pixel_scale, .h = h };
+    // An emoji is drawn from the colour face, so its own advance replaces the `.notdef` the text face measured.
+    const width = m.width + colorWidthDelta(f, text, device);
+    cachePut(hash, width);
+    return .{ .w = width / pixel_scale, .h = h };
+}
+
+// How much wider the run is once every colour glyph takes its own advance: zero for ASCII, a scan for anything else.
+fn colorWidthDelta(f: *const glyphs.Font, text: []const u8, device: u16) f32 {
+    var non_ascii = false;
+    for (text) |b| {
+        if (b >= 0x80) non_ascii = true;
+    }
+    if (!non_ascii) return 0;
+    var delta: f32 = 0;
+    var i: usize = 0;
+    while (i < text.len) {
+        const cp = glyphs.nextCodepoint(text, &i);
+        const advance = colorAdvance(cp, device) orelse continue;
+        delta += advance - f.glyphMetrics(cp, device).advance;
+    }
+    return delta;
 }
 
 // ===================== tests =====================

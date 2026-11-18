@@ -33,6 +33,24 @@ pub fn fontCandidates() []const [:0]const u8 {
     return candidates;
 }
 
+// The faces that carry colour glyphs, one per platform, in the order a UI usually finds them.
+pub const color_candidates: []const [:0]const u8 = &.{
+    // macOS ships one collection with every emoji; a single face is what the loader can parse today.
+    "/System/Library/Fonts/Apple Color Emoji.ttc",
+    "/Library/Fonts/Apple Color Emoji.ttc",
+    // Linux: Noto's CBDT build, then the distribution paths that hold it.
+    "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+    "/usr/share/fonts/noto/NotoColorEmoji.ttf",
+    "/usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf",
+    // Windows: COLR/CPAL layers over ordinary outlines.
+    "C:/Windows/Fonts/seguiemj.ttf",
+};
+
+/// Every colour-face candidate, best first.
+pub fn colorCandidates() []const [:0]const u8 {
+    return color_candidates;
+}
+
 // True when the path names a file this process can open.
 pub fn fontExists(path: [:0]const u8) bool {
     if (comptime has_fs) return fontExistsNative(path) else return false;
