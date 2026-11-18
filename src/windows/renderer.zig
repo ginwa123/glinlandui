@@ -5,6 +5,7 @@ const cl = @import("zclay");
 const soft = @import("../core/render_software.zig");
 const glyphs = @import("../core/glyphs.zig");
 const text_face = @import("../core/text_face.zig");
+const color_glyphs = @import("../core/color_glyphs.zig");
 const scale_mod = @import("../core/scale.zig");
 const common = @import("../core/render_common.zig");
 
@@ -91,6 +92,10 @@ pub const Renderer = struct {
     atlas_dirty: bool = true,
     glyph_map: std.AutoHashMapUnmanaged(GlyphKey, GlyphSlot) = .empty,
     images: std.AutoHashMapUnmanaged(u64, ImageTex) = .empty,
+    // One RGBA texture per colour glyph (an emoji), because the mask atlas is 8-bit and cannot carry colour.
+    colour_map: std.AutoHashMapUnmanaged(GlyphKey, ImageTex) = .empty,
+    // The device this frame is drawing into: a colour glyph needs it to upload, and `pushText` has no frame parameter.
+    gpu_now: ?*anyopaque = null,
     next_image_id: u32 = 1,
     shelf_x: u32 = 0,
     shelf_y: u32 = 0,
@@ -112,6 +117,7 @@ pub const Renderer = struct {
         self.segs.deinit(self.alloc);
         self.glyph_map.deinit(self.alloc);
         self.images.deinit(self.alloc);
+        self.colour_map.deinit(self.alloc);
         if (self.atlas.len > 0) self.alloc.free(self.atlas);
         self.atlas = &.{};
     }
@@ -166,6 +172,8 @@ pub const Renderer = struct {
     fn drawGpu(self: *Renderer, handle: *anyopaque, commands: []cl.RenderCommand, win_w: i32, win_h: i32) bool {
         if (win_w <= 0 or win_h <= 0) return false;
         const h: *gpu.c.GlinWinGpu = @ptrCast(@alignCast(handle));
+        // `pushText` reaches the device through this, because a colour glyph has to upload its own texture.
+        self.gpu_now = handle;
 
         self.verts.clearRetainingCapacity();
         self.segs.clearRetainingCapacity();
@@ -443,6 +451,14 @@ pub const Renderer = struct {
         var i: usize = 0;
         while (i < bytes.len) {
             const cp = glyphs.nextCodepoint(bytes, &i);
+            // An emoji is a colour image, not a mask: its own texture, its own segment, its own advance.
+            if (self.gpu_now) |dev| {
+                if (text_face.colorGlyph(cp, size)) |image| {
+                    self.pushColourGlyph(@ptrCast(@alignCast(dev)), cp, size, image, pen, baseline);
+                    pen += image.advance;
+                    continue;
+                }
+            }
             const gm = face.glyphMetrics(cp, size);
             if (self.glyphSlot(face, cp, size)) |slot| {
                 const gx = @floor(pen + slot.xoff);
@@ -519,6 +535,47 @@ pub const Renderer = struct {
         self.verts.appendSlice(self.alloc, &.{ a, b2, c2, a, c2, d2 }) catch {};
         self.closeSegment();
         self.seg_texture = 0;
+    }
+
+    /// One colour glyph as its own untinted quad: the image path's trick, once per emoji, with its own advance.
+    fn pushColourGlyph(self: *Renderer, g: *gpu.c.GlinWinGpu, cp: u21, size: u16, image: *const color_glyphs.Rgba, pen: f32, baseline: f32) void {
+        const tex = self.colourTex(g, cp, size, image) orelse return;
+        const qx = @floor(pen + @as(f32, @floatFromInt(image.xoff)));
+        const qy = @floor(baseline + @as(f32, @floatFromInt(image.yoff)));
+        const qw: f32 = @floatFromInt(tex.w);
+        const qh: f32 = @floatFromInt(tex.h);
+        if (qw <= 0 or qh <= 0) return;
+        // Its own segment, because the texture changes and the mask atlas must be bound again after it.
+        self.closeSegment();
+        self.seg_texture = @intCast(tex.id);
+        const white = [4]f32{ 1, 1, 1, 1 };
+        const a = Vertex{ .pos = .{ qx, qy }, .local = .{ 0, 0 }, .size = .{ 0, 0 }, .radius = .{ 0, 0, 0, 0 }, .color = white, .mode = 0, .border = 0, .kind = 2 };
+        var b = a;
+        var c2 = a;
+        var d = a;
+        b.pos = .{ qx + qw, qy };
+        b.local = .{ 1, 0 };
+        c2.pos = .{ qx + qw, qy + qh };
+        c2.local = .{ 1, 1 };
+        d.pos = .{ qx, qy + qh };
+        d.local = .{ 0, 1 };
+        self.verts.appendSlice(self.alloc, &.{ a, b, c2, a, c2, d }) catch {};
+        self.closeSegment();
+        self.seg_texture = 0;
+    }
+
+    /// Upload one RGBA texture per (codepoint, size) from the same decoded image the CPU path blits.
+    fn colourTex(self: *Renderer, g: *gpu.c.GlinWinGpu, cp: u21, size: u16, image: *const color_glyphs.Rgba) ?ImageTex {
+        const key = GlyphKey{ .cp = cp, .size = size };
+        if (self.colour_map.get(key)) |t| return t;
+        if (image.w == 0 or image.h == 0) return null;
+        const id = self.next_image_id;
+        // The shader's slot table is fixed (GLIN_MAX_IMAGES), and the glyph atlas is slot 0, so wrap rather than grow.
+        if (self.next_image_id + 1 >= max_images) self.next_image_id = 1 else self.next_image_id += 1;
+        gpu.c.glin_win_gpu_set_image(g, @intCast(id), image.pixels.ptr, @intCast(image.w), @intCast(image.h));
+        const tex = ImageTex{ .id = id, .w = @intCast(image.w), .h = @intCast(image.h) };
+        self.colour_map.put(self.alloc, key, tex) catch {};
+        return tex;
     }
 
     /// The pixels come from the CPU surface's own decode cache, so the GPU and the reference cannot disagree about the bitmap.
