@@ -54,6 +54,13 @@ pub const KEY_BACKSPACE = draft_layer.KEY_BACKSPACE;
 pub const KEY_ENTER = draft_layer.KEY_ENTER;
 pub const KEY_A = draft_layer.KEY_A;
 
+// One coloured run: the bytes [start, end) painted `color`. Sorted and non-overlapping; a byte no span owns keeps the field's ink.
+pub const SyntaxSpan = struct {
+    start: usize,
+    end: usize,
+    color: Color,
+};
+
 // One text field: what it looks like, the intents it raises, and the state it owns.
 pub const Field = struct {
     // ---- what it looks like ----
@@ -78,6 +85,8 @@ pub const Field = struct {
     readonly: bool = false,
     // The line starts the app already computed, plus the end offset, so a megabyte body never scans for a line.
     lines: ?[]const usize = null,
+    // The coloured runs the app computed over the draft (JSON, say): a span's colour beats `fg`, and a selection beats both.
+    syntax: ?[]const SyntaxSpan = null,
     // The scroll container this field lives in: set it and a multiline field keeps the caret's line inside it.
     scroll_id: ?[]const u8 = null,
     // A field grows to the width it is given and fits its text vertically, unless the caller says otherwise.
@@ -359,6 +368,7 @@ pub fn beginFrame() void {
     active = null;
     // The tab order is this frame's too: a field that is not declared again is not reachable again.
     focus.beginDeclare();
+    syntax_runs_left = syntax_run_budget;
 }
 
 // Type a composed run into the focused field; false when no field owns the keyboard.
@@ -830,11 +840,14 @@ fn lineEndOf(field: *const Field, line: usize) usize {
         if (index.len == 0) return 0;
         var end = index[@min(line + 1, index.len - 1)];
         if (end > 0 and end <= ed.len and ed.buf[end - 1] == '\n') end -= 1;
+        // A CRLF body keeps its CR inside the line, and a byte with no glyph is drawn as a box: the line ends before it.
+        if (end > 0 and end <= ed.len and ed.buf[end - 1] == '\r') end -= 1;
         return @min(end, ed.len);
     }
     const start = lineStartOf(field, line);
     var end = start;
     while (end < ed.len and ed.buf[end] != '\n') end += 1;
+    if (end > start and ed.buf[end - 1] == '\r') end -= 1;
     return end;
 }
 
@@ -877,16 +890,16 @@ fn drawSingleLine(field: *Field, draft: []const u8, blink_on: bool, fg: Color, n
         const span = input.caret.selection().?;
         const s = span.start;
         const e = span.end;
-        if (s > 0) cl.text(draft[0..s], .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
+        if (s > 0) textRuns(field, draft[0..s], 0, fg);
         cl.UI()(.{
             .id = .IDI(name, 1),
             // Fit and unpadded: a taller highlight lifts every glyph on the line the moment a selection appears.
             .layout = .{ .sizing = .{ .w = .fit, .h = .fit } },
             .background_color = field.sel_bg.toClay(),
         })({
-            cl.text(draft[s..e], .{ .font_size = field.font_size.whole(), .color = field.sel_fg.toClay() });
+            drawRun(draft[s..e], field.font_size.whole(), field.sel_fg);
         });
-        if (e < draft.len) cl.text(draft[e..], .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
+        if (e < draft.len) textRuns(field, draft[e..], e, fg);
         return;
     }
     // One run for the value, caret floated over it; an empty one draws a space so `.fit` keeps a line.
@@ -894,7 +907,11 @@ fn drawSingleLine(field: *Field, draft: []const u8, blink_on: bool, fg: Color, n
         cl.text(field.placeholder, .{ .font_size = field.font_size.whole(), .color = field.placeholder_fg.toClay() });
         return;
     }
-    cl.text(if (draft.len == 0) " " else draft, .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
+    if (draft.len == 0) {
+        drawRun(" ", field.font_size.whole(), fg);
+    } else {
+        textRuns(field, draft, 0, fg);
+    }
     if (blink_on) caretBar(field, draft);
 }
 
@@ -962,34 +979,73 @@ fn lineGap(name: []const u8, id: u32, height: f32) void {
     })({});
 }
 
+// A text command for one run of a line, in the colour that run carries.
+fn drawRun(line: []const u8, size: u16, color: Color) void {
+    cl.text(line, .{ .font_size = size, .color = color.toClay() });
+}
+
+// The first span that could cover `at`: the list is sorted by start, so a line asks only for the spans it meets.
+fn spanCovering(spans: []const SyntaxSpan, at: usize) usize {
+    var lo: usize = 0;
+    var hi: usize = spans.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        if (spans[mid].start < at) lo = mid + 1 else hi = mid;
+    }
+    // A span that STARTS before `at` can still reach it, and spans never overlap, so one step back is the whole check.
+    if (lo > 0 and spans[lo - 1].end > at) return lo - 1;
+    return lo;
+}
+
+// A frame colours at most this many runs: each is a Clay element, and the element array is finite, so a body drawn in full on its first frame must not fill it.
+pub const syntax_run_budget: usize = 4096;
+var syntax_runs_left: usize = syntax_run_budget;
+
+// A line of text as the runs it is made of: one command per syntax span it meets, and one for each gap between them.
+fn textRuns(field: *Field, line: []const u8, line_start: usize, fg: Color) void {
+    const size = field.font_size.whole();
+    const spans = field.syntax orelse return drawRun(line, size, fg);
+    const line_end = line_start + line.len;
+    var cursor: usize = 0;
+    var i = spanCovering(spans, line_start);
+    while (i < spans.len and spans[i].start < line_end) : (i += 1) {
+        const span = spans[i];
+        // A span the app left inverted or outside this line is skipped rather than allowed to slice backwards.
+        if (span.end <= line_start or span.start >= line_end) continue;
+        const from = @max(if (span.start > line_start) span.start - line_start else 0, cursor);
+        const to = @min(span.end - line_start, line.len);
+        if (to <= from) continue;
+        // The frame's run budget is spent: the rest of this line keeps the field's ink, which never looks broken.
+        if (syntax_runs_left == 0) return drawRun(line[from..], size, fg);
+        syntax_runs_left -= 1;
+        if (from > cursor) drawRun(line[cursor..from], size, fg);
+        drawRun(line[from..to], size, span.color);
+        cursor = to;
+    }
+    if (cursor < line.len) drawRun(line[cursor..], size, fg);
+}
+
 // One line of a multiline field, split around the selection when the selection overlaps it.
 fn drawLine(field: *Field, line: []const u8, line_start: usize, sel: ?text_editor.Span, fg: Color, name: []const u8, index: usize) void {
+    const size = field.font_size.whole();
     // An empty line still draws a cell, so its box has a height for the caret to float in.
-    if (line.len == 0) {
-        cl.text(" ", .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
-        return;
-    }
-    const span = sel orelse {
-        cl.text(line, .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
-        return;
-    };
+    if (line.len == 0) return drawRun(" ", size, fg);
+    const span = sel orelse return textRuns(field, line, line_start, fg);
     const line_end = line_start + line.len;
-    if (span.end <= line_start or span.start >= line_end) {
-        cl.text(line, .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
-        return;
-    }
+    // A selection that misses this line leaves the line wholly to the syntax.
+    if (span.end <= line_start or span.start >= line_end) return textRuns(field, line, line_start, fg);
     const a = @min(@max(span.start, line_start) - line_start, line.len);
     const b = @min(@max(span.end, line_start) - line_start, line.len);
-    if (a > 0) cl.text(line[0..a], .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
+    if (a > 0) textRuns(field, line[0..a], line_start, fg);
     cl.UI()(.{
         .id = .IDI(name, lineSelIndex(index)),
         // Fit and unpadded, like the single-line highlight: a taller box would resize the line it sits on.
         .layout = .{ .sizing = .{ .w = .fit, .h = .fit } },
         .background_color = field.sel_bg.toClay(),
     })({
-        cl.text(line[a..b], .{ .font_size = field.font_size.whole(), .color = field.sel_fg.toClay() });
+        drawRun(line[a..b], size, field.sel_fg);
     });
-    if (b < line.len) cl.text(line[b..], .{ .font_size = field.font_size.whole(), .color = fg.toClay() });
+    if (b < line.len) textRuns(field, line[b..], line_start + b, fg);
 }
 
 // The caret inside a line row: the row already sits past the field's padding, so no extra offset is added.
@@ -1962,6 +2018,125 @@ test "a selection in a multiline field leaves every line row where it was" {
     try std.testing.expect(hasRect(marked, cl.ElementId.IDI("test-sel-multi", lineSelIndex(0)).id));
     try std.testing.expectApproxEqAbs(row_a.y, row_b.y, 0.01);
     try std.testing.expectApproxEqAbs(row_a.height, row_b.height, 0.01);
+}
+
+// ---- Syntax spans: the app says what is a key, a string, a number; the field only paints them ----
+
+var syntax_field: Field = .{ .id = .{ .text = "test-syntax-field" } };
+
+fn declareSyntaxField() void {
+    textField(&syntax_field);
+}
+
+const syntax_key = Color.rgb(0x8b, 0xa4, 0xb0);
+const syntax_number = Color.rgb(0xc4, 0xb2, 0x8a);
+
+// The bytes of every text command on the current frame, so a test can ask what colour a run was drawn in.
+fn colorOfRun(cmds: []const cl.RenderCommand, bytes: []const u8) ?cl.Color {
+    for (cmds) |c| {
+        if (c.command_type != .text) continue;
+        const run_text = c.render_data.text.string_contents;
+        const drawn = run_text.chars[0..@intCast(run_text.length)];
+        if (!std.mem.eql(u8, drawn, bytes)) continue;
+        return c.render_data.text.text_color;
+    }
+    return null;
+}
+
+test "a field draws a run per syntax span, in the colour the app gave it" {
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.ptr_down = false;
+    beginFrame();
+    // `{"a":1}` with the brace plain, the key and the number coloured: the app colours two runs of five bytes.
+    const spans = [_]SyntaxSpan{
+        .{ .start = 1, .end = 4, .color = syntax_key },
+        .{ .start = 5, .end = 6, .color = syntax_number },
+    };
+    syntax_field = .{
+        .id = .{ .text = "test-syntax-field" },
+        .value = "{\"a\":1}",
+        .multiline = true,
+        .w = .{ .fixed = 200 },
+        .h = .{ .fixed = 60 },
+        .syntax = &spans,
+    };
+    syntax_field.bind();
+    frame_mod.setFocus("test-syntax-field");
+    const cmds = try layoutCommands(declareSyntaxField);
+
+    // Each span is its own command, and the bytes around them keep the field's own ink.
+    try std.testing.expectEqual(syntax_key.toClay(), colorOfRun(cmds, "\"a\"").?);
+    try std.testing.expectEqual(syntax_number.toClay(), colorOfRun(cmds, "1").?);
+    try std.testing.expectEqual(syntax_field.fg.toClay(), colorOfRun(cmds, "{").?);
+    // The runs tile the line: the whole value is still drawn, exactly once.
+    var drawn: usize = 0;
+    for (cmds) |c| {
+        if (c.command_type == .text) drawn += @intCast(c.render_data.text.string_contents.length);
+    }
+    try std.testing.expectEqual(@as(usize, 7), drawn);
+}
+
+test "a selection takes the band over the syntax, and the rest of the line keeps its colours" {
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.ptr_down = false;
+    beginFrame();
+    const spans = [_]SyntaxSpan{
+        .{ .start = 1, .end = 4, .color = syntax_key },
+        .{ .start = 5, .end = 6, .color = syntax_number },
+    };
+    syntax_field = .{
+        .id = .{ .text = "test-syntax-field" },
+        .value = "{\"a\":1}",
+        .multiline = true,
+        .w = .{ .fixed = 200 },
+        .h = .{ .fixed = 60 },
+        .syntax = &spans,
+    };
+    syntax_field.bind();
+    frame_mod.setFocus("test-syntax-field");
+    // One plain frame first: adopting the model value resets the caret, so the selection has to come after it.
+    _ = try layoutCommands(declareSyntaxField);
+    // Bytes 1..4 selected: the band covers the key, which therefore draws in the selection's ink, not the syntax's.
+    syntax_field.editor.setCaret(1, false);
+    syntax_field.editor.setCaret(4, true);
+    const cmds = try layoutCommands(declareSyntaxField);
+
+    try std.testing.expectEqual(syntax_field.sel_fg.toClay(), colorOfRun(cmds, "\"a\"").?);
+    // The bytes outside the band are untouched: the brace keeps the field's ink, the number its own colour.
+    try std.testing.expectEqual(syntax_field.fg.toClay(), colorOfRun(cmds, "{").?);
+    try std.testing.expectEqual(syntax_number.toClay(), colorOfRun(cmds, "1").?);
+    // And the band is one box for the line, which is what keeps every box id unique.
+    try std.testing.expect(hasRect(cmds, cl.ElementId.IDI("test-syntax-field", lineSelIndex(0)).id));
+}
+
+test "a CRLF body draws no carriage return, which the font has no glyph for" {
+    frame_mod.setTime(0, 0);
+    frame_mod.resetFocus();
+    frame_mod.ptr_down = false;
+    beginFrame();
+    // A body pasted from Windows: each line ends "\r\n", and the CR must not reach a run as a tofu box.
+    syntax_field = .{
+        .id = .{ .text = "test-syntax-field" },
+        .value = "{\r\n  \"a\": 1\r\n}",
+        .multiline = true,
+        .w = .{ .fixed = 200 },
+        .h = .{ .fixed = 90 },
+    };
+    syntax_field.bind();
+    frame_mod.setFocus("test-syntax-field");
+    const cmds = try layoutCommands(declareSyntaxField);
+    var drawn: usize = 0;
+    for (cmds) |c| {
+        if (c.command_type != .text) continue;
+        const run_text = c.render_data.text.string_contents;
+        const bytes = run_text.chars[0..@intCast(run_text.length)];
+        try std.testing.expect(std.mem.indexOfScalar(u8, bytes, '\r') == null);
+        drawn += bytes.len;
+    }
+    // The three lines are still drawn whole, minus their carriage returns.
+    try std.testing.expectEqual(@as(usize, "{  \"a\": 1}".len), drawn);
 }
 
 test "a field that lost the keyboard drops its band and keeps its selection" {
