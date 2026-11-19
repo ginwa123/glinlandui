@@ -721,6 +721,13 @@ static int buttonFor(UINT msg, WPARAM wp) {
     return GLIN_BTN_LEFT;
 }
 
+/// The frame pump's timer id, and its period: 16 ms is one frame at ~60 Hz, which
+/// is as often as a Win32 window can be invalidated without starving its own
+/// message loop. The id is private to this file: a window carries at most one
+/// pump, and WM_TIMER is matched against it and nothing else.
+#define GLIN_ANIM_TIMER_ID 1
+#define GLIN_ANIM_PERIOD_MS 16
+
 static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     GlinWinWindow *w = (GlinWinWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
     if (w == NULL) {
@@ -788,6 +795,16 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // paint this myself": it stops the window flickering white between
         // the erase and the first D3D11 present.
         return 1;
+
+    case WM_TIMER: {
+        // The app is animating: this tick exists only to ask for the next frame.
+        // Any other timer id belongs to somebody else and goes to DefWindowProc.
+        if (wp != GLIN_ANIM_TIMER_ID) {
+            break;
+        }
+        glin_win_invalidate(w);
+        return 0;
+    }
 
     case WM_PAINT: {
         PAINTSTRUCT ps;
@@ -1121,6 +1138,19 @@ void glin_win_invalidate(GlinWinWindow *win) {
     // never goes idle (a drag, a live resize) never paints at all.
     InvalidateRect(win->hwnd, NULL, FALSE);
     UpdateWindow(win->hwnd);
+}
+
+void glin_win_set_animating(GlinWinWindow *win, int on) {
+    if (win == NULL || win->hwnd == NULL) {
+        return;
+    }
+    if (!on) {
+        KillTimer(win->hwnd, GLIN_ANIM_TIMER_ID);
+        return;
+    }
+    // SetTimer with an id this window already holds just re-arms it, so calling
+    // this on every frame of a long run costs nothing and never stacks timers.
+    SetTimer(win->hwnd, GLIN_ANIM_TIMER_ID, GLIN_ANIM_PERIOD_MS, NULL);
 }
 
 void glin_win_set_cursor(GlinWinWindow *win, unsigned int id) {

@@ -186,6 +186,15 @@ pub const Window = struct {
         c.glin_win_window_run(handle, requested);
     }
 
+    /// Start or stop the frame pump. An app with its own animation calls this with `true`
+    /// while it is running and `false` when it stops; the shim's timer redraws at ~60 Hz in between.
+    ///
+    /// Without it Win32 delivers exactly one frame per event: a request running on a worker thread, or a
+    /// list that advances one row at a time, paints its first state and then waits for the pointer to move.
+    pub fn setAnimating(self: *Window, on: bool) void {
+        if (self.handle) |handle| c.glin_win_set_animating(handle, if (on) 1 else 0);
+    }
+
     // ---- callbacks handed to the shim ----
 
     fn ctx(p: ?*anyopaque) *Window {
