@@ -68,7 +68,12 @@ typedef int (*GlinWinOnKey)(void *user, int vk, int pressed);
 /// resizes and applies at most one per drawn frame.
 typedef void (*GlinWinOnResize)(void *user, int w, int h);
 
-/// The window's close button was pressed.
+/// Asked BEFORE the window closes. Return 0 to veto the close: the app is drawing
+/// its own question and calls glin_win_quit once the answer is "close". The same
+/// contract as AppKit's `windowShouldClose:`, so the two shims stay interchangeable.
+typedef int (*GlinWinShouldClose)(void *user);
+
+/// The window IS closing: its close button was pressed and nothing vetoed it.
 typedef void (*GlinWinOnClose)(void *user);
 
 /// Ask the shim to redraw the window. The host MUST call this after any event
@@ -112,6 +117,7 @@ void glin_win_window_set_callbacks(GlinWinWindow *win,
                                    GlinWinOnKey on_key,
                                    GlinWinOnResize on_resize,
                                    GlinWinOnClose on_close,
+                                   GlinWinShouldClose should_close,
                                    void *user);
 
 /// Run the Win32 message loop; blocks until the app quits.

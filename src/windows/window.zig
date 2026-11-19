@@ -165,6 +165,7 @@ pub const Window = struct {
             onKey,
             onResize,
             onClose,
+            onShouldClose,
             self,
         );
 
@@ -198,7 +199,11 @@ pub const Window = struct {
         if (adapter.applyPendingResize(&self.state)) {
             onResized(self);
         }
-        if (adapter.resolveQuit(&self.state)) return;
+        if (adapter.resolveQuit(&self.state)) {
+            // An app that asked to quit (a dialog's "Save and quit") ends the run loop here, not only its frames.
+            c.glin_win_quit(self.handle);
+            return;
+        }
         const w = self.state.win_w;
         const h = self.state.win_h;
 
@@ -327,6 +332,19 @@ pub const Window = struct {
         if (w <= 0 or h <= 0) return;
         // Record only: the delegate is notified from applyPendingResize, once per drawn frame.
         _ = adapter.noteResize(&self.state, @intCast(w), @intCast(h));
+    }
+
+    // Asked before the window closes: the app may hold it open to ask its own question, exactly as on macOS.
+    fn onShouldClose(p: ?*anyopaque) callconv(.c) c_int {
+        const self = ctx(p);
+        const d = self.delegate orelse return 1;
+        if (self.state.quit) return 1;
+        d.on_close(d.ptr);
+        if (d.is_quit(d.ptr)) return 1;
+        // Vetoed: redraw, because the answer is a card the app has to put on screen.
+        self.state.needs_draw = true;
+        c.glin_win_invalidate(self.handle);
+        return 0;
     }
 
     fn onClose(p: ?*anyopaque) callconv(.c) void {

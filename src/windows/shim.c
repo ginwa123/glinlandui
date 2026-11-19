@@ -162,6 +162,7 @@ struct GlinWinWindow {
     GlinWinOnKey on_key;
     GlinWinOnResize on_resize;
     GlinWinOnClose on_close;
+    GlinWinShouldClose should_close;
     void *user;
 
     // D3D11 present path.
@@ -909,6 +910,12 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_CLOSE: {
+        // Asked before anything is destroyed: an app with unsaved work vetoes the close, draws its own
+        // question, and calls glin_win_quit once the answer is "close" — AppKit's windowShouldClose:.
+        if (w->should_close != NULL && !w->should_close(w->user)) {
+            // Vetoed. `w->quit` must stay 0, or the run loop would end and take the window with it.
+            return 0;
+        }
         if (w->on_close != NULL) {
             w->on_close(w->user);
         }
@@ -1090,7 +1097,8 @@ void glin_win_window_destroy(GlinWinWindow *win) {
 void glin_win_window_set_callbacks(GlinWinWindow *win, GlinWinOnFrame on_frame,
                                    GlinWinOnPointer on_pointer, GlinWinOnScroll on_scroll,
                                    GlinWinOnKey on_key, GlinWinOnResize on_resize,
-                                   GlinWinOnClose on_close, void *user) {
+                                   GlinWinOnClose on_close, GlinWinShouldClose should_close,
+                                   void *user) {
     if (win == NULL) {
         return;
     }
@@ -1100,6 +1108,7 @@ void glin_win_window_set_callbacks(GlinWinWindow *win, GlinWinOnFrame on_frame,
     win->on_key = on_key;
     win->on_resize = on_resize;
     win->on_close = on_close;
+    win->should_close = should_close;
     win->user = user;
 }
 
