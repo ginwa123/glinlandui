@@ -735,6 +735,40 @@ test "host: a host starts with a clock, so two clicks can be told from a double 
     }
 }
 
+fn testClockMs(ctx: ?*anyopaque) i64 {
+    const now_ms: *i64 = @ptrCast(@alignCast(ctx.?));
+    return now_ms.*;
+}
+
+var contract_field: input_mod.Field = .{ .id = .{ .text = "contract-double-field" } };
+
+fn contractFieldRoot(_: ?*anyopaque, _: u32, _: u32) void {
+    input_mod.textField(&contract_field);
+}
+
+test "host: two clicks on one spot select the word, so every backend must deliver both presses" {
+    var h: Host = undefined;
+    try testHost(&h, null, contractFieldRoot);
+    var now_ms: i64 = 1000;
+    h.clock = testClockMs;
+    h.clock_ctx = &now_ms;
+    contract_field = .{ .id = .{ .text = "contract-double-field" }, .value = "hello world" };
+    h.frame(720, 480);
+    const bb = cl.getElementData(cl.getElementId("contract-double-field")).bounding_box;
+    // Two points into the run: past the field's own left padding, so the pointer lands inside "hello".
+    const x = bb.x + contract_field.pad_lr.pts() + 2;
+    const y = bb.y + bb.height * 0.5;
+    // What EVERY backend hands the Host for one click: a press and a release. This is that pair, twice, 60 ms apart.
+    h.onPointerEvent(x, y, true, 272);
+    h.onPointerEvent(x, y, false, 272);
+    now_ms += 60;
+    h.onPointerEvent(x, y, true, 272);
+    h.onPointerEvent(x, y, false, 272);
+    const span = contract_field.editor.caret.selection() orelse return error.NoSelection;
+    try std.testing.expectEqual(@as(usize, 0), span.start);
+    try std.testing.expectEqual(@as(usize, 5), span.end);
+}
+
 test "host: a press on the scrollbar pill drags its content instead of nudging it 1:1" {
     var h: Host = undefined;
     try testHost(&h, null, hostScrollProbeRoot);
