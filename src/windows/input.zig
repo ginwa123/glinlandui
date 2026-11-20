@@ -2,36 +2,21 @@
 
 const std = @import("std");
 const adapter = @import("adapter.zig");
+const contract = @import("../core/pointer_contract.zig");
 
-/// evdev button codes, matching `components.dispatch.BTN_LEFT`.
-pub const BTN_LEFT: u32 = 272;
-pub const BTN_RIGHT: u32 = 273;
-pub const BTN_MIDDLE: u32 = 274;
+/// The kinds and the button codes are the one pointer contract's, so no backend can drift from the others.
+pub const MOTION = contract.MOTION;
+pub const DOWN = contract.DOWN;
+pub const UP = contract.UP;
+pub const BTN_LEFT = contract.BTN_LEFT;
+pub const BTN_RIGHT = contract.BTN_RIGHT;
+pub const BTN_MIDDLE = contract.BTN_MIDDLE;
 
-/// `WM_MOUSEMOVE`: the pointer moved, no button transition happened.
-pub const MOTION: u8 = 0;
-/// The primary (left) button went down or up.
-pub const DOWN: u8 = 1;
-/// A secondary button went down or up.
-pub const UP: u8 = 2;
-
-/// What the shim told us, before translation.
-pub const Raw = struct {
-    kind: u8,
-    button_number: i32,
-    /// Client coordinates.
-    x: f32,
-    y: f32,
-};
+/// What the shim told us: a `WM_*` in `kind` and a client-space point, top-left origin.
+pub const Raw = contract.Raw;
 
 /// The Delegate's shape, ready to hand to `d.on_pointer`.
-pub const Translated = struct {
-    x: f32,
-    y: f32,
-    pressed: bool,
-    /// The evdev code on a transition, and 0 on motion — matching Wayland exactly, which is what keeps drag detection working.
-    button: u32,
-};
+pub const Translated = contract.Translated;
 
 /// Map a Win32 button number to the toolkit's evdev code.
 pub fn evdevButton(button_number: i32) u32 {
@@ -44,17 +29,14 @@ pub fn evdevButton(button_number: i32) u32 {
     };
 }
 
-/// Translate one Win32 pointer event.
+/// Win32 already counts y from the top-left, so this backend only clamps.
+pub fn toToolkitPoint(w: u32, h: u32, x: f32, y: f32) adapter.Point {
+    return adapter.toToolkitPoint(w, h, x, y);
+}
+
+/// Translate one Win32 pointer event: the shared switch, bound to this backend's point and button mapping.
 pub fn translate(w: u32, h: u32, raw: Raw, held: bool) Translated {
-    const pt = adapter.toToolkitPoint(w, h, raw.x, raw.y);
-    return switch (raw.kind) {
-        // Motion carries button 0 so it lands in dispatch's drag arm.
-        MOTION => .{ .x = pt.x, .y = pt.y, .pressed = held, .button = 0 },
-        DOWN => .{ .x = pt.x, .y = pt.y, .pressed = true, .button = evdevButton(raw.button_number) },
-        UP => .{ .x = pt.x, .y = pt.y, .pressed = false, .button = evdevButton(raw.button_number) },
-        // Unknown kind: treat as motion rather than inventing a press.
-        else => .{ .x = pt.x, .y = pt.y, .pressed = held, .button = 0 },
-    };
+    return contract.translate(@This(), w, h, raw, held);
 }
 
 // ===================== tests (parity suite — every platform) =====================

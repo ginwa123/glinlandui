@@ -3,62 +3,41 @@
 const std = @import("std");
 const Color = @import("../core/color.zig").Color;
 const adapter = @import("adapter.zig");
+const contract = @import("../core/pointer_contract.zig");
 
-/// evdev button codes, matching `components.dispatch.BTN_LEFT`.
-pub const BTN_LEFT: u32 = 272;
-pub const BTN_RIGHT: u32 = 273;
-pub const BTN_MIDDLE: u32 = 274;
+/// The kinds and the button codes are the one pointer contract's, so no backend can drift from the others.
+pub const MOTION = contract.MOTION;
+pub const DOWN = contract.DOWN;
+pub const UP = contract.UP;
+pub const BTN_LEFT = contract.BTN_LEFT;
+pub const BTN_RIGHT = contract.BTN_RIGHT;
+pub const BTN_MIDDLE = contract.BTN_MIDDLE;
 
-/// `NSEventTypeMouseMoved` and friends: the pointer moved, no button transition happened.
-pub const MOTION: u8 = 0;
-/// The primary (usually left) button went down or up.
-pub const DOWN: u8 = 1;
-/// A secondary button went down or up.
-pub const UP: u8 = 2;
-
-/// What AppKit told us, before translation.
-pub const Raw = struct {
-    /// `NSEventType`: one of MOTION / DOWN / UP.
-    kind: u8,
-    /// `NSEvent.buttonNumber`: 0 left, 1 right, 2 and up are "other".
-    button_number: i32,
-    /// Location in the view, bottom-left origin.
-    x: f32,
-    y: f32,
-};
+/// What AppKit told us: `NSEventType` in `kind`, `NSEvent.buttonNumber` in `button_number`, bottom-left origin.
+pub const Raw = contract.Raw;
 
 /// The Delegate's shape, ready to hand to `d.on_pointer`.
-pub const Translated = struct {
-    x: f32,
-    y: f32,
-    pressed: bool,
-    /// The evdev code on a transition, and 0 on motion — matching Wayland exactly, which is what keeps drag detection working.
-    button: u32,
-};
+pub const Translated = contract.Translated;
 
-/// Map an AppKit `NSEventTypeMouse*` / `NSEventButtonNumber` to the toolkit's pointer contract.
+/// Map an AppKit `NSEventButtonNumber` to the toolkit's evdev code.
 pub fn evdevButton(button_number: i32) u32 {
     return switch (button_number) {
         0 => BTN_LEFT,
         1 => BTN_RIGHT,
         2 => BTN_MIDDLE,
-        // NSEvent's "other" buttons 3..
+        // NSEvent's "other" buttons 3.. are one bucket: middle rather than dropped.
         else => BTN_MIDDLE,
     };
 }
 
-/// Translate one AppKit pointer event. `w`/`h` are the view size.
+/// AppKit counts y from the bottom-left and the toolkit from the top-left, so this backend is the one that flips it.
+pub fn toToolkitPoint(w: u32, h: u32, x: f32, y: f32) adapter.Point {
+    return adapter.toToolkitPoint(w, h, x, y);
+}
+
+/// Translate one AppKit pointer event: the shared switch, bound to this backend's point and button mapping.
 pub fn translate(w: u32, h: u32, raw: Raw, held: bool) Translated {
-    // AppKit's y is bottom-left; the toolkit's is top-left.
-    const pt = adapter.toToolkitPoint(w, h, raw.x, raw.y);
-    return switch (raw.kind) {
-        // Motion carries button 0 so it lands in dispatch's drag arm.
-        MOTION => .{ .x = pt.x, .y = pt.y, .pressed = held, .button = 0 },
-        DOWN => .{ .x = pt.x, .y = pt.y, .pressed = true, .button = evdevButton(raw.button_number) },
-        UP => .{ .x = pt.x, .y = pt.y, .pressed = false, .button = evdevButton(raw.button_number) },
-        // Unknown kind: treat as motion rather than inventing a press.
-        else => .{ .x = pt.x, .y = pt.y, .pressed = held, .button = 0 },
-    };
+    return contract.translate(@This(), w, h, raw, held);
 }
 
 // ===================== tests (parity suite — every platform) =====================
