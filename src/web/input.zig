@@ -3,22 +3,19 @@
 const std = @import("std");
 const Color = @import("../core/color.zig").Color;
 const adapter = @import("adapter.zig");
+const contract = @import("../core/pointer_contract.zig");
 
-/// evdev button codes, matching `components.dispatch.BTN_LEFT`.
-pub const BTN_LEFT: u32 = 272;
-pub const BTN_RIGHT: u32 = 273;
-pub const BTN_MIDDLE: u32 = 274;
+/// The shared kinds and button codes, plus the two thumb buttons only a browser reports.
+pub const MOTION = contract.MOTION;
+pub const DOWN = contract.DOWN;
+pub const UP = contract.UP;
+pub const BTN_LEFT = contract.BTN_LEFT;
+pub const BTN_RIGHT = contract.BTN_RIGHT;
+pub const BTN_MIDDLE = contract.BTN_MIDDLE;
 pub const BTN_SIDE: u32 = 275;
 pub const BTN_EXTRA: u32 = 276;
 
-/// The pointer moved; no button transition happened.
-pub const MOTION: u8 = 0;
-/// A button went down.
-pub const DOWN: u8 = 1;
-/// A button went up.
-pub const UP: u8 = 2;
-
-/// What the DOM told us, before translation.
+/// What the DOM told us: `MouseEvent.button` in `button`, a backing-store point, top-left origin.
 pub const Raw = struct {
     /// One of MOTION / DOWN / UP.
     kind: u8,
@@ -30,13 +27,7 @@ pub const Raw = struct {
 };
 
 /// The Delegate's shape, ready to hand to `d.on_pointer`.
-pub const Translated = struct {
-    x: f32,
-    y: f32,
-    pressed: bool,
-    /// The evdev code on a transition, and 0 on motion — matching Wayland exactly, which is what keeps drag detection working.
-    button: u32,
-};
+pub const Translated = contract.Translated;
 
 /// Map a DOM `MouseEvent.button` to the toolkit's evdev button code.
 pub fn evdevButton(button_number: i32) u32 {
@@ -51,18 +42,14 @@ pub fn evdevButton(button_number: i32) u32 {
     };
 }
 
-/// Translate one DOM pointer event.
+/// The DOM's origin is already the toolkit's top-left, so this backend only clamps a pointer that left the canvas.
+pub fn toToolkitPoint(w: u32, h: u32, x: f32, y: f32) adapter.Point {
+    return adapter.clampToView(w, h, x, y);
+}
+
+/// Translate one DOM pointer event: the shared switch, bound to the DOM's numbering and origin.
 pub fn translate(w: u32, h: u32, raw: Raw, held: bool) Translated {
-    // Clamp into the canvas.
-    const pt = adapter.clampToView(w, h, raw.x, raw.y);
-    return switch (raw.kind) {
-        // Motion carries button 0 so it lands in dispatch's drag arm.
-        MOTION => .{ .x = pt.x, .y = pt.y, .pressed = held, .button = 0 },
-        DOWN => .{ .x = pt.x, .y = pt.y, .pressed = true, .button = evdevButton(raw.button) },
-        UP => .{ .x = pt.x, .y = pt.y, .pressed = false, .button = evdevButton(raw.button) },
-        // Unknown kind: treat as motion rather than inventing a press.
-        else => .{ .x = pt.x, .y = pt.y, .pressed = held, .button = 0 },
-    };
+    return contract.translate(@This(), w, h, .{ .kind = raw.kind, .button_number = raw.button, .x = raw.x, .y = raw.y }, held);
 }
 
 /// The release to synthesise when the browser cancels a gesture (`pointercancel`: the OS took over, a touch scrolled the page, the pointer was lifted.

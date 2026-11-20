@@ -1,16 +1,14 @@
 //! Linux pointer/keyboard value translation — the `input.zig` half of the platform mirror.
 
-/// evdev button codes, matching `components.dispatch.BTN_LEFT` and `mac/input.zig`'s identical constants.
-pub const BTN_LEFT: u32 = 272;
-pub const BTN_RIGHT: u32 = 273;
-pub const BTN_MIDDLE: u32 = 274;
+const contract = @import("../core/pointer_contract.zig");
 
-/// The pointer moved; no button transition. Same values as `mac/input.zig`.
-pub const MOTION: u8 = 0;
-/// A button went down.
-pub const DOWN: u8 = 1;
-/// A button went up.
-pub const UP: u8 = 2;
+/// The kinds and button codes are the one pointer contract's, so no backend can drift from the others.
+pub const MOTION = contract.MOTION;
+pub const DOWN = contract.DOWN;
+pub const UP = contract.UP;
+pub const BTN_LEFT = contract.BTN_LEFT;
+pub const BTN_RIGHT = contract.BTN_RIGHT;
+pub const BTN_MIDDLE = contract.BTN_MIDDLE;
 
 /// `wl_fixed_t` (24.8 signed fixed point) -> pixels.
 pub fn fixedToFloat(f: i32) f32 {

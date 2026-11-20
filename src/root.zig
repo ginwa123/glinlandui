@@ -139,6 +139,8 @@ test {
     _ = @import("core/scale.zig");
     _ = @import("core/golden_test.zig");
     _ = @import("core/backend_contract_test.zig");
+    // The pointer entry (one translation, four adapters) and the parity tests that hold them to one answer.
+    _ = @import("input.zig");
     // Real glyph rasterization for the CPU renderer (stb_truetype).
     _ = @import("core/glyphs.zig");
     _ = @import("core/color_glyphs.zig");
