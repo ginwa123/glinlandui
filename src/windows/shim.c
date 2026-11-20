@@ -708,13 +708,13 @@ static void emitPointer(GlinWinWindow *w, int kind, int button, int x, int y,
 /// NSEvent.buttonNumber, so one ABI serves both shims and the host needs no
 /// per-platform knowledge.
 static int buttonFor(UINT msg, WPARAM wp) {
-    if (msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP) {
+    if (msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP || msg == WM_RBUTTONDBLCLK) {
         return GLIN_BTN_RIGHT;
     }
-    if (msg == WM_MBUTTONDOWN || msg == WM_MBUTTONUP) {
+    if (msg == WM_MBUTTONDOWN || msg == WM_MBUTTONUP || msg == WM_MBUTTONDBLCLK) {
         return GLIN_BTN_MIDDLE;
     }
-    if (msg == WM_XBUTTONDOWN || msg == WM_XBUTTONUP) {
+    if (msg == WM_XBUTTONDOWN || msg == WM_XBUTTONUP || msg == WM_XBUTTONDBLCLK) {
         return ((unsigned short)LOWORD(wp) == XBUTTON1) ? GLIN_BTN_RIGHT
                                                        : GLIN_BTN_MIDDLE;
     }
@@ -826,10 +826,20 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
 
+    // The class is registered with CS_DBLCLKS, so Windows REPLACES the second
+    // press of a double click with WM_LBUTTONDBLCLK. Dropping that message left
+    // the toolkit with a press it never saw: the release had nothing to fire, so
+    // a double click did nothing at all and a text field never selected its word.
+    // The double-click decision stays in dispatch.zig (its own clock and slop),
+    // so the message is forwarded as the press it is and the engine counts it.
     case WM_LBUTTONDOWN:
+    case WM_LBUTTONDBLCLK:
     case WM_RBUTTONDOWN:
+    case WM_RBUTTONDBLCLK:
     case WM_MBUTTONDOWN:
-    case WM_XBUTTONDOWN: {
+    case WM_MBUTTONDBLCLK:
+    case WM_XBUTTONDOWN:
+    case WM_XBUTTONDBLCLK: {
         int button = buttonFor(msg, wp);
         // Without the capture, a drag that leaves the window stops delivering
         // motion and a release outside the window is lost entirely — which
