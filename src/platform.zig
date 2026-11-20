@@ -62,6 +62,25 @@ else switch (builtin.os.tag) {
     else => @import("core/clock_portable.zig"),
 };
 
+/// The pointer translation: one contract, and the adapter of the platform this build runs on.
+pub const input = if (builtin.is_test)
+    @import("core/pointer_portable.zig")
+else switch (builtin.os.tag) {
+    .linux => @import("linux/input.zig"),
+    .macos => @import("mac/input.zig"),
+    .windows => @import("windows/input.zig"),
+    .freestanding, .wasi => if (builtin.cpu.arch.isWasm()) @import("web/input.zig") else @import("core/pointer_portable.zig"),
+    else => @import("core/pointer_portable.zig"),
+};
+
+/// Every adapter in one place: the parity suite compares them on every leg, and an app only ever needs `input`.
+pub const input_backends = struct {
+    pub const mac = @import("mac/input.zig");
+    pub const linux = @import("linux/input.zig");
+    pub const windows = @import("windows/input.zig");
+    pub const web = @import("web/input.zig");
+};
+
 /// The devtool service: what lets a CLI attach to a running app over a unix socket and drive it. Linux first; every other host reports it as unavailable.
 pub const devtools_service = if (builtin.is_test)
     @import("core/devtools_service_portable.zig")
