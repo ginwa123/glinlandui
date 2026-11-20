@@ -83,6 +83,18 @@ typedef void (*GlinWinOnClose)(void *user);
 /// the state machine and nothing is ever painted.
 void glin_win_invalidate(GlinWinWindow *win);
 
+/// Start or stop the frame pump: while it is on, a timer invalidates the window
+/// every ~16 ms, so the host paints continuously without waiting for input.
+///
+/// This is the Windows arm of the same contract macOS serves with
+/// `glin_cocoa_set_animating`. Win32 only paints when something invalidates the
+/// window, so an app with its own animation (a request running in the
+/// background, a scroll that moves every frame) sees ONE frame — the click that
+/// started it — and then nothing. Calling this with 1 is how such an app says
+/// "keep the frames coming"; 0 stops them, and a window that is destroyed
+/// cancels the timer with it.
+void glin_win_set_animating(GlinWinWindow *win, int on);
+
 /// Ask for a cursor shape for the client area. `id` is a Win32 `IDC_*`
 /// resource id (32512 arrow, 32513 I-beam, 32644 size-EW, 32645 size-NS,
 /// 32649 hand), which the HOST maps from the toolkit's Cursor in
