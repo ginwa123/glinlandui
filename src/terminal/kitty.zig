@@ -1,0 +1,100 @@
+//! The kitty graphics protocol: the framebuffer as one RGBA image, base64 in 4096-byte chunks, drawn into cells.
+const std = @import("std");
+
+/// The largest base64 payload the protocol allows in one escape.
+pub const chunk_size: usize = 4096;
+
+/// Encode an RGBA surface as a kitty `a=T` escape: transmit and display in one pass, no palette, no alpha loss beyond `f=24`.
+pub fn encoded(alloc: std.mem.Allocator, rgba: []const u8, w: u32, h: u32, cols: u16, rows: u16, image_id: u32) ![]u8 {
+    if (w == 0 or h == 0) return error.EmptyImage;
+    const pixels = @as(usize, w) * h;
+    if (rgba.len < pixels * 4) return error.ShortBuffer;
+    const rgb = try alloc.alloc(u8, pixels * 3);
+    defer alloc.free(rgb);
+    for (0..pixels) |i| {
+        rgb[i * 3] = rgba[i * 4];
+        rgb[i * 3 + 1] = rgba[i * 4 + 1];
+        rgb[i * 3 + 2] = rgba[i * 4 + 2];
+    }
+    const encoded_len = std.base64.standard.Encoder.calcSize(rgb.len);
+    const b64 = try alloc.alloc(u8, encoded_len);
+    defer alloc.free(b64);
+    _ = std.base64.standard.Encoder.encode(b64, rgb);
+
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(alloc);
+    var first = true;
+    var off: usize = 0;
+    while (true) {
+        const n = @min(chunk_size, b64.len - off);
+        const last = off + n >= b64.len;
+        var header: [128]u8 = undefined;
+        const hdr = if (first)
+            try std.fmt.bufPrint(&header, "\x1b_Ga=T,f=24,s={d},v={d},c={d},r={d},i={d},q=2,m={d};", .{ w, h, cols, rows, image_id, @intFromBool(!last) })
+        else
+            try std.fmt.bufPrint(&header, "\x1b_Gm={d};", .{@intFromBool(!last)});
+        try out.appendSlice(alloc, hdr);
+        try out.appendSlice(alloc, b64[off .. off + n]);
+        try out.appendSlice(alloc, "\x1b\\");
+        first = false;
+        off += n;
+        if (last) break;
+    }
+    return out.toOwnedSlice(alloc);
+}
+
+/// The escape that deletes every placement this process made, so a frame never leaves a ghost behind.
+pub fn deleteAll(alloc: std.mem.Allocator) ![]u8 {
+    return std.fmt.allocPrint(alloc, "\x1b_Ga=d,q=2\x1b\\", .{});
+}
+
+// ===================== tests =====================
+
+test "a two-by-two image is one chunk: transmit-and-display, sized, quiet, and final" {
+    const rgba = [_]u8{
+        255, 0,   0,   255,
+        0,   255, 0,   255,
+        0,   0,   255, 255,
+        9,   9,   9,   255,
+    };
+    const out = try encoded(std.testing.allocator, &rgba, 2, 2, 1, 1, 7);
+    defer std.testing.allocator.free(out);
+    try std.testing.expect(std.mem.startsWith(u8, out, "\x1b_Ga=T,f=24,s=2,v=2,c=1,r=1,i=7,q=2,m=0;"));
+    try std.testing.expect(std.mem.endsWith(u8, out, "\x1b\\"));
+    // The payload decodes back to the RGB triples, alpha dropped.
+    const payload_start = std.mem.indexOf(u8, out, ";").? + 1;
+    const payload = out[payload_start .. out.len - 2];
+    var decoded: [12]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 12), try std.base64.standard.Decoder.calcSizeForSlice(payload));
+    try std.base64.standard.Decoder.decode(&decoded, payload);
+    try std.testing.expectEqualSlices(u8, &.{ 255, 0, 0, 0, 255, 0, 0, 0, 255, 9, 9, 9 }, &decoded);
+}
+
+test "a payload larger than one escape is chunked with m=1 until the last" {
+    // 64x64 RGB = 12288 bytes, base64 of that is 16384 bytes: four chunks of 4096.
+    const w: u32 = 64;
+    const h: u32 = 64;
+    const rgba = try std.testing.allocator.alloc(u8, w * h * 4);
+    defer std.testing.allocator.free(rgba);
+    @memset(rgba, 0x40);
+    const out = try encoded(std.testing.allocator, rgba, w, h, 32, 32, 1);
+    defer std.testing.allocator.free(out);
+    var chunks: usize = 0;
+    var it = std.mem.splitSequence(u8, out, "\x1b\\");
+    while (it.next()) |part| {
+        if (part.len == 0) continue;
+        chunks += 1;
+        if (chunks < 4) {
+            try std.testing.expect(std.mem.indexOf(u8, part, "m=1") != null);
+        } else {
+            try std.testing.expect(std.mem.indexOf(u8, part, "m=0") != null);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 4), chunks);
+}
+
+test "a short buffer or an empty image is refused" {
+    const rgba = [_]u8{0} ** 4;
+    try std.testing.expectError(error.ShortBuffer, encoded(std.testing.allocator, &rgba, 4, 4, 1, 1, 1));
+    try std.testing.expectError(error.EmptyImage, encoded(std.testing.allocator, &rgba, 0, 5, 1, 1, 1));
+}
