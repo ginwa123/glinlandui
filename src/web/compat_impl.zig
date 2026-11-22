@@ -89,6 +89,20 @@ export fn abs(x: c_int) c_int {
     return if (x < 0) -%x else x;
 }
 
+// ---- math ----
+
+// compiler_rt's musl-derived libm for freestanding targets has no `pow` or `ldexp`, and stb_image's HDR/linear path calls both.
+
+// `pow`, exported so the wasm link has the symbol `src/web/compat/math.h` promised.
+export fn pow(x: f64, y: f64) f64 {
+    return std.math.pow(f64, x, y);
+}
+
+// `ldexp(x, e)` is `x * 2^e`; C types the exponent `int`.
+export fn ldexp(x: f64, e: c_int) f64 {
+    return std.math.ldexp(x, @intCast(e));
+}
+
 /// C's `strtol`.
 export fn strtol(s: [*:0]const u8, endptr: ?*?[*:0]u8, base: c_int) c_long {
     var i: usize = 0;

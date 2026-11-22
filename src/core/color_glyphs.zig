@@ -1,7 +1,15 @@
 //! Colour glyphs: a codepoint the text face cannot draw as an outline, drawn as the colour image its font carries.
 const std = @import("std");
+const builtin = @import("builtin");
 const glyphs = @import("glyphs.zig");
+// `build.zig`'s `stbFlags` compiles stb's C TUs for wasm with `-DSTBI_NO_STDIO=1 -DSTBIR_NO_SIMD=1`, because `wasm32-freestanding` has no `<stdio.h>`.
+
+// `@cImport` runs its own translate-c and inherits none of a C TU's flags, so the same two macros are declared here too, or the browser build cannot translate the header at all.
 const stbi = @cImport({
+    if (builtin.cpu.arch.isWasm()) {
+        @cDefine("STBI_NO_STDIO", "1");
+        @cDefine("STBIR_NO_SIMD", "1");
+    }
     @cInclude("stb/stb_image.h");
 });
 
