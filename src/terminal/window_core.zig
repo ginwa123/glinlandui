@@ -2,9 +2,11 @@
 const std = @import("std");
 const contract = @import("../core/window_contract.zig");
 const text_face = @import("../core/text_face.zig");
+const soft = @import("../core/render_software.zig");
 const term = @import("term.zig");
 const input = @import("input.zig");
 const renderer = @import("renderer.zig");
+const kitty = @import("kitty.zig");
 
 /// What a headless run reports: the size it laid out at, and how many cells carried a glyph.
 pub const Headless = struct {
@@ -17,6 +19,14 @@ pub const Headless = struct {
 const enter_screen = "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[2J\x1b[H";
 // The exact inverse, and it runs on every exit path: a terminal left in raw mode is a broken terminal.
 const leave_screen = "\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?25h\x1b[?1049l\x1b[0m";
+
+/// The base64 payload of a single-chunk kitty escape, which is what the probe sends.
+fn payloadOf(escape: []const u8) []const u8 {
+    const semi = std.mem.indexOfScalar(u8, escape, ';') orelse return "";
+    const end = if (std.mem.lastIndexOf(u8, escape, "\x1b\\")) |i| i else escape.len;
+    if (end <= semi + 1) return "";
+    return escape[semi + 1 .. end];
+}
 
 const key_ctrl: u32 = 29;
 const key_c: u32 = 46;
@@ -114,6 +124,31 @@ pub fn Window(comptime console: type) type {
             self.state.needs_draw = true;
         }
 
+        /// Ask the terminal whether it inflates zlib payloads (`o=z`), which is what makes a full frame tens of KB.
+        fn probeCompression(con: *console.Console, alloc: std.mem.Allocator) bool {
+            const env = term.libcEnv();
+            if (env.get(env.ctx, "GLIN_TUI_COMPRESS")) |v| {
+                if (std.mem.eql(u8, v, "0") or std.mem.eql(u8, v, "off")) return false;
+                if (std.mem.eql(u8, v, "1") or std.mem.eql(u8, v, "on")) return true;
+            }
+            // A 1x1 query (`a=q`, `q=1`): a terminal that can inflate answers `ESC _ G i=99 ; OK ESC \`.
+            const rgba = [_]u8{ 0, 0, 0, 255 };
+            const image = kitty.encodedRegion(alloc, &rgba, 1, 1, .{ .x = 0, .y = 0, .w = 1, .h = 1 }, 1, 1, 99, .zlib) catch return false;
+            defer alloc.free(image);
+            var query: [512]u8 = undefined;
+            const q = std.fmt.bufPrint(&query, "\x1b_Ga=q,f=24,s=1,v=1,i=99,q=1,o=z;{s}\x1b\\", .{payloadOf(image)}) catch return false;
+            con.write(q);
+            const deadline = con.nowUs() + 150_000;
+            var buf: [256]u8 = undefined;
+            while (con.nowUs() < deadline) {
+                const n = con.read(&buf, 20) catch 0;
+                if (n == 0) continue;
+                if (std.mem.indexOf(u8, buf[0..n], "OK") != null) return true;
+                if (std.mem.indexOf(u8, buf[0..n], "\x1b_G") != null and std.mem.indexOf(u8, buf[0..n], "OK") == null) return false;
+            }
+            return false;
+        }
+
         /// Open the terminal and drive frames until the app quits. A process with no tty gets `error.NotATerminal`.
         pub fn run(self: *Self) !void {
             var con = try console.Console.open();
@@ -128,18 +163,27 @@ pub fn Window(comptime console: type) type {
             self.size = con.size() orelse term.sanitise(.{ .cols = 80, .rows = 24 });
             self.state.win_w = term.layoutWidth(self.size.cols);
             self.state.win_h = term.layoutHeight(self.size.rows);
-            renderer.attach(.{
+            const compress = if (plan.mode == .kitty) probeCompression(&con, self.alloc) else false;
+            const attached = renderer.Attach{
                 .sink = .{ .ctx = &con, .write = console_write },
                 .cols = self.size.cols,
                 .rows = self.size.rows,
                 .mode = plan.mode,
                 .depth = plan.depth,
-            });
+                .px_w = self.size.px_w,
+                .px_h = self.size.px_h,
+                .compress = compress,
+            };
+            // Before the first layout, never after: the measure and the raster must agree on the device scale.
+            soft.setRenderScale(renderer.scaleFor(attached));
+            renderer.attach(attached);
             defer renderer.deinitFrameText(self.alloc);
             con.write(enter_screen);
             defer con.write(leave_screen);
             const sink = self.inputSink();
             const max_frames = contract.parseTestFrames(env.get(env.ctx, "QS_SETTINGS_TEST_FRAMES"));
+            // `GLIN_TUI_STATS=1` prints one line per frame: how long it took and how many bytes it put on the wire.
+            const stats = env.get(env.ctx, "GLIN_TUI_STATS") != null;
             var frames: u32 = 0;
             var idle: u32 = 0;
             var buf: [1024]u8 = undefined;
@@ -152,8 +196,20 @@ pub fn Window(comptime console: type) type {
                 }
                 if (self.state.needs_draw) {
                     self.state.needs_draw = false;
+                    const started = if (stats) con.nowUs() else 0;
                     if (self.delegate) |d| d.on_frame(d.ptr, self.state.win_w, self.state.win_h);
                     frames += 1;
+                    if (stats) {
+                        const us = con.nowUs() - started;
+                        std.debug.print("tui frame {d}: {d:.2} ms, {d} bytes, {d}x{d} cells, tier {s}\n", .{
+                            frames,
+                            @as(f64, @floatFromInt(us)) / 1000.0,
+                            renderer.lastBytes(),
+                            self.state.win_w / term.cell_w,
+                            self.state.win_h / term.cell_h,
+                            @tagName(renderer.tierNow()),
+                        });
+                    }
                     continue;
                 }
                 const n = con.read(&buf, if (max_frames != null) 0 else 33) catch 0;
@@ -197,6 +253,7 @@ pub fn Window(comptime console: type) type {
                 .rows = rows,
                 .mode = .cells,
                 .depth = .truecolor,
+                .capture_text = true,
             });
             const d = self.delegate orelse return .{ .width = w, .height = h, .painted_pixels = 0 };
             d.on_frame(d.ptr, w, h);

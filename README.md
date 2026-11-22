@@ -708,8 +708,12 @@ half-painted screen.
 
 The layout is measured in whole cells (`text_face.setCellMetrics`), so every
 existing component lands cell-for-cell: a button's label is its own width in
-cells, a caret sits on a cell boundary. `Ctrl`+`C` quits. `docs/terminal-backend.md`
-is the design record.
+cells, a caret sits on a cell boundary. Frames are incremental — only the cells
+that changed are re-rasterised and re-sent — and the raster follows the display's
+device ratio, so text is not upscaled and blurred; large frames are zlib-compressed
+when the terminal says it can inflate them (`GLIN_TUI_COMPRESS=1` forces it, `=0` refuses).
+`Ctrl`+`C` quits.
+`docs/terminal-backend.md` is the design record.
 
 ## Testing
 

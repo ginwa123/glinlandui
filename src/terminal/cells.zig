@@ -331,6 +331,30 @@ pub const Grid = struct {
         @memcpy(self.clip_stack[0..src.clip_depth], src.clip_stack[0..src.clip_depth]);
     }
 
+    /// The cells that differ from `prev`, or null when none did. A size change is a whole-frame repaint.
+    pub fn dirtyRect(self: *const Grid, prev: *const Grid) ?Rect {
+        if (prev.cols != self.cols or prev.rows != self.rows) return .{ .x0 = 0, .y0 = 0, .x1 = self.cols, .y1 = self.rows };
+        var x0: i32 = self.cols;
+        var y0: i32 = self.rows;
+        var x1: i32 = 0;
+        var y1: i32 = 0;
+        var row: i32 = 0;
+        while (row < self.rows) : (row += 1) {
+            const base = @as(usize, @intCast(row)) * self.cols;
+            var col: i32 = 0;
+            while (col < self.cols) : (col += 1) {
+                const now = self.cells[base + @as(usize, @intCast(col))];
+                if (now.eql(prev.cells[base + @as(usize, @intCast(col))])) continue;
+                if (col < x0) x0 = col;
+                if (col + 1 > x1) x1 = col + 1;
+                if (row < y0) y0 = row;
+                if (row + 1 > y1) y1 = row + 1;
+            }
+        }
+        if (x1 <= x0) return null;
+        return .{ .x0 = x0, .y0 = y0, .x1 = x1, .y1 = y1 };
+    }
+
     /// How many cells differ: a frame that changed nothing costs nothing to emit.
     pub fn changedCells(self: *const Grid, prev: *const Grid) usize {
         if (prev.cols != self.cols or prev.rows != self.rows) return self.cells.len;
@@ -539,4 +563,26 @@ test "a broken UTF-8 byte becomes a question mark instead of failing the frame" 
     try std.testing.expectEqual(@as(u21, 'A'), nextCodepoint(&bytes, &i));
     try std.testing.expectEqual(@as(u21, '?'), nextCodepoint(&bytes, &i));
     try std.testing.expectEqual(@as(u21, 'B'), nextCodepoint(&bytes, &i));
+}
+
+test "the dirty rect covers exactly the cells that changed" {
+    var a = try Grid.init(std.testing.allocator, 10, 4);
+    defer a.deinit();
+    var b = try Grid.init(std.testing.allocator, 10, 4);
+    defer b.deinit();
+    var cmds = [_]cl.RenderCommand{rectCmd(0, 0, 80, 64, .{ 5, 5, 5, 255 })};
+    a.render(&cmds, 80, 64);
+    b.render(&cmds, 80, 64);
+    try std.testing.expectEqual(@as(?Rect, null), a.dirtyRect(&b));
+    b.at(2, 1).?.bg = .{ .r = 9, .g = 9, .b = 9 };
+    const one = a.dirtyRect(&b).?;
+    try std.testing.expectEqual(@as(i32, 2), one.x0);
+    try std.testing.expectEqual(@as(i32, 3), one.x1);
+    try std.testing.expectEqual(@as(i32, 1), one.y0);
+    try std.testing.expectEqual(@as(i32, 2), one.y1);
+    b.at(7, 3).?.bg = .{ .r = 9, .g = 9, .b = 9 };
+    const wide = a.dirtyRect(&b).?;
+    try std.testing.expectEqual(@as(i32, 2), wide.x0);
+    try std.testing.expectEqual(@as(i32, 8), wide.x1);
+    try std.testing.expectEqual(@as(i32, 4), wide.y1);
 }

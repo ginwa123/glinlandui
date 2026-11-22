@@ -64,6 +64,16 @@ pub fn sanitise(src: Size) Size {
     return out;
 }
 
+/// Whether the host is almost certainly a HiDPI display: every macOS terminal is, and none of them reports its pixel box.
+pub fn retinaLikely(env: Getter) bool {
+    const programs = [_][]const u8{ "iTerm.app", "Apple_Terminal", "WezTerm", "wezterm", "ghostty" };
+    for (programs) |p| {
+        if (eql(env, "TERM_PROGRAM", p)) return true;
+    }
+    if (contains(env, "TERM", "apple")) return true;
+    return false;
+}
+
 /// The cell column a point falls in.
 pub fn colOf(x: f32) i32 {
     const c = @floor(x / @as(f32, @floatFromInt(cell_w)));
@@ -224,6 +234,17 @@ test "depth follows COLORTERM, then TERM, and the fallback is the 16-colour pale
     try std.testing.expectEqual(Depth.truecolor, detectDepth(Fake.env(&direct)));
     const plain = Fake.Map{ .entries = &.{.{ .name = "TERM", .value = "vt100" }} };
     try std.testing.expectEqual(Depth.ansi16, detectDepth(Fake.env(&plain)));
+}
+
+test "the HiDPI hint is true for the macOS terminals and false for the rest" {
+    const iterm = Fake.Map{ .entries = &.{.{ .name = "TERM_PROGRAM", .value = "iTerm.app" }} };
+    try std.testing.expect(retinaLikely(Fake.env(&iterm)));
+    const apple = Fake.Map{ .entries = &.{.{ .name = "TERM_PROGRAM", .value = "Apple_Terminal" }} };
+    try std.testing.expect(retinaLikely(Fake.env(&apple)));
+    const kitty = Fake.Map{ .entries = &.{.{ .name = "TERM", .value = "xterm-kitty" }} };
+    try std.testing.expect(!retinaLikely(Fake.env(&kitty)));
+    const vte = Fake.Map{ .entries = &.{.{ .name = "TERM", .value = "xterm-256color" }} };
+    try std.testing.expect(!retinaLikely(Fake.env(&vte)));
 }
 
 test "winsize parsing rejects an empty size and keeps the pixel box when present" {
