@@ -199,3 +199,87 @@ test "clearing the cell metrics gives the real pen back" {
     try std.testing.expectApproxEqAbs(@as(f32, 16.8), text_face.lineHeight(14), 0.001);
     try std.testing.expect(text_face.measureText("Hello", 14).w != 40);
 }
+
+// A tiny kitty terminal: it remembers which placement each image id put where, which is exactly what a patch may not lose.
+const KittyScreen = struct {
+    placements: std.AutoHashMapUnmanaged(u32, [4]u16) = .empty,
+
+    fn apply(self: *KittyScreen, alloc: std.mem.Allocator, stream: []const u8) !void {
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, stream, pos, "\x1b_G")) |start| {
+            const end = std.mem.indexOfPos(u8, stream, start, "\x1b\\") orelse return;
+            const esc = stream[start + 3 .. end];
+            const semi = std.mem.indexOfScalar(u8, esc, ';') orelse esc.len;
+            const header = esc[0..semi];
+            pos = end + 2;
+            if (std.mem.indexOf(u8, header, "a=d") != null) {
+                if (std.mem.indexOf(u8, header, "d=i") != null) {
+                    // Deleting one id: the only thing that may remove a frame is its own delete.
+                    if (field(header, "i=")) |id| _ = self.placements.remove(@intCast(id));
+                } else {
+                    self.placements.clearRetainingCapacity();
+                }
+                continue;
+            }
+            if (std.mem.indexOf(u8, header, "a=T") == null) continue;
+            const id: u32 = @intCast(field(header, "i=") orelse continue);
+            const cols: u16 = @intCast(field(header, "c=") orelse 0);
+            const rows: u16 = @intCast(field(header, "r=") orelse 0);
+            const x: u16 = @intCast(field(header, "x=") orelse 0);
+            const y: u16 = @intCast(field(header, "y=") orelse 0);
+            try self.placements.put(alloc, id, .{ x, y, cols, rows });
+        }
+    }
+
+    fn field(header: []const u8, key: []const u8) ?u32 {
+        var it = std.mem.splitScalar(u8, header, ',');
+        while (it.next()) |part| {
+            if (!std.mem.startsWith(u8, part, key)) continue;
+            return std.fmt.parseInt(u32, part[key.len..], 10) catch null;
+        }
+        return null;
+    }
+
+    fn deinit(self: *KittyScreen, alloc: std.mem.Allocator) void {
+        self.placements.deinit(alloc);
+    }
+};
+
+test "a patch never deletes the frame it is patching" {
+    text_face.setCellMetrics(null);
+    var s = Sink{};
+    defer s.deinit();
+    renderer_mod.attach(.{ .sink = s.sink(), .cols = 8, .rows = 4, .mode = .kitty, .depth = .truecolor });
+    var r = try renderer_mod.Renderer.init(std.testing.allocator);
+    defer r.deinit();
+    var cmds = [_]cl.RenderCommand{rectCmd(0, 0, 64, 64, .{ 10, 10, 10, 255 })};
+    r.drawCommands(&cmds, 64, 64);
+    // Two frames later something small changes: the full-screen placement must still be on the terminal.
+    var changed = [_]cl.RenderCommand{
+        rectCmd(0, 0, 64, 64, .{ 10, 10, 10, 255 }),
+        rectCmd(8, 16, 8, 16, .{ 250, 250, 250, 255 }),
+    };
+    r.drawCommands(&changed, 64, 64);
+    var screen = KittyScreen{};
+    defer screen.deinit(std.testing.allocator);
+    try screen.apply(std.testing.allocator, s.buf.items);
+    // The whole frame (8x4 cells) plus one patch (1x1) are alive, so the patch did not take the screen with it.
+    try std.testing.expectEqual(@as(usize, 2), screen.placements.count());
+    var full: usize = 0;
+    var it = screen.placements.valueIterator();
+    while (it.next()) |p| {
+        if (p[2] >= 8 and p[3] >= 4) full += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), full);
+}
+
+fn rectCmd(x: f32, y: f32, w: f32, h: f32, color: [4]f32) cl.RenderCommand {
+    return .{
+        .bounding_box = .{ .x = x, .y = y, .width = w, .height = h },
+        .render_data = .{ .rectangle = .{ .background_color = color, .corner_radius = .{} } },
+        .user_data = null,
+        .id = 0,
+        .z_index = 0,
+        .command_type = .rectangle,
+    };
+}

@@ -55,6 +55,60 @@ after the fact. The metrics are installed by the window (cells tier) and cleared
 by it on exit (and they are never installed at all in a pixel tier, which must
 keep real glyph metrics or the raster would quantise twice).
 
+## Incremental frames: a patch, not a frame
+
+A terminal is not a GPU. On a 2x display a full-screen image is 1440x960 pixels — 5.5 MB of
+base64 for kitty, 22 KB of sixel — and re-sending that on every keystroke is what makes a
+terminal UI feel slow. So the renderer never redraws what did not change:
+
+1. every frame is painted into the cell grid first (it is the fallback tier *and* the diff);
+2. `Grid.dirtyRect` returns the rectangle of cells that differ from the previous frame;
+3. that rectangle — and only it — is rasterised (`Surface.renderCommandsClipped`) and encoded;
+4. for cells the escape diff already does the same job, one cell at a time.
+
+The cursor is moved to the patch's own top-left cell and the image is painted there, so a
+caret blink repaints one cell and a typed character repaints one cell. A frame whose
+commands are identical to the last one is skipped entirely (a digest of the command list).
+
+One protocol detail matters for kitty: a placement is identified by its image id, and
+re-sending an id *replaces the image data of every placement that used it*. Each patch
+therefore gets a fresh id, and the previous patch is deleted first (`a=d,d=i,i=<id>`); a
+full frame deletes every placement (`a=d`) so nothing from an older size can linger.
+
+Measured on an M-series Mac, Debug build (the default for `zig build -Dtui`), a 200x120
+scene with one element moving one pixel per frame:
+
+| tier | before | after | per frame, after |
+|---|---|---|---|
+| cells | 3.6 ms | 0.10 ms | full grid diff, no allocation |
+| sixel | 18.6 ms | 0.63 ms | a patch of a few hundred bytes |
+| kitty | 18.2 ms | 2.9 ms | a patch, not the 1.4 MB frame |
+
+The first frame of a session, a resize, and a scroll of the whole viewport are still full
+frames — there is nothing smaller to send.
+
+## Sharpness: the device ratio
+
+A terminal image is drawn into a box measured in *device* pixels. Rasterising at 1x on a
+Retina display means the terminal has to upscale it 2x, which is exactly the soft, blurry
+text a pixel terminal gets you.
+
+So the layout is measured at the same ratio the raster is drawn at, and the ratio is the
+device pixel ratio:
+
+- the pixel box the kernel reports (`TIOCGWINSZ`'s `ws_xpixel`/`ws_ypixel`) when it is non-zero — exact;
+- else `GLIN_TUI_SCALE=1..4` if you set it;
+- else 2 on a host whose terminal is a Retina one (iTerm2, Terminal.app, WezTerm, Ghostty),
+  and 1 elsewhere.
+
+The window sets it *before the first layout* (`soft.setRenderScale`), so the measured widths
+and the painted glyphs agree; the renderer hands the previous scale back on `deinit`.
+
+Kitty is safe to supersample because it places the image into `c`/`r` cells, so any size maps
+onto the same box. Sixel paints one device pixel per pixel from the cursor, so an unconfirmed
+ratio would make the image larger rather than sharper — hence sixel only leaves 1x when the
+kernel reports the pixel box (or `GLIN_TUI_SCALE` says so).
+
 ## What the cell tier draws
 
 | command | cell form |
@@ -129,7 +183,7 @@ grid's tests, a golden scene replayed in both tiers, and **a real component tree
 ## Verifying it
 
 ```sh
-zig build test-tui --summary all          # 650 tests, no tty needed
+zig build test-tui --summary all          # 656 tests, no tty needed
 zig build -Dtui -Doptimize=ReleaseSafe     # the engine, the demo and every example
 
 GLIN_TUI_RENDERER=cells QS_SETTINGS_TEST_FRAMES=1 ./zig-out/bin/glinlandui

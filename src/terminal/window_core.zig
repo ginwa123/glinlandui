@@ -2,6 +2,7 @@
 const std = @import("std");
 const contract = @import("../core/window_contract.zig");
 const text_face = @import("../core/text_face.zig");
+const soft = @import("../core/render_software.zig");
 const term = @import("term.zig");
 const input = @import("input.zig");
 const renderer = @import("renderer.zig");
@@ -128,13 +129,18 @@ pub fn Window(comptime console: type) type {
             self.size = con.size() orelse term.sanitise(.{ .cols = 80, .rows = 24 });
             self.state.win_w = term.layoutWidth(self.size.cols);
             self.state.win_h = term.layoutHeight(self.size.rows);
-            renderer.attach(.{
+            const attached = renderer.Attach{
                 .sink = .{ .ctx = &con, .write = console_write },
                 .cols = self.size.cols,
                 .rows = self.size.rows,
                 .mode = plan.mode,
                 .depth = plan.depth,
-            });
+                .px_w = self.size.px_w,
+                .px_h = self.size.px_h,
+            };
+            // Before the first layout, never after: the measure and the raster must agree on the device scale.
+            soft.setRenderScale(renderer.scaleFor(attached));
+            renderer.attach(attached);
             defer renderer.deinitFrameText(self.alloc);
             con.write(enter_screen);
             defer con.write(leave_screen);
@@ -197,6 +203,7 @@ pub fn Window(comptime console: type) type {
                 .rows = rows,
                 .mode = .cells,
                 .depth = .truecolor,
+                .capture_text = true,
             });
             const d = self.delegate orelse return .{ .width = w, .height = h, .painted_pixels = 0 };
             d.on_frame(d.ptr, w, h);

@@ -366,7 +366,7 @@ zig build test --summary all              # expect: 443/458 (15 skipped)  ← se
 zig build native-test --summary all       # expect: 99/99
 
 # The terminal backend (`-Dtui`). Also NOT part of the parity count: its root is src/terminal_test.zig.
-zig build test-tui --summary all          # expect: 650/652 (2 skipped)
+zig build test-tui --summary all          # expect: 656/658 (2 skipped)
 zig build -Dtui -Doptimize=ReleaseSafe     # the engine, the demo and every example, for a terminal
 
 # Real build + a headless smoke test that proves pixels were painted.

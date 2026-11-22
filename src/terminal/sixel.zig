@@ -4,6 +4,14 @@ const std = @import("std");
 /// A 6x6x6 colour cube plus a 24-step grey ramp: 240 entries, under the 256 a sixel palette allows.
 pub const palette_len: u16 = 240;
 
+/// A rectangle of an image, in pixels: what an incremental repaint paints.
+pub const Region = struct {
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+};
+
 /// The palette index a colour lands on: greys on the ramp (banding is invisible there) and everything else on the cube.
 pub fn paletteIndex(r: u8, g: u8, b: u8) u8 {
     const mx = @max(r, @max(g, b));
@@ -29,7 +37,7 @@ pub fn paletteColor(i: u8) [3]u8 {
         return .{ @intCast(ri * 51), @intCast(gi * 51), @intCast(bi * 51) };
     }
     const step: u32 = 8 + (@as(u32, i) - 216) * 247 / 23;
-    const v: u8 = @intCast(@min(step, 255));
+    const v: u8 = @intCast(if (step > 255) 255 else step);
     return .{ v, v, v };
 }
 
@@ -37,13 +45,8 @@ fn percent(v: u8) u32 {
     return (@as(u32, v) * 100 + 127) / 255;
 }
 
-fn writeDefinition(out: *std.ArrayList(u8), alloc: std.mem.Allocator, i: u8, current: *i16) !void {
-    current.* = i;
-    const c = paletteColor(i);
-    var buf: [32]u8 = undefined;
-    const s = try std.fmt.bufPrint(&buf, "#{d};2;{d};{d};{d}", .{ i, percent(c[0]), percent(c[1]), percent(c[2]) });
-    try out.appendSlice(alloc, s);
-}
+/// A transparent pixel is not part of the image at all: P2=1 leaves the terminal's own background showing.
+const transparent: u8 = 0xFF;
 
 fn writeRun(out: *std.ArrayList(u8), alloc: std.mem.Allocator, ch: u8, count: u32) !void {
     if (count == 0) return;
@@ -58,64 +61,93 @@ fn writeRun(out: *std.ArrayList(u8), alloc: std.mem.Allocator, ch: u8, count: u3
     try out.append(alloc, ch);
 }
 
-/// Encode an RGBA surface as a sixel image: one `ESC P` string, palette first, then six-row bands of RLE data.
+/// Encode the whole RGBA surface as one sixel image.
 pub fn encoded(alloc: std.mem.Allocator, rgba: []const u8, w: u32, h: u32) ![]u8 {
-    if (w == 0 or h == 0) return error.EmptyImage;
+    return encodedRegion(alloc, rgba, w, h, .{ .x = 0, .y = 0, .w = w, .h = h });
+}
+
+/// Encode one rectangle of an RGBA surface: an incremental repaint sends only the cells that changed.
+pub fn encodedRegion(alloc: std.mem.Allocator, rgba: []const u8, w: u32, h: u32, region: Region) ![]u8 {
+    if (w == 0 or h == 0 or region.w == 0 or region.h == 0) return error.EmptyImage;
     if (rgba.len < @as(usize, w) * h * 4) return error.ShortBuffer;
+    if (region.x + region.w > w or region.y + region.h > h) return error.ShortBuffer;
+    const rw: usize = region.w;
+    const rh: usize = region.h;
+    const stride: usize = w;
+    // One palette lookup per pixel for the whole frame: the band loops then compare bytes instead of doing colour maths.
+    const idx = try alloc.alloc(u8, rw * rh);
+    defer alloc.free(idx);
+    var used = [_]bool{false} ** palette_len;
+    var y: usize = 0;
+    while (y < rh) : (y += 1) {
+        const row = (region.y + @as(u32, @intCast(y))) * stride + region.x;
+        var x: usize = 0;
+        while (x < rw) : (x += 1) {
+            const px = rgba[(row + @as(u32, @intCast(x))) * 4 ..][0..4];
+            if (px[3] < 128) {
+                idx[y * rw + x] = transparent;
+                continue;
+            }
+            const p = paletteIndex(px[0], px[1], px[2]);
+            idx[y * rw + x] = p;
+            used[p] = true;
+        }
+    }
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(alloc);
     // P1=0 (square pixels), P2=1 (the unpainted pixels stay transparent), P3=0 (no raster aspect baked in).
     try out.appendSlice(alloc, "\x1bP0;1;0q");
-    var used = [_]bool{false} ** palette_len;
-    var i: usize = 0;
-    while (i < @as(usize, w) * h) : (i += 1) {
-        const px = rgba[i * 4 .. i * 4 + 4];
-        if (px[3] < 128) continue;
-        used[paletteIndex(px[0], px[1], px[2])] = true;
-    }
     var current: i16 = -1;
-    var idx: u16 = 0;
-    while (idx < palette_len) : (idx += 1) {
-        if (used[idx]) try writeDefinition(&out, alloc, @intCast(idx), &current);
+    var i: u16 = 0;
+    while (i < palette_len) : (i += 1) {
+        if (!used[i]) continue;
+        const c = paletteColor(@intCast(i));
+        var buf: [32]u8 = undefined;
+        try out.appendSlice(alloc, try std.fmt.bufPrint(&buf, "#{d};2;{d};{d};{d}", .{ i, percent(c[0]), percent(c[1]), percent(c[2]) }));
+        current = @intCast(i);
     }
-    var band: u32 = 0;
-    while (band * 6 < h) : (band += 1) {
-        var present = [_]bool{false} ** palette_len;
-        var y: u32 = band * 6;
-        while (y < @min(h, band * 6 + 6)) : (y += 1) {
-            var x: u32 = 0;
-            while (x < w) : (x += 1) {
-                const px = rgba[(@as(usize, y) * w + x) * 4 ..][0..4];
-                if (px[3] < 128) continue;
-                present[paletteIndex(px[0], px[1], px[2])] = true;
+    // One byte per column per colour, built by walking the band's six rows once: emitting then only scans bytes.
+    const masks = try alloc.alloc(u8, @as(usize, palette_len) * rw);
+    defer alloc.free(masks);
+    var present = [_]bool{false} ** palette_len;
+    var band: usize = 0;
+    while (band * 6 < rh) : (band += 1) {
+        var count: usize = 0;
+        var list: [palette_len]u8 = undefined;
+        var bit: usize = 0;
+        while (bit < 6) : (bit += 1) {
+            const yy = band * 6 + bit;
+            if (yy >= rh) break;
+            var x: usize = 0;
+            while (x < rw) : (x += 1) {
+                const p = idx[yy * rw + x];
+                if (p == transparent) continue;
+                if (!present[p]) {
+                    present[p] = true;
+                    list[count] = p;
+                    count += 1;
+                    @memset(masks[@as(usize, p) * rw ..][0..rw], 0);
+                }
+                masks[@as(usize, p) * rw + x] |= @as(u8, 1) << @intCast(bit);
             }
         }
         var any = false;
-        idx = 0;
-        while (idx < palette_len) : (idx += 1) {
-            if (!present[idx]) continue;
+        var k: usize = 0;
+        while (k < count) : (k += 1) {
+            const p = list[k];
+            present[p] = false;
             if (any) try out.append(alloc, '$');
             any = true;
-            if (current != @as(i16, @intCast(idx))) {
+            if (current != @as(i16, p)) {
                 var buf: [16]u8 = undefined;
-                try out.appendSlice(alloc, try std.fmt.bufPrint(&buf, "#{d}", .{idx}));
-                current = @intCast(idx);
+                try out.appendSlice(alloc, try std.fmt.bufPrint(&buf, "#{d}", .{p}));
+                current = p;
             }
+            const row = masks[@as(usize, p) * rw ..][0..rw];
             var run_ch: u8 = 0;
             var run_len: u32 = 0;
-            var x: u32 = 0;
-            while (x < w) : (x += 1) {
-                var mask: u8 = 0;
-                var bit: u3 = 0;
-                while (bit < 6) : (bit += 1) {
-                    const yy = band * 6 + bit;
-                    if (yy >= h) break;
-                    const px = rgba[(@as(usize, yy) * w + x) * 4 ..][0..4];
-                    if (px[3] < 128) continue;
-                    if (paletteIndex(px[0], px[1], px[2]) != idx) continue;
-                    mask |= @as(u8, 1) << bit;
-                }
-                const ch: u8 = 0x3F + mask;
+            for (row) |m| {
+                const ch: u8 = 0x3F + m;
                 if (ch == run_ch) {
                     run_len += 1;
                 } else {
@@ -145,9 +177,7 @@ test "a single red pixel is one palette entry, one glyph and one band advance" {
 test "ten identical pixels collapse into one run length" {
     var rgba = [_]u8{0} ** (10 * 4);
     for (0..10) |i| {
-        rgba[i * 4] = 0;
         rgba[i * 4 + 1] = 255;
-        rgba[i * 4 + 2] = 0;
         rgba[i * 4 + 3] = 255;
     }
     const out = try encoded(std.testing.allocator, &rgba, 10, 1);
@@ -184,6 +214,23 @@ test "a six-row image fills one band, a seven-row one starts a second" {
     try std.testing.expectEqual(@as(usize, 2), count);
 }
 
+test "a region encodes only its own pixels, at its own size" {
+    // A 4x2 image, half red and half blue; ask for the right half only.
+    var rgba = [_]u8{0} ** (4 * 2 * 4);
+    for (0..4 * 2) |i| {
+        const blue = i % 4 >= 2;
+        rgba[i * 4 + 2] = if (blue) 255 else 0;
+        rgba[i * 4] = if (blue) 0 else 255;
+        rgba[i * 4 + 3] = 255;
+    }
+    const out = try encodedRegion(std.testing.allocator, &rgba, 4, 2, .{ .x = 2, .y = 0, .w = 2, .h = 2 });
+    defer std.testing.allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "#5;2;0;0;100") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "#180;2;100;0;0") == null);
+    // Two columns, two rows set in the same band: one run of two copies of the two-bit character.
+    try std.testing.expect(std.mem.indexOf(u8, out, "BB") != null);
+}
+
 test "the palette round-trips a colour to within one cube step" {
     const c = [3]u8{ 140, 60, 200 };
     const p = paletteColor(paletteIndex(c[0], c[1], c[2]));
@@ -196,4 +243,5 @@ test "a short buffer is refused rather than reading past the pixels" {
     const rgba = [_]u8{ 1, 2, 3, 255 };
     try std.testing.expectError(error.ShortBuffer, encoded(std.testing.allocator, &rgba, 4, 4));
     try std.testing.expectError(error.EmptyImage, encoded(std.testing.allocator, &rgba, 0, 0));
+    try std.testing.expectError(error.ShortBuffer, encodedRegion(std.testing.allocator, &rgba, 1, 1, .{ .x = 0, .y = 0, .w = 2, .h = 1 }));
 }
