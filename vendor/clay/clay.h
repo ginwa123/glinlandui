@@ -2905,7 +2905,8 @@ void Clay__CalculateFinalLayout(void) {
                     }
                 }
 
-                if (emitRectangle) {
+                // FIX (glinlandui): a background is emitted here, OUTSIDE the per-config loop above, so it never consulted that loop's cull test — every off-screen box in a scroll pane still cost a command, and the frame digest paid for each one.
+                if (emitRectangle && !Clay__ElementIsOffscreen(&currentElementBoundingBox)) {
                     Clay__AddRenderCommand(CLAY__INIT(Clay_RenderCommand) {
                         .boundingBox = currentElementBoundingBox,
                         .renderData = { .rectangle = {
