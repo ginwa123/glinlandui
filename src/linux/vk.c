@@ -1380,6 +1380,14 @@ static int ensure_offscreen(GlinVk *v, int w, int h) {
     return ensure_pipes(v, v->off_pass);
 }
 
+static int readback_ready(GlinVk *v, VkDeviceSize need) {
+    if (v->read_buffer == VK_NULL_HANDLE || v->read_map == NULL || v->read_cap < need)
+        return fail("offscreen readback not allocated (buffer=%p map=%p cap=%llu need=%llu)",
+                    (void *)v->read_buffer, v->read_map,
+                    (unsigned long long)v->read_cap, (unsigned long long)need);
+    return 0;
+}
+
 int glin_vk_offscreen(GlinVk *v, const GlinVkVertex *verts, int nverts,
                       const GlinSegment *segs, int nsegs, int w, int h,
                       float r, float g, float b, float a,
@@ -1394,6 +1402,8 @@ int glin_vk_offscreen(GlinVk *v, const GlinVkVertex *verts, int nverts,
 
     if (!v || !out || w <= 0 || h <= 0) return fail("bad offscreen request");
     if (ensure_offscreen(v, w, h) != 0) return -1;
+    if (readback_ready(v, (VkDeviceSize)w * (VkDeviceSize)h * 4) != 0) return -1;
+    if (v->off_fb == VK_NULL_HANDLE) return fail("offscreen target missing");
 
     f = &v->frames[0];
     vkWaitForFences(v->dev, 1, &f->fence, VK_TRUE, UINT64_MAX);
@@ -1436,6 +1446,7 @@ int glin_vk_offscreen(GlinVk *v, const GlinVkVertex *verts, int nverts,
     if (vkQueueSubmit(v->queue, 1, &si, f->fence) != VK_SUCCESS) return fail("vkQueueSubmit failed (offscreen)");
     if (vkWaitForFences(v->dev, 1, &f->fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) return fail("vkWaitForFences failed (offscreen)");
 
+    if (readback_ready(v, (VkDeviceSize)w * (VkDeviceSize)h * 4) != 0) return -1;
     memcpy(out, v->read_map, (size_t)w * (size_t)h * 4);
     return 0;
 }

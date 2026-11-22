@@ -331,6 +331,12 @@ pub const Renderer = struct {
         return self.device != null;
     }
 
+    /// Why the last GPU call failed, for a test that has no log sink to print into.
+    pub fn lastError(self: *const Renderer) []const u8 {
+        _ = self;
+        return std.mem.span(vk.glin_vk_last_error());
+    }
+
     /// The physical device's name, or "" before a device exists.
     pub fn deviceName(self: *const Renderer) []const u8 {
         const d = self.device orelse return "";

@@ -67,7 +67,11 @@ test "Vulkan matches the CPU reference on every text-free golden scene" {
         if (hasText(scene.cmds)) continue;
         const cpu = try cpuPixels(scene.cmds, std.testing.allocator);
         defer std.testing.allocator.free(cpu);
-        const gpu = r.renderOffscreen(scene.cmds, w, h) orelse return error.SkipZigTest;
+        // A device exists, so a failed offscreen render is a real failure, not a reason to skip.
+        const gpu = r.renderOffscreen(scene.cmds, w, h) orelse {
+            std.debug.print("vulkan offscreen failed on '{s}': {s}\n", .{ scene.name, r.lastError() });
+            return error.VulkanOffscreenFailed;
+        };
         defer std.testing.allocator.free(gpu);
 
         const worst = worstChannel(cpu, gpu, @intCast(w));
@@ -145,7 +149,10 @@ test "Vulkan matches the CPU on an image quad" {
     const cpu = try std.testing.allocator.dupe(u8, s.pixels);
     defer std.testing.allocator.free(cpu);
 
-    const gpu = r.renderOffscreen(&commands, w, h) orelse return error.SkipZigTest;
+    const gpu = r.renderOffscreen(&commands, w, h) orelse {
+        std.debug.print("vulkan offscreen failed on the image quad: {s}\n", .{r.lastError()});
+        return error.VulkanOffscreenFailed;
+    };
     defer std.testing.allocator.free(gpu);
 
     const worst = worstChannel(cpu, gpu, @intCast(w));
