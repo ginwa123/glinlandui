@@ -429,7 +429,14 @@ pub const Surface = struct {
 
     // Render a slice of Clay render commands into the surface, in order.
     pub fn renderCommands(self: *Surface, commands: []const cl.RenderCommand) void {
+        self.renderCommandsClipped(commands, null);
+    }
+
+    // The same pass, restricted to a device-pixel rectangle: a caller that repaints one dirty region touches nothing else.
+    pub fn renderCommandsClipped(self: *Surface, commands: []const cl.RenderCommand, clip: ?[4]i64) void {
         const k = render_scale;
+        self.scissor = if (clip) |c| Scissor{ .x0 = c[0], .y0 = c[1], .x1 = c[2], .y1 = c[3] } else null;
+        self.scissor_depth = 0;
         for (commands) |cmd| {
             const bb = cl.BoundingBox{
                 .x = cmd.bounding_box.x * k,

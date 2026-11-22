@@ -75,6 +75,7 @@ src/core/           platform-agnostic: Clay components, renderer, text, testing 
 src/core/devtools/  the inspector: the tree snapshot, the in-app window, the CLI
 src/linux/          Wayland / Vulkan backend (+ vk.c, its one C shim)
 src/mac/            Cocoa backend, plus the Objective-C shim
+src/terminal/       the TUI backend (`-Dtui`): kitty/sixel pixels, CPU cells as the fallback
 src/file_dialog.zig system file dialog: NSOpenPanel on macOS, a portable stub elsewhere
 ```
 
@@ -89,7 +90,9 @@ and text estimator with it. That is what makes the Linux and macOS test counts i
 platforms. That is the intended alarm.
 
 The native backends are still tested: the Wayland one in the Linux-only `native-test` step, and
-the macOS one's decision logic (pure Zig, in `src/mac/`) through the parity suite itself.
+the macOS one's decision logic (pure Zig, in `src/mac/`) through the parity suite itself. The
+terminal backend has its own step too — `zig build test-tui`, whose root is `src/terminal_test.zig`
+(encoders, cell grid, a real component tree) — and for the same reason it is not in the parity count.
 
 ## The macOS shim
 

@@ -11,7 +11,17 @@ const NativeProtocols = struct {
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+
+    // ---- `-Dtui`: build the terminal backend instead of a desktop window ---- The same engine, the same components, drawn into a terminal.
+    const tui_flag = b.option(bool, "tui", "Build the terminal (TUI) backend instead of the desktop window") orelse false;
+
+    // `-Doptimize` still wins; without it a terminal build is ReleaseSafe, because a terminal frame does real per-pixel work and Debug is ~10x slower at it.
+    const optimize = b.option(std.builtin.OptimizeMode, "optimize", "Prioritize performance, safety, or binary size") orelse switch (b.release_mode) {
+        .off => if (tui_flag) std.builtin.OptimizeMode.ReleaseSafe else std.builtin.OptimizeMode.Debug,
+        .safe, .any => .ReleaseSafe,
+        .fast => .ReleaseFast,
+        .small => .ReleaseSmall,
+    };
 
     // ---- the webapp's font ---- The browser build EMBEDS a font, so `zig build web` produces a webapp whose text is glyphs with no fetch, no `assets/`.
     const font_opt = b.option(
@@ -72,6 +82,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
     mod.addImport("zclay", zclay_mod);
+    // The composition root reads this: `platform.zig` is the one file allowed to branch, so the flag arrives as a module, not an env var.
+    const build_config = b.addOptions();
+    build_config.addOption(bool, "tui", tui_flag);
+    mod.addOptions("glinconfig", build_config);
     addVendoredStbInclude(b, mod);
     // Vendored-library implementation TUs, both unconditional and both in core/: exactly one TU may define each STB_*_IMPLEMENTATION macro, and neither is.
     mod.addCSourceFile(.{ .file = b.path("src/core/stb_truetype_impl.c"), .flags = stbFlags(is_wasm) });
@@ -152,6 +166,10 @@ pub fn build(b: *std.Build) void {
     // ---- Windows-only native windowing and rendering graph ---- The Win32 + D3D11 shim: one C translation unit plus the import libraries its entry points.
     if (is_windows) {
         addWindowsShim(b, mod);
+        // The VT console shim, and only on a terminal build: no other Windows target links it.
+        if (tui_flag) {
+            mod.addCSourceFile(.{ .file = b.path("src/terminal/console_win32.c"), .flags = &.{"-Werror"} });
+        }
     }
 
     mod.linkLibrary(clay_lib);
@@ -602,6 +620,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
         });
         m.addImport("zclay", zclay_mod);
+        m.addOptions("glinconfig", build_config);
         m.addIncludePath(b.path("src/mac"));
         addVendoredStbInclude(b, m);
         m.addCSourceFile(.{ .file = b.path("src/core/stb_truetype_impl.c"), .flags = stbFlags(false) });
@@ -633,6 +652,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
         });
         m.addImport("zclay", zclay_mod);
+        m.addOptions("glinconfig", build_config);
         addVendoredStbInclude(b, m);
         m.addCSourceFile(.{ .file = b.path("src/core/stb_truetype_impl.c"), .flags = stbFlags(false) });
         m.addCSourceFile(.{ .file = b.path("src/core/stb_image_impl.c"), .flags = stbFlags(false) });
@@ -652,6 +672,10 @@ pub fn build(b: *std.Build) void {
     if (native_protocols) |protocols| {
         native_test_step.dependOn(makeNativeTestStep(b, target, zclay_mod, protocols));
     }
+    // The terminal backend's own suite: pure encoders, the cell renderer and a real component tree. NOT part of `test`, so the parity count stays put.
+    const tui_test_step = b.step("test-tui", "Run the terminal (TUI) backend tests: encoders, cell grid and a real component tree");
+    tui_test_step.dependOn(makeTuiTestStep(b, target, zclay_mod, clay_lib));
+
     // The calculator example's tests are NOT here: they are portable and run in the parity `test` step above on every platform.
 
     // ---- lint: zginlint, pinned in build.zig.zon; `zginlint:check` is the gate ----
@@ -763,6 +787,10 @@ fn makeWebModule(
         .optimize = optimize,
     });
     m.addImport("zclay", zclay);
+    // A browser has no terminal, so the flag is always false here; the import exists because `platform.zig` reads it.
+    const cfg = b.addOptions();
+    cfg.addOption(bool, "tui", false);
+    m.addOptions("glinconfig", cfg);
     addVendoredStbInclude(b, m);
     m.addCSourceFile(.{ .file = b.path("src/core/stb_truetype_impl.c"), .flags = stbFlags(true) });
     m.addCSourceFile(.{ .file = b.path("src/core/stb_image_impl.c"), .flags = stbFlags(true) });
@@ -912,6 +940,10 @@ fn makeNativeTestStep(
         .target = target,
     });
     m.addImport("zclay", zclay);
+    // A test build selects the portable window on every platform, so the flag is false; the import still has to resolve.
+    const cfg = b.addOptions();
+    cfg.addOption(bool, "tui", false);
+    m.addOptions("glinconfig", cfg);
     m.addIncludePath(b.path("src/linux"));
     m.addCSourceFile(.{ .file = b.path("src/linux/vk.c"), .flags = &.{"-Werror"} });
     m.addIncludePath(protocols.xdg.header.dirname());
@@ -1090,4 +1122,32 @@ fn exampleE2E(
             },
         }),
     });
+}
+
+// The single root for the `test-tui` step: the terminal backend's encoders, its cell grid and a real component tree.
+fn makeTuiTestStep(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    zclay: *std.Build.Module,
+    clay_lib: *std.Build.Step.Compile,
+) *std.Build.Step {
+    const m = b.createModule(.{
+        .root_source_file = b.path("src/terminal_test.zig"),
+        .target = target,
+    });
+    m.addImport("zclay", zclay);
+    // The suite drives a real Host, and the composition root reads this flag; a test build selects the portable window either way.
+    const cfg = b.addOptions();
+    cfg.addOption(bool, "tui", true);
+    m.addOptions("glinconfig", cfg);
+    addVendoredStbInclude(b, m);
+    m.addCSourceFile(.{ .file = b.path("src/core/stb_truetype_impl.c"), .flags = stbFlags(false) });
+    m.addCSourceFile(.{ .file = b.path("src/core/stb_image_impl.c"), .flags = stbFlags(false) });
+    if (target.result.os.tag == .windows) {
+        m.addCSourceFile(.{ .file = b.path("src/terminal/console_win32.c"), .flags = &.{"-Werror"} });
+    }
+    m.linkLibrary(clay_lib);
+    const test_exe = b.addTest(.{ .root_module = m });
+    test_exe.root_module.linkSystemLibrary("c", .{});
+    return &b.addRunArtifact(test_exe).step;
 }

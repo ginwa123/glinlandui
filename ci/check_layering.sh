@@ -119,7 +119,7 @@ scan src/core "$SOURCE_GLOB" '@cInclude\("(vulkan|Vulkan|pango|cocoa|wayland|d3d
 # R4 — the backends are siblings, not a hierarchy.
 #
 # Two folders when this rule was written, three now (web/ joined for the browser
-# backend), so the two pairwise greps became a loop over all three: no backend
+# backend) and terminal/ joined for the TUI backend, so the pairwise greps became a loop: no backend
 # may import another. The loop is what makes a fourth platform a one-line change
 # rather than a set of scans someone will forget to add.
 #
@@ -128,8 +128,8 @@ scan src/core "$SOURCE_GLOB" '@cInclude\("(vulkan|Vulkan|pango|cocoa|wayland|d3d
 # another's C headers, its `shim.h` (which is the reason the platform include
 # paths are mutually exclusive — see I4), or its windowing system.
 # ---------------------------------------------------------------------------
-for backend in linux mac windows web; do
-  for other in linux mac windows web; do
+for backend in linux mac windows web terminal; do
+  for other in linux mac windows web terminal; do
     if [ "$backend" = "$other" ]; then continue; fi
     scan "src/$backend" "$SOURCE_GLOB" "@import\(\"\.\./(\.\./)?$other/" \
       "R4 violated: src/$backend/** imports src/$other/"
