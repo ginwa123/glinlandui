@@ -936,11 +936,39 @@ jobs:
         with:
           version: 0.16.0
 
+      # The terminal backend itself is std-only, but `-Dtui` still builds the
+      # Linux library, whose build graph generates the Wayland protocols and links
+      # wayland-client / vulkan / pango. Same set the `linux` job installs, and for
+      # the same reason: the codegen is unconditional on a Linux target.
+      - name: Install native Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            fonts-dejavu-core \
+            libcairo2-dev \
+            libvulkan-dev \
+            mesa-vulkan-drivers \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libfribidi-dev \
+            libglib2.0-dev \
+            libharfbuzz-dev \
+            libpango1.0-dev \
+            libpixman-1-dev \
+            libpng-dev \
+            libwayland-dev \
+            pkg-config
+
+          scanner="$(command -v wayland-scanner)"
+          test -n "$scanner"
+          sudo ln -sf "$scanner" /usr/sbin/wayland-scanner
+
       - name: Check formatting (includes examples/)
         run: zig fmt --check build.zig src examples tools
 
-      # No apt-get: the terminal backend is std-only. A job that quietly installed
-      # a system library would hide a regression that reintroduced one.
       - name: Lint
         run: |
           zig build zginlint:check
