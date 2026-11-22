@@ -578,7 +578,7 @@ const ClipRec = struct {
     last: ?usize = null,
 };
 
-/// A click-shaped recorder (no index), for the targets the clip tests register.
+/// A click-shaped recorder (no index), for the targets the clip tests register: 8 bytes, so it must never be handed to a ROW callback, whose recorder is 24.
 const ClipClick = struct {
     calls: usize = 0,
 };
@@ -588,6 +588,7 @@ fn onClipClick(ctx: ?*anyopaque) void {
     r.calls += 1;
 }
 
+// The ctx MUST be a `*ClipRec`: `last` is an `?usize`, so a smaller recorder is written 16 bytes past its end, which in a large Debug test binary lands on an unrelated global.
 fn onClipRow(ctx: ?*anyopaque, i: usize) void {
     const r: *ClipRec = @ptrCast(@alignCast(ctx.?));
     r.calls += 1;
@@ -787,7 +788,7 @@ test "a surface painted BEFORE a target does not hide it" {
 
 test "an overlay above the covering surface still answers" {
     // An in-flow pane claims at z 0; a dropdown card floating at z 10 is painted over it, so its row must win.
-    oc_rec = ClipClick{};
+    var rec = ClipRec{};
     beginFrame();
     headless.begin(.{ .x = 99999, .y = 99999 }, false);
     cl.beginLayout();
@@ -803,10 +804,11 @@ test "an overlay above the covering surface still answers" {
         .floating = .{ .attach_to = .to_root, .attach_points = .{ .element = .left_top, .parent = .left_top }, .z_index = 10 },
     })({});
     occludeZ(.ID("oc-popup"), 10);
-    registerZ(.ID("oc-popup"), onClipRow, &oc_rec, 0, 10);
+    registerZ(.ID("oc-popup"), onClipRow, &rec, 0, 10);
     _ = cl.endLayout();
 
     const bb = cl.getElementData(cl.ElementId.ID("oc-popup")).bounding_box;
     try std.testing.expect(dispatchClick(bb.x + bb.width * 0.5, bb.y + bb.height * 0.5));
-    try std.testing.expectEqual(@as(usize, 1), oc_rec.calls);
+    try std.testing.expectEqual(@as(usize, 1), rec.calls);
+    try std.testing.expectEqual(@as(?usize, 0), rec.last);
 }
