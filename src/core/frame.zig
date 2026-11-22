@@ -429,18 +429,22 @@ pub const FrameMemo = struct {
     draws: u64 = 0,
     skips: u64 = 0,
 
-    // Returns true when the caller should issue the GLES draw.
-    pub fn shouldDraw(self: *FrameMemo, commands: []cl.RenderCommand) bool {
-        const h = hashCommands(commands);
+    // Returns true when the caller should issue the GLES draw, for a digest it already has: `hashCommands` is a full FNV-1a pass, and the frame computes that digest anyway.
+    pub fn shouldDrawHash(self: *FrameMemo, digest: u64) bool {
         if (self.last_hash) |prev| {
-            if (prev == h) {
+            if (prev == digest) {
                 self.skips += 1;
                 return false;
             }
         }
-        self.last_hash = h;
+        self.last_hash = digest;
         self.draws += 1;
         return true;
+    }
+
+    // The commands-shaped form, for a caller (or a test) that has no digest in hand; it is the same decision, one digest later.
+    pub fn shouldDraw(self: *FrameMemo, commands: []cl.RenderCommand) bool {
+        return self.shouldDrawHash(hashCommands(commands));
     }
 
     pub fn reset(self: *FrameMemo) void {
@@ -828,7 +832,8 @@ pub fn clayFrameWithOptions(
     }
     if (renderer.*) |*r| {
         if (memo_enabled) {
-            if (memo.shouldDraw(commands)) {
+            // The digest above, not a second pass: it is already the identity of exactly these commands.
+            if (memo.shouldDrawHash(digest)) {
                 r.drawCommands(commands, @intCast(w), @intCast(h));
             }
         } else {
@@ -925,6 +930,20 @@ test "FrameMemo draws first frame, skips identical repeat" {
     var changed = [_]cl.RenderCommand{testRectCmd(0, 0, 720, 480, .{ 18, 18, 18, 255 })};
     try std.testing.expect(m.shouldDraw(&changed));
     try std.testing.expectEqual(@as(u64, 2), m.draws);
+}
+
+test "shouldDrawHash answers exactly as shouldDraw does, on the digest the frame already computed" {
+    // The frame hashes once for `commandsRepeated` and hands that digest to the memo; `shouldDraw` would hash the same commands a second time.
+    var by_commands = FrameMemo{};
+    var by_digest = FrameMemo{};
+    var cmds = [_]cl.RenderCommand{testRectCmd(0, 0, 720, 480, .{ 17, 17, 17, 255 })};
+    const digest = hashCommands(&cmds);
+    try std.testing.expectEqual(by_commands.shouldDraw(&cmds), by_digest.shouldDrawHash(digest));
+    try std.testing.expectEqual(by_commands.shouldDraw(&cmds), by_digest.shouldDrawHash(digest));
+    var changed = [_]cl.RenderCommand{testRectCmd(0, 0, 720, 480, .{ 18, 18, 18, 255 })};
+    try std.testing.expectEqual(by_commands.shouldDraw(&changed), by_digest.shouldDrawHash(hashCommands(&changed)));
+    try std.testing.expectEqual(by_commands.draws, by_digest.draws);
+    try std.testing.expectEqual(by_commands.skips, by_digest.skips);
 }
 
 test "cursorShapeFromCursor maps Cursor enum to protocol shapes" {
