@@ -245,7 +245,10 @@ pub const Host = struct {
         self.ptr.now_ms = if (self.clock) |f| f(self.clock_ctx) else 0;
         dispatch.pointerEvent(&self.ptr, x, y, pressed, button, self.win_w, self.win_h);
         // The scrollbar pill owns the pointer from the press that grabs it to the release: its travel is shorter than the content's, so it maps its own ratio.
-        if (pressed and button == dispatch.BTN_LEFT) _ = scroll_mod.beginThumbGrab(x, y);
+        if (pressed and button == dispatch.BTN_LEFT) {
+            // The pill first: a press on it is a grab. A press on the TRACK jumps the content to the pointer and then slides the pill with it.
+            if (!scroll_mod.beginThumbGrab(x, y)) _ = scroll_mod.beginBarPress(x, y);
+        }
         const thumb_moved = scroll_mod.moveThumb(x, y);
         if (button == dispatch.BTN_LEFT and !pressed) scroll_mod.endThumbGrab();
         if (thumb_moved) return;
@@ -769,6 +772,25 @@ test "host: two clicks on one spot select the word, so every backend must delive
     const span = contract_field.editor.caret.selection() orelse return error.NoSelection;
     try std.testing.expectEqual(@as(usize, 0), span.start);
     try std.testing.expectEqual(@as(usize, 5), span.end);
+}
+
+test "host: a press on the scrollbar track jumps the pane to the pointer and keeps the pill grabbed" {
+    var h: Host = undefined;
+    try testHost(&h, null, hostScrollProbeRoot);
+    h.frame(720, 480);
+    // The thumb is declared from the previous frame's scroll data, so the second frame is the one that has a box.
+    h.frame(720, 480);
+    const thumb = cl.getElementData(cl.ElementId.IDI("host-scroll", scroll_mod.vthumb_index)).bounding_box;
+    const cx = thumb.x + thumb.width * 0.5;
+    const content_y0 = cl.getElementData(cl.getElementId("host-scroll-probe")).bounding_box.y;
+    // Forty points down the TRACK, well below the pill: the pane jumps there, which is the gesture the pill never answered.
+    h.onPointerEvent(cx, thumb.y + 40, true, 272);
+    try std.testing.expect(scroll_mod.thumbGrabbed());
+    h.frame(720, 480);
+    const content_y1 = cl.getElementData(cl.getElementId("host-scroll-probe")).bounding_box.y;
+    try std.testing.expect(content_y0 - content_y1 > 40);
+    h.onPointerEvent(cx, thumb.y + 40, false, 272);
+    try std.testing.expect(!scroll_mod.thumbGrabbed());
 }
 
 test "host: a press on the scrollbar pill drags its content instead of nudging it 1:1" {
