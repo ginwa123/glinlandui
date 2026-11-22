@@ -469,6 +469,44 @@ fn clayMeasure(text_bytes: []const u8, config: *cl.TextElementConfig, _: void) c
 // Receives a duplicate element id instead of the default panic. A test installs one to assert the detection without dying; an app must leave it null.
 pub var duplicate_id_sink: ?*const fn (msg: []const u8) void = null;
 
+// The most elements one frame may declare; 0 keeps Clay's own default (8192). Set it BEFORE `Host.init`, which sizes the arena from it — memory grows linearly.
+pub var max_elements: usize = 0;
+
+// Receives a capacity overflow instead of the default panic. A test installs one to assert it; an app must leave it null.
+pub var capacity_error_sink: ?*const fn (msg: []const u8) void = null;
+
+// The two facts Clay keeps to itself (see the accessors appended to the generated clay.c in build.zig): how many elements the last frame ended up with, and whether it dropped the tail.
+extern fn glin_clay_elements_exceeded() bool;
+extern fn glin_clay_element_count() i32;
+
+// True when the last frame was truncated by the element ceiling.
+pub fn elementCeilingExceeded() bool {
+    return glin_clay_elements_exceeded();
+}
+
+// The elements the last frame actually opened, root included.
+pub fn lastElementCount() i32 {
+    return glin_clay_element_count();
+}
+
+// A frame that declared more elements than the ceiling renders a PARTIAL tree and nothing else says so: Clay sets a flag, drops the rest and keeps going.
+pub fn checkElementCeiling() void {
+    if (!elementCeilingExceeded()) return;
+    const msg = "a frame declared more elements than Clay's ceiling, so the rest of the tree was dropped: raise `frame.max_elements` before Host.init, or virtualise the list";
+    if (capacity_error_sink) |sink| {
+        sink(msg);
+        return;
+    }
+    if (builtin.mode == .Debug) std.debug.panic("glinlandui: {s}", .{msg});
+    if (!capacity_warned) {
+        capacity_warned = true;
+        std.log.err("glinlandui: {s}", .{msg});
+    }
+}
+
+// A Release build logs a permanent overflow once, not sixty times a second.
+var capacity_warned: bool = false;
+
 // One slot of the per-frame id set: the key, plus the frame generation that wrote it, so a new frame invalidates the whole table by counting.
 const IdSlot = struct { key: u64 = 0, gen: u32 = 0 };
 
@@ -607,15 +645,91 @@ test "the duplicate check still names a duplicate past 4096 unique ids" {
     try std.testing.expectEqual(@as(usize, 1), dup_hits);
 }
 
+var capacity_hits: usize = 0;
+
+fn countCapacity(_: []const u8) void {
+    capacity_hits += 1;
+}
+
+test "the element ceiling is a knob, and a frame under it stays whole" {
+    // 9000 elements is past Clay's 8192 default: the frame that used to render a partial tree now fits, because the arena was measured for the raised count.
+    const headless = @import("testing/headless.zig");
+    const ceiling_before = cl.getMaxElementCount();
+    max_elements = 12_000;
+    defer max_elements = 0;
+    capacity_error_sink = countCapacity;
+    defer capacity_error_sink = null;
+    const canvas = try initClay(std.testing.allocator, 720, 480);
+    defer std.testing.allocator.free(canvas);
+    defer deinitIdSet();
+    // The restore runs FIRST among the defers, before the arena goes: `Clay_Initialize` reads the context it replaces, so it cannot be reading freed memory.
+    defer {
+        cl.on_element = null;
+        cl.on_begin_frame = null;
+        cl.setMaxElementCount(ceiling_before);
+        headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    }
+    capacity_hits = 0;
+    try std.testing.expectEqual(@as(i32, 12_000), cl.getMaxElementCount());
+
+    cl.beginLayout();
+    var i: u32 = 0;
+    while (i < 9000) : (i += 1) cl.UI()(.{ .id = .IDI("ceiling-knob", i + 1) })({});
+    _ = cl.endLayout();
+
+    try std.testing.expect(!elementCeilingExceeded());
+    try std.testing.expectEqual(@as(usize, 0), capacity_hits);
+}
+
+test "a frame past the element ceiling is loud instead of half-drawn" {
+    // At the default 8192 a 8200-element frame is the case the issue calls a silently truncated screen: one log line, no failure, most of the UI missing.
+    const headless = @import("testing/headless.zig");
+    const ceiling_before = cl.getMaxElementCount();
+    capacity_error_sink = countCapacity;
+    defer capacity_error_sink = null;
+    const canvas = try initClay(std.testing.allocator, 720, 480);
+    defer std.testing.allocator.free(canvas);
+    defer deinitIdSet();
+    // The restore runs FIRST among the defers, before the arena goes: `Clay_Initialize` reads the context it replaces, so it cannot be reading freed memory.
+    defer {
+        cl.on_element = null;
+        cl.on_begin_frame = null;
+        cl.setMaxElementCount(ceiling_before);
+        headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    }
+    capacity_hits = 0;
+    try std.testing.expect(ceiling_before >= 1);
+
+    cl.beginLayout();
+    var i: u32 = 0;
+    while (i <= @as(u32, @intCast(ceiling_before)) + 7) : (i += 1) cl.UI()(.{ .id = .IDI("ceiling-over", i + 1) })({});
+    _ = cl.endLayout();
+
+    try std.testing.expect(elementCeilingExceeded());
+    try std.testing.expect(lastElementCount() <= ceiling_before);
+    checkElementCeiling();
+    try std.testing.expectEqual(@as(usize, 1), capacity_hits);
+}
+
 fn clayErrorHandler(err: cl.ErrorData) callconv(.c) void {
     const msg = err.error_text.chars[0..@intCast(err.error_text.length)];
     // Clay's duplicate message never names the id and `claimId` already reports it, so this would only add a nameless line.
     if (err.error_type == .duplicate_id) return;
+    // A frame past the element ceiling renders a PARTIAL tree: to a user that is a half-drawn screen, and to a test that reads anything but the command count it is nothing at all.
+    if (err.error_type == .elements_capacity_exceeded) {
+        if (capacity_error_sink) |sink| {
+            sink(msg);
+            return;
+        }
+        if (builtin.mode == .Debug) std.debug.panic("glinlandui: {s}", .{msg});
+    }
     std.log.err("clay {s}: {s}", .{ @tagName(err.error_type), msg });
 }
 
 // Init the Clay arena for a w x h window.
 pub fn initClay(alloc: std.mem.Allocator, w: u32, h: u32) ![]u8 {
+    // Clay sizes every per-element array from its own ceiling and `minMemorySize()` answers for whatever is in force, so the knob has to be applied FIRST.
+    if (max_elements > 0) cl.setMaxElementCount(@intCast(max_elements));
     const clay_mem_size = cl.minMemorySize();
     const clay_mem = try alloc.alloc(u8, clay_mem_size);
     errdefer alloc.free(clay_mem);
@@ -627,6 +741,7 @@ pub fn initClay(alloc: std.mem.Allocator, w: u32, h: u32) ![]u8 {
     // Every identified element passes through this hook, so a duplicate is caught and named where it happens.
     cl.on_element = claimId;
     cl.on_begin_frame = resetIds;
+    capacity_warned = false;
     memo.reset();
     return clay_mem;
 }
@@ -800,6 +915,8 @@ pub fn clayFrameWithOptions(
     text_editor.beginBlinkFrame();
     declare(ctx, lw, lh);
     const commands = cl.endLayout();
+    // Before the truncated commands are used for anything: this is the only place a frame that overflowed the element ceiling becomes visible.
+    checkElementCeiling();
     // What the app declared is the truth; the window paints it at the zoom in force.
     scaleCommands(@constCast(commands), content_zoom);
     // A frame that draws exactly what the last one did does not need presenting: the window already shows those pixels.

@@ -652,6 +652,17 @@ fn makeClay(
             \\#define CLAY_IMPLEMENTATION
             \\#include <clay.h>
             \\
+            \\// Clay truncates a frame past its element ceiling and never tells the error handler, so the engine reads the flag it keeps to itself.
+            \\bool glin_clay_elements_exceeded(void) {
+            \\    Clay_Context *c = Clay_GetCurrentContext();
+            \\    return c != 0 && c->booleanWarnings.maxElementsExceeded;
+            \\}
+            \\
+            \\int32_t glin_clay_element_count(void) {
+            \\    Clay_Context *c = Clay_GetCurrentContext();
+            \\    return c != 0 ? c->layoutElements.length : 0;
+            \\}
+            \\
         ),
         // `-fno-sanitize=undefined` is load-bearing: Zig instruments C sources in a Debug build, and the resulting ubsan references are NOT satisfied when a
 
