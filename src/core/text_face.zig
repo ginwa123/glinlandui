@@ -18,6 +18,44 @@ const estimator = @import("text_estimator.zig");
 
 pub const TextExtent = estimator.TextExtent;
 
+/// A terminal cell in points: installing this measures the layout in whole cells and turns the frame into a character grid.
+pub const CellMetrics = struct {
+    w: f32,
+    h: f32,
+};
+
+var cell_metrics: ?CellMetrics = null;
+
+/// Install (or clear) the cell grid a terminal build lays out on. This is not a scale: it replaces the measurement outright.
+pub fn setCellMetrics(m: ?CellMetrics) void {
+    cell_metrics = m;
+    // A width measured with the real pen must never answer for a cell-quantised one.
+    for (&cache) |*e| e.valid = false;
+}
+
+// A codepoint's width in cells: one, or two for the CJK and emoji ranges a terminal draws double-wide.
+fn cellColumns(text: []const u8) u32 {
+    var n: u32 = 0;
+    var i: usize = 0;
+    while (i < text.len) {
+        const cp = glyphs.nextCodepoint(text, &i);
+        n += if (isWideCell(cp)) 2 else 1;
+    }
+    return n;
+}
+
+fn isWideCell(cp: u21) bool {
+    return (cp >= 0x1100 and cp <= 0x115F) or
+        (cp >= 0x2E80 and cp <= 0xA4CF) or
+        (cp >= 0xAC00 and cp <= 0xD7A3) or
+        (cp >= 0xF900 and cp <= 0xFAFF) or
+        (cp >= 0xFE30 and cp <= 0xFE6F) or
+        (cp >= 0xFF00 and cp <= 0xFF60) or
+        (cp >= 0xFFE0 and cp <= 0xFFE6) or
+        (cp >= 0x1F300 and cp <= 0x1FAFF) or
+        (cp >= 0x20000 and cp <= 0x3FFFD);
+}
+
 // The process-wide face. Loaded once, from the installed font or the platform's candidate list.
 var face: ?glyphs.Font = null;
 // True when `face` was loaded HERE, so its bytes are this module's to free; a backend-installed font owns its own.
@@ -81,6 +119,7 @@ pub fn fontAvailable() bool {
 
 // every consumer is tuned to that number, and the rasteriser centres the real line box inside it anyway.
 pub fn lineHeight(font_size: u16) f32 {
+    if (cell_metrics) |m| return m.h;
     return estimator.estimatorExtent("", font_size).h;
 }
 
@@ -210,6 +249,7 @@ pub fn deviceSize(font_size: u16) u16 {
 
 // Width and line height of `text` at `font_size`, measured at the device size the rasteriser draws it at: the same pen.
 pub fn measureText(text: []const u8, font_size: u16) TextExtent {
+    if (cell_metrics) |m| return .{ .w = @as(f32, @floatFromInt(cellColumns(text))) * m.w, .h = m.h };
     const h = lineHeight(font_size);
     if (text.len == 0) return .{ .w = 0, .h = h };
     const f = font() orelse return estimator.measureText(text, font_size);

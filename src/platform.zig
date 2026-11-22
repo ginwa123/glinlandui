@@ -1,11 +1,18 @@
 //! Composition root — the ONLY file in the repository that branches on OS.
 const builtin = @import("builtin");
 const std = @import("std");
+// The build's own switches (`-Dtui`), which arrive as a module because this is the only file allowed to branch on them.
+const cfg = @import("glinconfig");
 
 /// One window backend per OS, selected here and nowhere else.
 pub const window = if (builtin.is_test)
     @import("core/window_portable.zig")
-else switch (builtin.os.tag) {
+else if (cfg.tui) switch (builtin.os.tag) {
+    // The terminal backend: one shared window over each platform's console, with no window server involved at all.
+    .linux, .macos => @import("terminal/window_posix.zig"),
+    .windows => @import("terminal/window_win32.zig"),
+    else => @import("core/window_portable.zig"),
+} else switch (builtin.os.tag) {
     .linux => @import("linux/window.zig"),
     .macos => @import("mac/window.zig"),
     .windows => @import("windows/window.zig"),
@@ -17,7 +24,8 @@ else switch (builtin.os.tag) {
 /// The renderer the frame path drives.
 pub const render_impl = if (builtin.is_test)
     @import("core/render_software.zig")
-else switch (builtin.os.tag) {
+    // The terminal renderer is portable: kitty/sixel when the terminal can draw pixels, the CPU cell grid when it cannot.
+else if (cfg.tui) @import("terminal/renderer.zig") else switch (builtin.os.tag) {
     .linux => @import("linux/renderer.zig"),
     .macos => @import("mac/renderer.zig"),
     // Windows presents through D3D11 but rasterises on the CPU, exactly as macOS does through CoreGraphics; see windows/renderer.zig.

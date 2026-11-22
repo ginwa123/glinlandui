@@ -33,6 +33,7 @@ versa.
 - [Colors](#colors)
 - [File and folder dialogs](#file-and-folder-dialogs)
 - [Architecture](#architecture)
+- [Terminal (TUI) backend](#terminal-tui-backend)
 - [Testing](#testing)
 - [End-to-end UI testing](#end-to-end-ui-testing)
 - [Devtool: inspect a running app](#devtool-inspect-a-running-app)
@@ -685,6 +686,31 @@ that is expensive to *draw* rather than to declare:
 
 ---
 
+## Terminal (TUI) backend
+
+The same engine runs **inside a terminal**: the same `Host`, the same components,
+the same `Window` / `Delegate` / `Renderer` contracts. It is a build flag, because
+a terminal is a different presentation target rather than a smaller desktop:
+
+```sh
+zig build -Dtui                 # the engine, the demo and every example, for a terminal
+zig build -Dtui run-calculator  # an existing example, unchanged, in your terminal
+zig build test-tui              # the backend's own suite
+```
+
+It is **graphics first**: the real RGBA framebuffer is encoded with the kitty
+graphics protocol or with sixel, so a terminal that can draw pixels gets the
+pixel-identical UI (rounded corners, anti-aliasing, images). A terminal that
+cannot falls back to the **CPU tier**, which paints the same command stream into a
+character grid with ANSI truecolor and box drawing — and if a pixel encode fails
+at runtime, the renderer rolls back to that grid mid-session instead of leaving a
+half-painted screen.
+
+The layout is measured in whole cells (`text_face.setCellMetrics`), so every
+existing component lands cell-for-cell: a button's label is its own width in
+cells, a caret sits on a cell boundary. `Ctrl`+`C` quits. `docs/terminal-backend.md`
+is the design record.
+
 ## Testing
 
 Six gates. They are cheap, and each one catches a class of mistake the others
@@ -1256,6 +1282,7 @@ src/
 │   │   └── assertions.zig        node assertions
 │   └── stb_{truetype,image}_impl.c   vendored library TUs
 │
+├── terminal/         the TUI backend (`-Dtui`): kitty/sixel pixels, CPU cells as the fallback
 ├── linux/            the Linux backend.  12 files, mirrored 1:1 with mac/
 │   ├── file_dialog.zig   ★ the XDG portal client (socket + handshake + wait)
 │   ├── file_dialog_model.zig  ★ the AppKit panel — PURE, tested on every OS

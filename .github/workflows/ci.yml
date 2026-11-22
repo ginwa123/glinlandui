@@ -909,3 +909,104 @@ jobs:
           name: lazy-scroll-bench-${{ matrix.label }}
           path: lazy-scroll-bench.log
           if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # The terminal backend: the same engine and the same components, drawn into a
+  # terminal. Three jobs, because "works on every platform" is the requirement and
+  # a backend that only compiles on macOS is not that.
+  # ---------------------------------------------------------------------------
+  tui:
+    name: TUI / ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            label: Linux
+          - os: macos-15
+            label: macOS (arm64)
+          - os: windows-2022
+            label: Windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Check formatting (includes examples/)
+        run: zig fmt --check build.zig src examples tools
+
+      # No apt-get: the terminal backend is std-only. A job that quietly installed
+      # a system library would hide a regression that reintroduced one.
+      - name: Lint
+        run: |
+          zig build zginlint:check
+          zig build lines:check
+
+      # Its own step on purpose: these tests are NOT in the parity count, so this
+      # suite can grow without touching tests.lock.
+      - name: The terminal backend's own suite
+        run: zig build test-tui --summary all
+
+      # `-Dtui` has to reach the library AND every example, so the install step
+      # (which builds all of them) is the assertion.
+      - name: Build the engine and every example for a terminal
+        run: zig build -Dtui -Doptimize=ReleaseSafe
+
+      - name: Assert every artifact exists
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for bin in glinlandui glinlandui-calculator glinlandui-todo \
+                     glinlandui-catalog glinlandui-file-dialog glinlandui-lazy-scroll; do
+            test -x "zig-out/bin/$bin" || { echo "::error::missing zig-out/bin/$bin"; exit 1; }
+          done
+
+      - name: Assert every artifact exists
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bins = 'glinlandui','glinlandui-calculator','glinlandui-todo','glinlandui-catalog','glinlandui-file-dialog','glinlandui-lazy-scroll'
+          foreach ($b in $bins) {
+            $p = "zig-out/bin/$b.exe"
+            if (-not (Test-Path $p)) { Write-Error "missing $p"; exit 1 }
+          }
+
+      # No tty here, so the window reports NotATerminal and the existing headless
+      # fallback paints one real frame: that path must stay intact on every host.
+      - name: Headless frame (no tty)
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe="zig-out/bin/glinlandui"
+          [ -f "$exe.exe" ] && exe="$exe.exe"
+          out=$(env GLIN_TUI_RENDERER=cells QS_SETTINGS_TEST_FRAMES=1 "$exe" 2>&1 || true)
+          echo "$out"
+          echo "$out" | grep -qi "headless" || { echo "::error::the demo did not fall back to a headless frame"; exit 1; }
+
+      # A real pty, so the escape stream is the one a terminal would actually get.
+      - name: Frame in a real pty (sixel, then cells, then an example)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sixel=/tmp/tui-sixel.out
+          cells=/tmp/tui-cells.out
+          calc=/tmp/tui-calc.out
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            script -q "$sixel" env GLIN_TUI_RENDERER=sixel QS_SETTINGS_TEST_FRAMES=1 ./zig-out/bin/glinlandui || true
+            script -q "$cells" env GLIN_TUI_RENDERER=cells QS_SETTINGS_TEST_FRAMES=1 ./zig-out/bin/glinlandui || true
+            script -q "$calc"  env GLIN_TUI_RENDERER=cells QS_SETTINGS_TEST_FRAMES=1 ./zig-out/bin/glinlandui-calculator || true
+          else
+            script -q -e -c "env GLIN_TUI_RENDERER=sixel QS_SETTINGS_TEST_FRAMES=1 ./zig-out/bin/glinlandui" "$sixel" || true
+            script -q -e -c "env GLIN_TUI_RENDERER=cells QS_SETTINGS_TEST_FRAMES=1 ./zig-out/bin/glinlandui" "$cells" || true
+            script -q -e -c "env GLIN_TUI_RENDERER=cells QS_SETTINGS_TEST_FRAMES=1 ./zig-out/bin/glinlandui-calculator" "$calc" || true
+          fi
+          grep -q 'P0;1;0q' "$sixel" || { echo "::error::no sixel frame was written"; exit 1; }
+          grep -q 'Click me' "$cells" || { echo "::error::the cell frame does not contain the demo's own button"; exit 1; }
+          grep -q 'DEL' "$calc" || { echo "::error::the calculator example did not draw its keys"; exit 1; }
+          echo "sixel: $(wc -c < "$sixel") bytes · cells: $(wc -c < "$cells") bytes · calculator: $(wc -c < "$calc") bytes"
