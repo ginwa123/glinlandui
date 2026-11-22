@@ -111,6 +111,8 @@ pub const Host = struct {
         self.renderer = null;
         if (self.clay_mem.len > 0) self.alloc.free(self.clay_mem);
         self.clay_mem = &.{};
+        // The duplicate-id set `initClay` sized from Clay's ceiling shares the arena's lifetime and the arena's allocator.
+        frame_mod.deinitIdSet();
         self.clay_ready = false;
         // The devtool is heap memory made with `attach`'s allocator: free it, or a debug allocator reports it as a leak.
         if (self.inspect) |dev| {

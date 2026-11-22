@@ -465,9 +465,14 @@ fn clayMeasure(text_bytes: []const u8, config: *cl.TextElementConfig, _: void) c
 // Receives a duplicate element id instead of the default panic. A test installs one to assert the detection without dying; an app must leave it null.
 pub var duplicate_id_sink: ?*const fn (msg: []const u8) void = null;
 
-// The ids declared so far this frame, open-addressed. A key of 0 is an empty slot (the "no id" case never gets here).
-const id_set_cap = 4096;
-var id_keys: [id_set_cap]u64 = [_]u64{0} ** id_set_cap;
+// One slot of the per-frame id set: the key, plus the frame generation that wrote it, so a new frame invalidates the whole table by counting.
+const IdSlot = struct { key: u64 = 0, gen: u32 = 0 };
+
+// Sized from Clay's own element ceiling in `prepareIdSet`: the set used to be a fixed 4096 slots and went blind, silently, one id past it.
+var id_slots: []IdSlot = &.{};
+var id_slot_mask: u64 = 0;
+var id_slot_alloc: ?std.mem.Allocator = null;
+var id_gen: u32 = 1;
 
 // Keys already reported in a release build, so a duplicate that survives every frame is logged once, not 60 times a second.
 var id_warned: [256]u64 = [_]u64{0} ** 256;
@@ -479,22 +484,53 @@ fn idKey(id: cl.ElementId) u64 {
     return if (h == 0) 1 else h;
 }
 
-// Clear the per-frame id set. Called from `zclay.on_begin_frame`, so it runs for every frame however it was started.
-fn resetIds() void {
-    @memset(&id_keys, 0);
+/// Size the duplicate-id set for a frame that may claim `elements` ids: a power of two above that ceiling, allocated from `alloc` and replaced on every call.
+pub fn prepareIdSet(alloc: std.mem.Allocator, elements: usize) !void {
+    deinitIdSet();
+    var cap: usize = 16;
+    while (cap <= elements) cap <<= 1;
+    const slots = try alloc.alloc(IdSlot, cap);
+    @memset(slots, .{});
+    id_slots = slots;
+    id_slot_mask = cap - 1;
+    id_slot_alloc = alloc;
+    id_gen = 1;
 }
 
-// Insert `key`; true when it was already there.
+/// Hand the id set back to the allocator that sized it: safe when there is none, and safe twice.
+pub fn deinitIdSet() void {
+    if (id_slot_alloc) |alloc| {
+        if (id_slots.len > 0) alloc.free(id_slots);
+    }
+    id_slots = &.{};
+    id_slot_mask = 0;
+    id_slot_alloc = null;
+    id_gen = 1;
+}
+
+// Start a new frame's id set: a generation bump, not a memset of the table, which cost 32 KiB on every frame and scaled with nothing.
+fn resetIds() void {
+    id_gen +%= 1;
+    if (id_gen == 0) {
+        // The counter wrapped, so no slot can be blamed on this frame: start the table over rather than trust a stale generation.
+        @memset(id_slots, .{});
+        id_gen = 1;
+    }
+}
+
+// Insert `key`; true when it was already there. A slot from an older generation is empty, which is what makes the frame reset O(1).
 fn idSeenBefore(key: u64) bool {
-    var i: usize = @intCast(key % id_set_cap);
+    if (id_slots.len == 0) return false;
+    var i: usize = @intCast(key & id_slot_mask);
     var probes: usize = 0;
-    while (probes < id_set_cap) : (probes += 1) {
-        if (id_keys[i] == 0) {
-            id_keys[i] = key;
+    while (probes < id_slots.len) : (probes += 1) {
+        const slot = &id_slots[i];
+        if (slot.gen != id_gen) {
+            slot.* = .{ .key = key, .gen = id_gen };
             return false;
         }
-        if (id_keys[i] == key) return true;
-        i = (i + 1) % id_set_cap;
+        if (slot.key == key) return true;
+        i = (i + 1) & @as(usize, @intCast(id_slot_mask));
     }
     return false;
 }
@@ -533,6 +569,40 @@ pub fn claimId(id: cl.ElementId) void {
     std.log.err("glinlandui: duplicate element id {s}: two elements share it, so a click, hover or cursor lookup can land on the other one", .{msg});
 }
 
+var dup_hits: usize = 0;
+
+fn countDup(_: []const u8) void {
+    dup_hits += 1;
+}
+
+test "the duplicate check still names a duplicate past 4096 unique ids" {
+    // 4096 was a compilation constant, so the frame that declared the 4097th id lost the check and passed green; 5000 plus one repeat is that frame.
+
+    // The shared headless canvas, not one of this test's own: Clay keeps a global context pointer, and a test that frees its arena leaves later tests reading freed memory.
+    const headless = @import("testing/headless.zig");
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    try prepareIdSet(std.testing.allocator, @intCast(@max(1, cl.getMaxElementCount())));
+    defer deinitIdSet();
+    cl.on_element = claimId;
+    cl.on_begin_frame = resetIds;
+    defer {
+        cl.on_element = null;
+        cl.on_begin_frame = null;
+    }
+    duplicate_id_sink = countDup;
+    defer duplicate_id_sink = null;
+    dup_hits = 0;
+
+    cl.beginLayout();
+    var i: u32 = 0;
+    while (i < 5000) : (i += 1) cl.UI()(.{ .id = .IDI("id-set-cap", i + 1) })({});
+    // The repeat has to be an id declared PAST the old cap: one of the first 4096 was still in the full table, so it was caught even then.
+    cl.UI()(.{ .id = .IDI("id-set-cap", 4800) })({});
+    _ = cl.endLayout();
+
+    try std.testing.expectEqual(@as(usize, 1), dup_hits);
+}
+
 fn clayErrorHandler(err: cl.ErrorData) callconv(.c) void {
     const msg = err.error_text.chars[0..@intCast(err.error_text.length)];
     // Clay's duplicate message never names the id and `claimId` already reports it, so this would only add a nameless line.
@@ -548,6 +618,8 @@ pub fn initClay(alloc: std.mem.Allocator, w: u32, h: u32) ![]u8 {
     const arena = cl.Arena.init(clay_mem);
     _ = cl.initialize(arena, .{ .w = @floatFromInt(w), .h = @floatFromInt(h) }, .{ .error_handler_function = clayErrorHandler });
     cl.setMeasureTextFunction(void, {}, clayMeasure);
+    // Clay's element ceiling is the most ids a single frame can claim, so a set sized from it cannot go blind the way the fixed 4096 did.
+    try prepareIdSet(alloc, @intCast(@max(1, cl.getMaxElementCount())));
     // Every identified element passes through this hook, so a duplicate is caught and named where it happens.
     cl.on_element = claimId;
     cl.on_begin_frame = resetIds;
