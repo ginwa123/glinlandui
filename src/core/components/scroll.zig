@@ -8,6 +8,7 @@ const box_mod = @import("box.zig");
 const click_registry = @import("click_registry.zig");
 const semantics = @import("../semantics.zig");
 const frame_mod = @import("../frame.zig");
+const theme_mod = @import("../theme.zig");
 
 /// Scroll axes: vertical (column content, clips top-to-bottom), horizontal (row content, clips left-to-right), or both.
 pub const Direction = enum {
@@ -16,9 +17,11 @@ pub const Direction = enum {
     both,
 };
 
-/// Reserved Clay IDI offsets under .ID(props.id) for the floating thumbs.
+/// Reserved Clay IDI offsets under .ID(props.id) for the floating thumbs and the track they ride in.
 pub const vthumb_index: u32 = 1;
 pub const hthumb_index: u32 = 2;
+pub const vtrack_index: u32 = 3;
+pub const htrack_index: u32 = 4;
 
 /// Toolkit-style scroll props.
 pub const ScrollProps = struct {
@@ -42,6 +45,9 @@ pub const ScrollProps = struct {
     show_scrollbar: bool = true,
     scrollbar_width: prop.Len = .{ .px = 9 },
     scrollbar_margin: prop.Len = .{ .px = 4 },
+    // The groove the thumb rides in. Drawn by default; false leaves only the thumb, the overlay-bar look.
+    show_track: bool = true,
+    // The groove's colour. Null means the theme's tone: a half step between the pane and the thumb, so it reads as a track and not as a second bar.
     track_bg: ?Color = null,
     thumb_bg: Color = Color.rgb(0x5a, 0x5a, 0x5a),
     thumb_hover_bg: Color = Color.rgb(0x7a, 0x7a, 0x7a),
@@ -57,6 +63,11 @@ pub fn clipAxes(direction: Direction) struct { h: bool, v: bool } {
         .horizontal => .{ .h = true, .v = false },
         .both => .{ .h = true, .v = true },
     };
+}
+
+/// The groove's colour when the app named none: the theme's pane and the thumb's own tone, half and half, so any palette gets a visible track that is neither.
+pub fn trackTone(thumb: Color) Color {
+    return Color.lerp(theme_mod.current().colors.background, thumb, 0.5);
 }
 
 /// Pure: true when content overflows the viewport on an axis (a scrollbar is needed).
@@ -435,8 +446,9 @@ fn declareScrollbars(props: ScrollProps) void {
             if (len > 0) {
                 const off = thumbOffset(data.scroll_position.y, viewport, content, track, len);
                 const w: f32 = props.scrollbar_width.pts();
-                if (props.track_bg) |tb| {
+                if (props.show_track) {
                     cl.UI()(.{
+                        .id = .IDI(props.id.str(), vtrack_index),
                         .floating = .{
                             .attach_to = .to_element_with_id,
                             .parentId = parent_id,
@@ -446,7 +458,7 @@ fn declareScrollbars(props: ScrollProps) void {
                             .pointer_capture_mode = .passthrough,
                         },
                         .layout = .{ .sizing = .{ .w = .fixed(w), .h = .fixed(track) } },
-                        .background_color = tb.toClay(),
+                        .background_color = (props.track_bg orelse trackTone(props.thumb_bg)).toClay(),
                         .corner_radius = .all(props.thumb_radius.pts()),
                     })({});
                 }
@@ -479,8 +491,9 @@ fn declareScrollbars(props: ScrollProps) void {
             if (len > 0) {
                 const off = thumbOffset(data.scroll_position.x, viewport, content, track, len);
                 const w: f32 = props.scrollbar_width.pts();
-                if (props.track_bg) |tb| {
+                if (props.show_track) {
                     cl.UI()(.{
+                        .id = .IDI(props.id.str(), htrack_index),
                         .floating = .{
                             .attach_to = .to_element_with_id,
                             .parentId = parent_id,
@@ -490,7 +503,7 @@ fn declareScrollbars(props: ScrollProps) void {
                             .pointer_capture_mode = .passthrough,
                         },
                         .layout = .{ .sizing = .{ .w = .fixed(track), .h = .fixed(w) } },
-                        .background_color = tb.toClay(),
+                        .background_color = (props.track_bg orelse trackTone(props.thumb_bg)).toClay(),
                         .corner_radius = .all(props.thumb_radius.pts()),
                     })({});
                 }
@@ -889,6 +902,56 @@ test "drag outside any container scrolls nothing" {
 /// The vertical pill of the probe scroll, from the frame that just laid out.
 fn probeThumbBox() cl.BoundingBox {
     return cl.getElementData(cl.ElementId.IDI("test-scroll-probe", vthumb_index)).bounding_box;
+}
+
+fn declareNoTrackScroll() void {
+    scroll(.{ .id = .{ .text = "test-scroll-probe" }, .h = .{ .fixed = 100 }, .w = .{ .fixed = 200 }, .show_track = false }, {}, scrollProbeChildren);
+}
+
+test "an overflowing bar draws a groove, and the pill rides at its start" {
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    // A bar is declared from the previous frame's scroll data, so the second frame is the one that has boxes.
+    cl.beginLayout();
+    declareProbeScroll();
+    _ = cl.endLayout();
+    cl.beginLayout();
+    declareProbeScroll();
+    _ = cl.endLayout();
+
+    const lane = cl.getElementData(cl.ElementId.IDI("test-scroll-probe", vtrack_index));
+    try std.testing.expect(lane.found);
+    const lb = lane.bounding_box;
+    const pill = probeThumbBox();
+    // The groove and the pill share a lane and a width, and at scroll 0 the pill sits at the groove's start.
+    try std.testing.expectApproxEqAbs(pill.x, lb.x, 0.5);
+    try std.testing.expectApproxEqAbs(pill.width, lb.width, 0.5);
+    try std.testing.expectApproxEqAbs(pill.y, lb.y, 0.5);
+    // 100 points of viewport, 4 of margin at each end: the groove is the 92 the pill travels.
+    try std.testing.expectApproxEqAbs(@as(f32, 92), lb.height, 0.5);
+}
+
+test "show_track false leaves only the pill, the overlay-bar look" {
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.beginLayout();
+    declareNoTrackScroll();
+    _ = cl.endLayout();
+    cl.beginLayout();
+    declareNoTrackScroll();
+    _ = cl.endLayout();
+
+    try std.testing.expect(!cl.getElementData(cl.ElementId.IDI("test-scroll-probe", vtrack_index)).found);
+    // The pill is still there: the bar answers the pointer, it just has no groove.
+    try std.testing.expect(probeThumbBox().height > 0);
+}
+
+test "the default groove tone sits between the pane and the pill" {
+    // The theme in force, not a copy of its numbers: a retheme must move the groove with the pane.
+    const pane = theme_mod.current().colors.background;
+    const pill = Color.rgb(0x5a, 0x5a, 0x5a);
+    const groove = trackTone(pill);
+    const lo = @min(pane.r(), pill.r());
+    const hi = @max(pane.r(), pill.r());
+    try std.testing.expect(groove.r() > lo and groove.r() < hi);
 }
 
 test "a press on the pill grabs it, and dragging it moves the content through the track ratio" {
