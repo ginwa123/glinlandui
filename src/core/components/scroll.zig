@@ -221,6 +221,10 @@ const Bar = struct {
     vertical: bool,
     // Content points one thumb point is worth: (content - viewport) / (track - thumb), so the pill stays under the pointer.
     ratio: f32,
+    // Where the pill sat from the track's start, how long the track is, and how long the pill is: the whole bar, with no assumption about the container's padding.
+    off: f32,
+    track: f32,
+    len: f32,
 };
 
 var bars: [16]Bar = undefined;
@@ -238,13 +242,13 @@ const Grab = struct {
 var grab: Grab = .{};
 
 /// Register one declared thumb, so a press can hit-test it and a drag can move the content through the ratio the track implies.
-fn registerBar(container: cl.ElementId, thumb: cl.ElementId, vertical: bool, viewport: f32, content: f32, track: f32, thumb_len: f32) void {
+fn registerBar(container: cl.ElementId, thumb: cl.ElementId, vertical: bool, viewport: f32, content: f32, track: f32, thumb_len: f32, off: f32) void {
     if (bar_n >= bars.len) return;
     const travel = track - thumb_len;
     const max_scroll = content - viewport;
     // A thumb with no travel cannot move, and a ratio of zero would make a drag a no-op rather than a jump.
     if (travel <= 0.5 or max_scroll <= 0) return;
-    bars[bar_n] = .{ .container = container, .thumb = thumb, .vertical = vertical, .ratio = max_scroll / travel };
+    bars[bar_n] = .{ .container = container, .thumb = thumb, .vertical = vertical, .ratio = max_scroll / travel, .off = off, .track = track, .len = thumb_len };
     bar_n += 1;
 }
 
@@ -268,6 +272,40 @@ pub fn beginThumbGrab(x: f32, y: f32) bool {
             .ratio = b.ratio,
             .last = if (b.vertical) y else x,
         };
+        return true;
+    }
+    return false;
+}
+
+/// A press on the BAR rather than on the pill: the content jumps so the pill's centre lands under the pointer, and the same press keeps sliding it.
+pub fn beginBarPress(x: f32, y: f32) bool {
+    grab.active = false;
+    // Newest first, for the same reason a grab does: the innermost bar is declared last, so it is the one on top.
+    var i = bar_n;
+    while (i > 0) {
+        i -= 1;
+        const b = bars[i];
+        const el = cl.getElementData(b.thumb);
+        if (!el.found) continue;
+        const tb = el.bounding_box;
+        if (tb.width <= 0 or tb.height <= 0) continue;
+        const along = if (b.vertical) y else x;
+        const cross = if (b.vertical) x else y;
+        const cross_lo = if (b.vertical) tb.x else tb.y;
+        const cross_len = if (b.vertical) tb.width else tb.height;
+        // The track starts where the pill was declared `off` from, and runs `track` long: no dependence on the container's padding or borders.
+        const track_lo = (if (b.vertical) tb.y else tb.x) - b.off;
+        if (cross < cross_lo or cross >= cross_lo + cross_len) continue;
+        if (along < track_lo or along >= track_lo + b.track) continue;
+        // Centre the pill on the press, which is what "click the track" means everywhere; the clamp at the ends is the caller's job below.
+        const move = (along - b.len * 0.5 - (if (b.vertical) tb.y else tb.x)) * b.ratio;
+        if (b.vertical) {
+            nudgeClamped(b.container, .vertical, 0, move);
+        } else {
+            nudgeClamped(b.container, .horizontal, move, 0);
+        }
+        // The pill is under the pointer now, so the press can drag it from here without a second click.
+        grab = .{ .active = true, .container = b.container, .vertical = b.vertical, .ratio = b.ratio, .last = along };
         return true;
     }
     return false;
@@ -428,7 +466,7 @@ fn declareScrollbars(props: ScrollProps) void {
                     .background_color = (if (cl.pointerOver(cl.ElementId.IDI(props.id.str(), vthumb_index))) props.thumb_hover_bg else props.thumb_bg).toClay(),
                     .corner_radius = .all(props.thumb_radius.pts()),
                 })({});
-                registerBar(props.id.clay(), cl.ElementId.IDI(props.id.str(), vthumb_index), true, viewport, content, track, len);
+                registerBar(props.id.clay(), cl.ElementId.IDI(props.id.str(), vthumb_index), true, viewport, content, track, len, off);
             }
         }
     }
@@ -471,7 +509,7 @@ fn declareScrollbars(props: ScrollProps) void {
                     .background_color = (if (cl.pointerOver(cl.ElementId.IDI(props.id.str(), hthumb_index))) props.thumb_hover_bg else props.thumb_bg).toClay(),
                     .corner_radius = .all(props.thumb_radius.pts()),
                 })({});
-                registerBar(props.id.clay(), cl.ElementId.IDI(props.id.str(), hthumb_index), false, viewport, content, track, len);
+                registerBar(props.id.clay(), cl.ElementId.IDI(props.id.str(), hthumb_index), false, viewport, content, track, len, off);
             }
         }
     }
@@ -872,6 +910,48 @@ test "a press on the pill grabs it, and dragging it moves the content through th
     try std.testing.expect(!thumbGrabbed());
     // A drag after the release is nobody's: the container's 1:1 path takes it again.
     try std.testing.expect(!moveThumb(cx, cy + 20));
+}
+
+test "a press on the track below the pill jumps the content and keeps the pill grabbed" {
+    var s = dispatch.PtrState{};
+    const h = try dragSetup(&s);
+    // A thumb is declared from the previous frame's scroll data, so the second frame is the one with a box; at scroll 0 the pill sits at the track's start.
+    dragFrame();
+    const bb = probeThumbBox();
+    const cx = bb.x + bb.width * 0.5;
+    const press_y = bb.y + 40;
+    try std.testing.expect(beginBarPress(cx, press_y));
+    try std.testing.expect(thumbGrabbed());
+    dragFrame();
+    // Centring a 24 point pill on a press 40 points down the track is 28 points of pill travel, at 300/68 content points each.
+    const y1 = cl.getElementData(cl.getElementId("scroll-probe")).bounding_box.y;
+    try std.testing.expectApproxEqAbs(h.y0 - 28 * (300.0 / 68.0), y1, 1.0);
+    endThumbGrab();
+    try std.testing.expect(!thumbGrabbed());
+}
+
+test "a press past the end of the track stops at the last content point" {
+    var s = dispatch.PtrState{};
+    const h = try dragSetup(&s);
+    dragFrame();
+    const bb = probeThumbBox();
+    const cx = bb.x + bb.width * 0.5;
+    // 88 points down a 92 point track asks for more travel than the 68 the pill has left, so the content stops at its end rather than overshooting.
+    try std.testing.expect(beginBarPress(cx, bb.y + 88));
+    dragFrame();
+    const y1 = cl.getElementData(cl.getElementId("scroll-probe")).bounding_box.y;
+    try std.testing.expectApproxEqAbs(h.y0 - 300, y1, 1.0);
+    endThumbGrab();
+}
+
+test "a press in the content beside the bar is not a bar press" {
+    var s = dispatch.PtrState{};
+    _ = try dragSetup(&s);
+    dragFrame();
+    const bb = probeThumbBox();
+    // The bar is a strip the pill's own width wide: a press 40 points into the content must stay a content press.
+    try std.testing.expect(!beginBarPress(bb.x - 40, bb.y + 40));
+    try std.testing.expect(!thumbGrabbed());
 }
 
 test "a press away from the pill grabs nothing, so a content drag stays 1:1" {
