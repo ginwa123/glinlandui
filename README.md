@@ -609,6 +609,80 @@ Two consequences that shape both the app API and the test API:
 The E2E layer is built around those two facts, and it is why it looks slightly
 different from Compose's.
 
+### What a frame costs
+
+Immediate mode has one cost model, and it is worth stating plainly: **a frame
+costs what it DECLARES, not what the app's model holds.** Clay lays out every
+element the callback opens, so a 10 000-row model of which 28 rows are declared
+costs the same as a 28-row model.
+
+Measured on the frame thread — declare + `endLayout` + the command digest, no
+present and no raster — at 1280x840, `ReleaseFast`, Zig 0.16.0:
+
+| declared | rectangles | + one label each | + a fresh string each frame |
+|---|---|---|---|
+| 100 | 0.04 ms | 0.05 ms | 0.12 ms |
+| 500 | 0.22 ms | 0.27 ms | 0.64 ms |
+| 1000 | 0.46 ms | 0.61 ms | 1.51 ms |
+| 2000 | 1.27 ms | 1.55 ms | 3.38 ms |
+| 4000 | 3.71 ms | 4.30 ms | 8.24 ms |
+| 8000 | 10.17 ms | over the ceiling | over the ceiling |
+
+Reading it:
+
+- **~0.5 µs per element** up to a thousand, ~0.95 µs at four thousand. The curve
+  is slightly superlinear, so nothing about it is free at scale.
+- **A clip does not help the frame thread.** 4000 rows inside a scroll pane cost
+  the same with a clip as without one — layout still visits every declared
+  element. Culling (backgrounds included since #28) saves render commands and
+  their digest work, not the layout pass.
+- **Text is measured once per distinct string.** Static labels add ~0.15 ms per
+  4000 rows; text that changes every frame roughly doubles the rectangle case,
+  because every new string is a fresh `stb_truetype` measurement.
+- **Budgets**: 60 Hz gives a frame 16.67 ms and 144 Hz gives it 6.94 ms, for
+  layout *and* raster *and* present together. Keep declared elements in the low
+  thousands, and virtualise anything that can grow.
+
+#### The element ceiling
+
+Clay sizes its per-element arrays from a ceiling: **8192 elements** by default. A
+frame past it is truncated — Clay drops the tail of the tree. Since #29 that is a
+panic in `Debug`, one `log.err` in `Release`, and nothing at all in a test build
+unless the test installs `frame.capacity_error_sink`. An app that genuinely needs
+more says so before its host exists, because the arena is measured from it:
+
+```zig
+frame.max_elements = 32_768; // before Host.init; memory grows linearly with it
+```
+
+Related, and cheaper: `frame.warn_past_elements` (4000 by default) makes the
+engine log **once** on the frame that declares more than that. An app that
+doubled its tree hears about it at the frame that did it, instead of from a
+profiler a week later. Set it to 0 to turn the warning off.
+
+#### Virtualisation is the pattern, and it is the only one
+
+There is no declared-side skip and no subtree memo, deliberately. A memo in front
+of immediate-mode layout is a retained tree wearing a disguise: the same
+invalidation bugs, plus a cache to keep honest. What the engine gives you
+instead is virtualisation — declare only the rows the viewport can show:
+
+- [`examples/lazy_scroll`](examples/lazy_scroll) is the reference: 10 000 rows in
+  the model, 28 declared per frame at 900x640 (`ci/lazy_scroll_bench.expected`),
+  about 1.2 ms average on an M-series Mac *including* the software rasteriser.
+  Model size never enters frame cost; only declared elements do.
+- The `lazy-scroll` CI job runs that bench on macOS, Linux and Windows and gates
+  both the work (identical numbers everywhere) and the timing.
+
+The two present-side levers exist for the other tail of the problem — a frame
+that is expensive to *draw* rather than to declare:
+
+- `frame.commandsRepeated()` — true when this frame's commands are byte-for-byte
+  the previous frame's. It is one FNV-1a digest, computed once per frame.
+- `frame.memo_enabled` — makes the renderer skip the draw on such a frame. Off by
+  default: presenting an identical frame again is usually cheaper than proving it
+  was not needed.
+
 ---
 
 ## Testing
