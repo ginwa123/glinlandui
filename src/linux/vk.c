@@ -1314,6 +1314,7 @@ static int ensure_offscreen(GlinVk *v, int w, int h) {
                                  &v->read_buffer, &v->read_memory, &v->read_map) != 0)
                 return -1;
             v->read_cap = need;
+            fprintf(stderr, "vk ensure(readback, same target): map=%p cap=%llu\n", v->read_map, (unsigned long long)v->read_cap);
         }
         return 0;
     }
@@ -1447,6 +1448,10 @@ int glin_vk_offscreen(GlinVk *v, const GlinVkVertex *verts, int nverts,
     if (vkWaitForFences(v->dev, 1, &f->fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) return fail("vkWaitForFences failed (offscreen)");
 
     if (readback_ready(v, (VkDeviceSize)w * (VkDeviceSize)h * 4) != 0) return -1;
+    fprintf(stderr, "vk offscreen: out=%p map=%p cap=%llu buf=%p need=%llu sizeof_v=%zu rm_off=%zu\n",
+            (void *)out, v->read_map, (unsigned long long)v->read_cap, (void *)v->read_buffer,
+            (unsigned long long)((VkDeviceSize)w * (VkDeviceSize)h * 4), sizeof(GlinVk),
+            (size_t)((char *)&v->read_map - (char *)v));
     memcpy(out, v->read_map, (size_t)w * (size_t)h * 4);
     return 0;
 }
