@@ -1,12 +1,12 @@
-# Linux renderer: GLES3 → Vulkan (handoff)
+# Linux renderer: GLES3 → Vulkan
 
-Status: **spec only.** No code has changed yet. This document plus `src/linux/vk.h` (the
-proposed C ABI) is the starting point for the Linux-side implementation.
+Status: **landed.** The renderer is Vulkan now; this document is the design record and the
+explanation of why each choice was made.
 
 ## Goal
 
-The Linux backend's GPU path is Wayland + **EGL + GLES3**. Replace it with **Vulkan**, keeping
-the renderer contract the core frame path already drives. macOS (Metal), Windows (D3D11) and the
+The Linux backend's GPU path was Wayland + **EGL + GLES3**, and is now **Vulkan**, behind the same
+renderer contract the core frame path already drives. macOS (Metal), Windows (D3D11) and the
 browser (CPU) are untouched.
 
 Done means:
@@ -19,6 +19,44 @@ Done means:
   builds keep selecting `core/render_software.zig` (`src/platform.zig`). Only the Linux-only
   `native-test` set changes.
 - CI green, squash-merged to `main`.
+
+## As built
+
+| file | what it is |
+|---|---|
+| `src/linux/vk.h` | the shim ABI: create/destroy/resize/set_texture/draw/offscreen, one 17-float vertex, per-segment draws |
+| `src/linux/vk.c` | the Vulkan objects: instance, wayland surface, device, swapchain, render pass, three pipelines, texture table, offscreen readback |
+| `src/linux/shaders/*.vert`, `*.frag`, `*.spv` | `quad.vert` + `rect`/`text`/`image` fragments, and the committed SPIR-V |
+| `src/linux/renderer.zig` | geometry, the text and image caches, clip arithmetic — every decision |
+| `src/linux/vk_parity_test.zig` | the GPU-vs-CPU gate, run by `zig build native-test` |
+| `src/linux/present.zig` | **deleted**: presenting is part of `drawCommands` |
+| `window.zig`, `build.zig`, `ci.yml`, docs | EGL out, `vulkan` in, `libvulkan-dev` + `mesa-vulkan-drivers` in CI |
+
+Verified, on the code that landed:
+
+| host | command | result |
+|---|---|---|
+| macOS (arm64) | `zig build`, `zig build test` | green, 1143/1145 (parity lock 1145) |
+| macOS | `zginlint:check`, `lines:check`, `zig fmt --check` | 0 findings, no file over 3000 lines, formatted |
+| Linux (arm64 container, lavapipe) | `zig build -Doptimize=ReleaseSafe` | green |
+| Linux | `zig build test` | 1143/1145 — the same count as macOS |
+| Linux | `zig build native-test` | 643/650 (7 skipped), including `vulkan vs cpu` diffs of **1/255** on `rects`, `rounded`, `side_bar` and the image quad |
+| Linux | `zig build bench-lazy-scroll` + `ci/check_lazy_scroll_bench.sh` | `declared=28`, `scroll_y=-219430`, avg 0.08 ms — identical to the GLES3 run |
+| Linux + weston headless | the demo, 3 frames | device created on llvmpipe, first frame drawn and presented, clean shutdown |
+
+Regenerate the shaders with `sh tools/build_shaders.sh` (needs `glslang-tools`); the build itself
+never compiles GLSL, so the committed `.spv` is what a Linux `zig build` reads.
+
+Two bugs only a real compositor could find, both fixed:
+
+- **The first frame cannot wait for a frame callback.** A surface with no buffer attached is not
+  mapped, so the compositor owes it no callback — the old pre-loop `glClear` + `eglSwapBuffers` had
+  been presenting that first buffer, and removing it left the loop waiting for a callback it would
+  never get. The window now draws the first frame immediately.
+- **The swapchain must die before the `wl_surface`.** `host.deinit()` runs after `run()` returns,
+  which is after the window's `defer` destroyed the surface; `vkDestroySwapchainKHR` then segfaulted
+  inside libwayland. `render.shutdown()` is now a `defer` registered right after `attach`, so it runs
+  before the surface goes.
 
 ## How the Linux renderer is wired today
 
@@ -196,8 +234,9 @@ podman exec 6b06aed45bfe sh -lc 'cd /w && zig build bench-lazy-scroll && sh ci/c
 podman exec 6b06aed45bfe sh -lc 'cd /w && vulkaninfo --summary | head -20'   # lavapipe present?
 ```
 
-A windowed run needs a compositor (`weston --backend=headless` inside the container) plus a
-`WAYLAND_DISPLAY`; the offscreen parity test needs neither, which is why it is the real gate.
+A windowed run needs a compositor; `weston --backend=headless-backend.so --socket=wayland-test`
+with `XDG_RUNTIME_DIR` and `WAYLAND_DISPLAY=wayland-test` is how the demo run above was checked.
+The offscreen parity test needs neither, which is why it is the real gate in CI.
 
 On macOS, before calling it done:
 

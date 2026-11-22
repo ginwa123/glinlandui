@@ -12,7 +12,7 @@ Consumers write `@import("glinlandui")` and get the same surface everywhere:
 
 | host | window | renderer | text | status |
 |---|---|---|---|---|
-| Linux | Wayland (`xdg-shell`) | EGL + GLES3 | pangocairo | native, tested in CI |
+| Linux | Wayland (`xdg-shell`) | Vulkan | pangocairo | native, tested in CI |
 | macOS | Cocoa | CoreGraphics / shared CPU rasterizer | shared estimator | native, tested in CI |
 | anywhere else | — | shared CPU rasterizer (real RGBA8 pixels) | shared estimator | portable fallback |
 | **test builds** | — | shared CPU rasterizer | deterministic estimator | **every OS** |
@@ -46,7 +46,7 @@ versa.
 - **Zig 0.16.0** (`minimum_zig_version` in `build.zig.zon`).
 - **Linux** — a C toolchain plus:
   - `wayland-scanner` at `/usr/sbin/wayland-scanner` (used at build time for protocol codegen)
-  - `wayland-client`, `wayland-egl`, `EGL`, `GLESv2`
+  - `wayland-client`, `vulkan`
   - the pangocairo stack: `cairo`, `pango-1.0`, `pangocairo-1.0`, `fontconfig`, `freetype`, `harfbuzz`, `gobject-2.0`, `glib-2.0` (with headers)
 - **macOS** — Xcode command line tools (AppKit, Foundation, CoreGraphics).
 
@@ -323,7 +323,7 @@ you asked for — the two outputs just report what each format can hold.
 
 Rendering works exactly as before: props are `Color`, and the widgets hand
 `.toClay()` to Clay. `render.u32ToClayColor` still exists as a legacy shim for a
-pre-`Color` caller and now delegates to the same `Color` rule, so the GLES3 and
+pre-`Color` caller and now delegates to the same `Color` rule, so the GPU and
 CPU backends cannot drift apart.
 
 ---
@@ -755,7 +755,7 @@ If you change a rule, **plant a violation and watch it fail** before trusting it
 
 ### 4. `zig build native-test` — the Linux-only superset
 
-Runs the real Wayland/EGL/GLES3/pangocairo tests. Deliberately **outside** the
+Runs the real Wayland/Vulkan/pangocairo tests. Deliberately **outside** the
 parity count (it is a superset, and it cannot run on macOS), and it is empty off
 Linux.
 
@@ -1319,8 +1319,8 @@ Honest list; each is a reasonable next task.
   the window is real either way and never blank. The example is wired there and
   CI runs the same assertions as on the other two platforms. What it does NOT
   have is a Direct3D *rasterizer*: the shared CPU rasterizer draws, and D3D11
-  composites, exactly as CoreGraphics does on macOS. Only the Linux GLES3 path
-  rasterizes on the GPU.
+  composites, exactly as CoreGraphics does on macOS. Only the Linux Vulkan path
+  rasterises on the GPU.
 - **The Linux clipboard needs a helper installed** (`wl-clipboard`, `xclip` or
   `xsel`) until the Wayland data-device protocol is implemented in the backend
   itself; without one, copy and paste are a no-op there and nowhere else.

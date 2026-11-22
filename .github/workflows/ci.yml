@@ -43,7 +43,7 @@ jobs:
         run: ./ci/check_backend_parity.sh
 
   linux:
-    name: Linux / Zig 0.16.0 / native GLES3
+    name: Linux / Zig 0.16.0 / native Vulkan
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -61,12 +61,12 @@ jobs:
             build-essential \
             fonts-dejavu-core \
             libcairo2-dev \
-            libegl-dev \
+            libvulkan-dev \
+            mesa-vulkan-drivers \
             libfontconfig1-dev \
             libfreetype6-dev \
             libfribidi-dev \
             libglib2.0-dev \
-            libgles-dev \
             libharfbuzz-dev \
             libpango1.0-dev \
             libpixman-1-dev \
@@ -110,10 +110,10 @@ jobs:
           python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.close()' "$runtime/glinlandui-demo.sock"
           test -z "$(./zig-out/bin/glinlanduidp devices)"
 
-      # native-test is the Linux-only Wayland/EGL/GLES3/Pango superset. The
+      # native-test is the Linux-only Wayland/Vulkan/Pango superset. The
       # calculator example's tests are NOT here: they are portable, so they
       # run in the parity `test` step above on every platform.
-      - name: Linux-only native tests (Wayland/EGL/GLES3/Pango)
+      - name: Linux-only native tests (Wayland/Vulkan/Pango)
         run: zig build native-test --summary all
 
       - name: Build the native executable (ReleaseSafe)
@@ -126,7 +126,7 @@ jobs:
     # The job opens a REAL Cocoa window now (mac/window.zig + mac/shim.m), so
     # this is no longer a "headless pixels" job: it is the macOS peer of the
     # Linux job above, driving the same Clay -> rasterizer -> RGBA8 pipeline
-    # through CoreGraphics instead of through a Wayland/EGL swapchain.
+    # through CoreGraphics instead of through a Wayland/Vulkan swapchain.
     name: macOS / CPU rasterizer / Cocoa window
     runs-on: macos-15
     # Deliberately shorter than the Linux job's 25. A capped Cocoa run that
@@ -356,7 +356,7 @@ jobs:
   # grid, indexed click dispatch, and real keyboard input through the Host's
   # KeyChain. It is written against the PUBLIC surface only, so it is not
   # platform-specific: `Window` is the platform indirection. On Linux it is the
-  # real Wayland/EGL/GLES3/pangocairo runtime; on macOS the CPU rasterizer
+  # real Wayland/Vulkan/pangocairo runtime; on macOS the CPU rasterizer
   # behind a real Cocoa window; on Windows the CPU rasterizer behind a real
   # Win32 window composited by D3D11 (or by GDI where the machine has no usable
   # GPU driver). Its 51 tests are part of the cross-platform parity count, so
@@ -374,7 +374,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
-            label: Linux (Wayland/EGL/GLES3/pangocairo)
+            label: Linux (Wayland/Vulkan/pangocairo)
             expect: present
           - os: macos-15
             label: macOS (portable CPU rasterizer)
@@ -405,12 +405,12 @@ jobs:
             build-essential \
             fonts-dejavu-core \
             libcairo2-dev \
-            libegl-dev \
+            libvulkan-dev \
+            mesa-vulkan-drivers \
             libfontconfig1-dev \
             libfreetype6-dev \
             libfribidi-dev \
             libglib2.0-dev \
-            libgles-dev \
             libharfbuzz-dev \
             libpango1.0-dev \
             libpixman-1-dev \
@@ -433,10 +433,10 @@ jobs:
             echo "run-calculator step: absent"
           fi
 
-      # ---- Linux: the native Wayland/EGL/GLES3/Pango superset. ----
+      # ---- Linux: the native Wayland/Vulkan/Pango superset. ----
       # `native-test` is Linux-only by construction (it wires the generated
       # protocol C TUs and the pango shim), so it belongs to this leg alone.
-      - name: Linux-only native tests (Wayland/EGL/GLES3/Pango)
+      - name: Linux-only native tests (Wayland/Vulkan/Pango)
         if: runner.os == 'Linux'
         run: zig build native-test --summary all
 
@@ -577,12 +577,12 @@ jobs:
             build-essential \
             fonts-dejavu-core \
             libcairo2-dev \
-            libegl-dev \
+            libvulkan-dev \
+            mesa-vulkan-drivers \
             libfontconfig1-dev \
             libfreetype6-dev \
             libfribidi-dev \
             libglib2.0-dev \
-            libgles-dev \
             libharfbuzz-dev \
             libpango1.0-dev \
             libpixman-1-dev \
@@ -768,8 +768,8 @@ jobs:
         run: zig fmt --check build.zig src examples tools
 
       # No `apt-get` step, deliberately. The wasm build is the one artifact in
-      # this repository that needs no system library — no Wayland, no EGL, no
-      # pango, no libc — and a job that quietly installed them would hide a
+      # this repository that needs no system library — no Wayland, no Vulkan,
+      # no pango, no libc — and a job that quietly installed them would hide a
       # regression that reintroduced the dependency.
       - name: Build the browser webapp (demo)
         run: zig build web -Doptimize=ReleaseSafe
@@ -866,12 +866,12 @@ jobs:
             build-essential \
             fonts-dejavu-core \
             libcairo2-dev \
-            libegl-dev \
+            libvulkan-dev \
+            mesa-vulkan-drivers \
             libfontconfig1-dev \
             libfreetype6-dev \
             libfribidi-dev \
             libglib2.0-dev \
-            libgles-dev \
             libharfbuzz-dev \
             libpango1.0-dev \
             libpixman-1-dev \

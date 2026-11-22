@@ -1,23 +1,19 @@
-// Agnostic GLES3 renderer — lives in src/linux/, re-exported as wayland.render.
+//! Vulkan renderer for the Linux backend: geometry, caches and clip arithmetic here, Vulkan objects in vk.c.
 const std = @import("std");
-const log = @import("../core/log.zig");
 const builtin = @import("builtin");
+const log = @import("../core/log.zig");
 const text = @import("text.zig");
 const render_common = @import("../core/render_common.zig");
+const soft = @import("../core/render_software.zig");
 const Color = @import("../core/color.zig").Color;
 const cl = @import("zclay");
-// The density the window adopted from the compositor, and the one definition of a logical-to-device pixel size.
 const ui_scale = @import("ui_scale.zig");
 const scale = @import("../core/scale.zig");
 // The one clip depth every renderer shares, so a nested clip cannot out-run any backend's stack.
-const max_clip_depth = @import("../core/render_software.zig").max_clip_depth;
+const max_clip_depth = soft.max_clip_depth;
 
-const egl = @cImport({
-    @cInclude("EGL/egl.h");
-});
-
-const gl = @cImport({
-    @cInclude("GLES3/gl3.h");
+const vk = @cImport({
+    @cInclude("vk.h");
 });
 
 const stbi = @cImport({
@@ -25,25 +21,21 @@ const stbi = @cImport({
     @cInclude("stb/stb_image_resize2.h");
 });
 
+// The SPIR-V is committed next to its GLSL (tools/build_shaders.sh), so the Linux build never needs a shader compiler.
+const quad_vert_spv = @embedFile("shaders/quad.vert.spv");
+const rect_frag_spv = @embedFile("shaders/rect.frag.spv");
+const text_frag_spv = @embedFile("shaders/text.frag.spv");
+const image_frag_spv = @embedFile("shaders/image.frag.spv");
+
 /// Headless-testable draw command: rect fill or text run.
 pub const Draw = render_common.Draw;
+/// How an image fills its box (mirrors wallpaper fit modes + stretch).
+pub const ImageFit = render_common.ImageFit;
+/// Opaque payload a widget passes through Clay's image_data pointer.
+pub const ImageRef = render_common.ImageRef;
 
 fn normChannel(v: u32) f32 {
     return @as(f32, @floatFromInt(v & 0xff)) / 255.0;
-}
-
-/// Real EGL init: eglGetDisplay + eglInitialize.
-pub fn initGL() !void {
-    if (std.c.getenv("WAYLAND_DISPLAY") == null) return error.NoDisplay;
-    if (comptime builtin.is_test) {
-        return error.NoDisplay;
-    } else {
-        const dpy = egl.eglGetDisplay(egl.EGL_DEFAULT_DISPLAY);
-        if (dpy == egl.EGL_NO_DISPLAY) return error.NoDisplay;
-        var major: egl.EGLint = 0;
-        var minor: egl.EGLint = 0;
-        if (egl.eglInitialize(dpy, &major, &minor) == egl.EGL_FALSE) return error.EglInitFailed;
-    }
 }
 
 // ---- Pure helpers (headless-testable) ----
@@ -53,14 +45,9 @@ pub fn u32ToClayColor(hex: u32) [4]f32 {
     return Color.argb(0xFF00_0000 | (hex & 0x00ff_ffff)).toClay();
 }
 
-/// Convert 0xRRGGBB to normalized GL RGBA floats (alpha 1.0).
+/// Convert 0xRRGGBB to normalized RGBA floats (alpha 1.0).
 pub fn u32ToGLColor(hex: u32) [4]f32 {
-    return .{
-        normChannel(hex >> 16),
-        normChannel(hex >> 8),
-        normChannel(hex),
-        1.0,
-    };
+    return .{ normChannel(hex >> 16), normChannel(hex >> 8), normChannel(hex), 1.0 };
 }
 
 /// Legacy fixed advance per glyph (stb fallback path only).
@@ -73,35 +60,53 @@ pub fn extentToClay(ext: text.TextExtent) cl.Dimensions {
     return .{ .w = ext.w, .h = ext.h };
 }
 
-/// Normalize a Clay 0-255 color (or an already-0-1 one) to 0-1 GL RGBA.
+/// Normalize a Clay 0-255 color (or an already-0-1 one) to 0-1 RGBA.
 fn straightColor(clay_color: [4]f32) [4]f32 {
     const mx = @max(@max(clay_color[0], clay_color[1]), @max(clay_color[2], clay_color[3]));
     if (mx <= 1.0) return clay_color;
-    return .{
-        clay_color[0] / 255.0,
-        clay_color[1] / 255.0,
-        clay_color[2] / 255.0,
-        clay_color[3] / 255.0,
-    };
+    return .{ clay_color[0] / 255.0, clay_color[1] / 255.0, clay_color[2] / 255.0, clay_color[3] / 255.0 };
 }
 
-// ---- GLES3 renderer (exe only; guarded in tests) ----
+/// The colour the render pass clears to before any command is drawn.
+pub fn clearColor() [4]f32 {
+    const clay = Color.rgb(0x11, 0x11, 0x11).toClay();
+    return .{ clay[0] / 255.0, clay[1] / 255.0, clay[2] / 255.0, clay[3] / 255.0 };
+}
 
-// Largest run this renderer will build a coverage texture for; past it the rect fallback draws instead of a 4 MB upload.
-const text_max_w: u32 = 2048;
-const text_max_h: u32 = 512;
-const text_max_bytes: usize = 4095;
+// ---- Texture ids ----
+
+// The shim's table is fixed and indexed by id, so a cache slot owns the same id for the whole run.
+pub const text_cache_size: usize = 64;
+pub const img_cache_size: usize = 32;
+/// Id 0 is the shim's 1x1 white pixel, which rect segments bind and never sample meaningfully.
+pub const text_texture_base: u32 = 1;
+pub const image_texture_base: u32 = 1 + text_cache_size;
 
 /// Text texture cache: a run's coverage is the same pixels whatever colour it is drawn in, so a hover repaint re-uses it.
-pub const text_cache_size: usize = 64;
-
 pub const TextCacheEntry = struct {
     hash: u64 = 0,
-    tex: c_uint = 0,
+    tex: u32 = 0,
     w: i32 = 0,
     h: i32 = 0,
     valid: bool = false,
     last_used: u64 = 0,
+};
+
+/// Decoded image texture cache: decoded+downscaled RGBA keyed by FNV-1a(path, max_dim).
+pub const ImgCacheEntry = struct {
+    hash: u64 = 0,
+    tex: u32 = 0,
+    w: i32 = 0,
+    h: i32 = 0,
+    valid: bool = false,
+    last_used: u64 = 0,
+};
+
+/// Decoded + uploaded image, named so decodeUploadImage and imageTexture share one return type.
+pub const DecodedImage = struct {
+    tex: u32,
+    w: i32,
+    h: i32,
 };
 
 /// Pure + headless-testable key for the texture cache: the run, its size, its box, and the sub-pixel origin the glyphs snap from.
@@ -147,39 +152,6 @@ pub fn lruVictim(entries: anytype) ?usize {
     return best;
 }
 
-// ---- Image support (wallpaper thumbnails/preview) ----
-
-/// How an image fills its box (mirrors wallpaper fit modes + stretch).
-pub const ImageFit = enum { cover, contain, stretch };
-
-/// Opaque payload a widget passes through Clay's image_data pointer.
-pub const ImageRef = struct {
-    path_ptr: [*]const u8,
-    path_len: usize,
-    fit: ImageFit = .cover,
-    /// Decode ceiling: the longest side is downscaled to this (no upscale).
-    max_dim: u16 = 256,
-};
-
-/// Decoded + uploaded image (named so decodeUploadImage and imageTexture share one return type).
-pub const DecodedImage = struct {
-    tex: c_uint,
-    w: i32,
-    h: i32,
-};
-
-/// Image texture cache: decoded+downscaled RGBA GL textures keyed by FNV-1a(path, max_dim).
-pub const img_cache_size: usize = 32;
-
-pub const ImgCacheEntry = struct {
-    hash: u64 = 0,
-    tex: c_uint = 0,
-    w: i32 = 0,
-    h: i32 = 0,
-    valid: bool = false,
-    last_used: u64 = 0,
-};
-
 /// Pure + headless-testable key for the image cache.
 pub fn hashImageKey(path: []const u8, max_dim: u16) u64 {
     var h: u64 = 0xcbf29ce484222325;
@@ -215,13 +187,11 @@ pub fn coverUv(iw: f32, ih: f32, bw: f32, bh: f32) [4]f32 {
     const img_aspect = iw / ih;
     const box_aspect = bw / bh;
     if (img_aspect > box_aspect) {
-        // Wide source: crop the sides.
         const f = box_aspect / img_aspect;
         const cu0 = (1 - f) * 0.5;
         return .{ cu0, 0, 1 - cu0, 1 };
     }
     if (img_aspect < box_aspect) {
-        // Tall source: crop top/bottom.
         const f = img_aspect / box_aspect;
         const cv0 = (1 - f) * 0.5;
         return .{ 0, cv0, 1, 1 - cv0 };
@@ -238,169 +208,87 @@ pub fn containBox(iw: f32, ih: f32, bw: f32, bh: f32) [4]f32 {
     return .{ (bw - w) * 0.5, (bh - h) * 0.5, w, h };
 }
 
-const rect_vert_src: [:0]const u8 =
-    \\#version 300 es
-    \\layout(location=0) in vec2 a_pos;
-    \\layout(location=1) in vec2 a_uv;
-    \\uniform vec2 u_res;
-    \\uniform vec2 u_pos;
-    \\uniform vec2 u_size;
-    \\out vec2 v_box;
-    \\void main() {
-    \\  vec2 p = u_pos + a_pos * u_size;
-    \\  vec2 clip = (p / u_res) * 2.0 - 1.0;
-    \\  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
-    \\  v_box = a_pos * u_size;
-    \\}
-;
-
-const rect_frag_src: [:0]const u8 =
-    \\#version 300 es
-    \\precision highp float;
-    \\uniform vec4 u_color;
-    \\uniform vec4 u_radius;
-    \\uniform int u_mode;
-    \\uniform float u_border;
-    \\uniform float u_scale;
-    \\uniform vec2 u_size;
-    \\in vec2 v_box;
-    \\out vec4 o_color;
-    \\float sdRoundBox(vec2 p, vec2 b, vec4 r) {
-    \\  float rad = (p.x < 0.0) ? (p.y < 0.0 ? r.x : r.z) : (p.y < 0.0 ? r.y : r.w);
-    \\  vec2 q = abs(p) - b + rad;
-    \\  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - rad;
-    \\}
-    \\// Pixel coverage of a signed distance (1px AA band): exactly 1.0
-    \\// when the sample is >= half a pixel inside, 0.0 half a pixel out.
-    \\// A 2px smoothstep band blurred 1px borders across two pixels and
-    \\// eroded convex corners (radius looked wrong); 1px clamp is crisp.
-    \\float cov(float d) {
-    \\  return clamp(0.5 - d * u_scale, 0.0, 1.0);
-    \\}
-    \\void main() {
-    \\  vec2 c = u_size * 0.5;
-    \\  vec2 p = v_box - c;
-    \\  float m = min(c.x, c.y);
-    \\  vec4 r = min(max(u_radius, vec4(0.0)), vec4(m));
-    \\  float d = sdRoundBox(p, c, r);
-    \\  float a = cov(d);
-    \\  if (u_mode == 1) {
-    \\    vec2 ib = max(c - vec2(u_border), vec2(0.0));
-    \\    float mi = min(ib.x, ib.y);
-    \\    vec4 ri = min(max(r - vec4(u_border), vec4(0.0)), vec4(mi));
-    \\    float d2 = sdRoundBox(p, ib, ri);
-    \\    float a2 = cov(d2);
-    \\    a *= (1.0 - a2);
-    \\  }
-    \\  if (a <= 0.0) discard;
-    \\  o_color = vec4(u_color.rgb, u_color.a * a);
-    \\}
-;
-
-const text_vert_src: [:0]const u8 =
-    \\#version 300 es
-    \\layout(location=0) in vec2 a_pos;
-    \\layout(location=1) in vec2 a_uv;
-    \\uniform vec2 u_res;
-    \\uniform vec2 u_pos;
-    \\uniform vec2 u_size;
-    \\out vec2 v_uv;
-    \\void main() {
-    \\  vec2 p = u_pos + a_pos * u_size;
-    \\  vec2 clip = (p / u_res) * 2.0 - 1.0;
-    \\  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
-    \\  v_uv = a_uv;
-    \\}
-;
-
-const text_frag_src: [:0]const u8 =
-    \\#version 300 es
-    \\precision mediump float;
-    \\in vec2 v_uv;
-    \\uniform sampler2D u_tex;
-    \\uniform vec4 u_color;
-    \\out vec4 o_color;
-    \\void main() {
-    \\  float a = texture(u_tex, v_uv).r;
-    \\  o_color = vec4(u_color.rgb, u_color.a * a);
-    \\}
-;
-
-// Image path: the decoded pixels carry their own colour, so the shader outputs the texture directly.
-const image_frag_src: [:0]const u8 =
-    \\#version 300 es
-    \\precision mediump float;
-    \\in vec2 v_uv;
-    \\uniform sampler2D u_tex;
-    \\out vec4 o_color;
-    \\void main() { o_color = texture(u_tex, v_uv); }
-;
-
-fn compileShader(kind: c_uint, src: [:0]const u8) !c_uint {
-    const sh = gl.glCreateShader(kind);
-    if (sh == 0) return error.ShaderCreateFailed;
-    errdefer gl.glDeleteShader(sh);
-    var ptr: [*c]const u8 = src.ptr;
-    gl.glShaderSource(sh, 1, @ptrCast(&ptr), null);
-    gl.glCompileShader(sh);
-    var status: c_int = 0;
-    gl.glGetShaderiv(sh, gl.GL_COMPILE_STATUS, &status);
-    if (status == 0) {
-        var info_log: [512]u8 = undefined;
-        var len: c_int = 0;
-        gl.glGetShaderInfoLog(sh, 512, &len, @ptrCast(&info_log));
-        const n: usize = @intCast(@max(len, 0));
-        log.err("shader compile failed: {s}", .{info_log[0..@min(n, info_log.len)]});
-        return error.ShaderCompileFailed;
-    }
-    return sh;
+/// Pure: a device-pixel clip clamped into the viewport, which is what Vulkan requires (GL tolerated an oversized box).
+pub fn clampScissor(x: f32, y: f32, w: f32, h: f32, win_w: i32, win_h: i32) [4]i32 {
+    const x0 = @max(@floor(x), 0);
+    const y0 = @max(@floor(y), 0);
+    const x1 = @min(x0 + @max(@round(w), 0), @as(f32, @floatFromInt(@max(win_w, 0))));
+    const y1 = @min(y0 + @max(@round(h), 0), @as(f32, @floatFromInt(@max(win_h, 0))));
+    return .{
+        @intFromFloat(x0),
+        @intFromFloat(y0),
+        @intFromFloat(@max(x1 - x0, 0)),
+        @intFromFloat(@max(y1 - y0, 0)),
+    };
 }
 
-fn linkProgram(vs: c_uint, fs: c_uint) !c_uint {
-    const prog = gl.glCreateProgram();
-    if (prog == 0) return error.ProgramCreateFailed;
-    errdefer gl.glDeleteProgram(prog);
-    gl.glAttachShader(prog, vs);
-    gl.glAttachShader(prog, fs);
-    gl.glLinkProgram(prog);
-    var status: c_int = 0;
-    gl.glGetProgramiv(prog, gl.GL_LINK_STATUS, &status);
-    if (status == 0) {
-        var info_log: [512]u8 = undefined;
-        var len: c_int = 0;
-        gl.glGetProgramInfoLog(prog, 512, &len, @ptrCast(&info_log));
-        const n: usize = @intCast(@max(len, 0));
-        log.err("program link failed: {s}", .{info_log[0..@min(n, info_log.len)]});
-        return error.ProgramLinkFailed;
-    }
-    return prog;
+/// The overlap of two device-pixel clips; a zero size means nothing of the run is visible.
+pub fn intersectClip(cur: ?[4]i32, next: [4]i32) [4]i32 {
+    const prev = cur orelse return next;
+    const x0 = @max(prev[0], next[0]);
+    const y0 = @max(prev[1], next[1]);
+    const x1 = @min(prev[0] + prev[2], next[0] + next[2]);
+    const y1 = @min(prev[1] + prev[3], next[1] + next[3]);
+    return .{ x0, y0, @max(x1 - x0, 0), @max(y1 - y0, 0) };
+}
+
+/// Compiled-in shader source, exposed so a test can assert the coverage band stays one device pixel.
+pub const rect_frag_source: []const u8 = @embedFile("shaders/rect.frag");
+
+// ---- Geometry ----
+
+// Largest run this renderer will build a coverage texture for; past it the rect fallback draws instead of a 4 MB upload.
+const text_max_w: u32 = 2048;
+const text_max_h: u32 = 512;
+const text_max_bytes: usize = 4095;
+
+/// One vertex: the same 17 floats mac/metal.h and windows/shim.h declare, so nothing about this layout is new.
+pub const Vertex = extern struct {
+    pos: [2]f32,
+    local: [2]f32,
+    size: [2]f32,
+    radius: [4]f32,
+    color: [4]f32,
+    mode: f32,
+    border: f32,
+    kind: f32,
+};
+
+/// Which pipeline a segment draws with. The shim maps it to one of its three.
+pub const Kind = struct {
+    pub const rect: c_int = 0;
+    pub const text: c_int = 1;
+    pub const image: c_int = 2;
+};
+
+// The window hands its surface over before the first frame; the renderer is built lazily by the frame path, so it picks this up on first draw.
+var pending_display: ?*anyopaque = null;
+var pending_surface: ?*anyopaque = null;
+
+/// The Wayland surface the renderer should attach to. Called by the window before `run()`.
+pub fn attach(display: ?*anyopaque, surface: ?*anyopaque) void {
+    pending_display = display;
+    pending_surface = surface;
+}
+
+// The renderer that owns a live device, so the window can release the swapchain before it destroys the surface it draws into.
+var live_renderer: ?*Renderer = null;
+
+/// Tear the GPU side down. The window calls this BEFORE destroying its `wl_surface`: a swapchain (and the VkSurfaceKHR) outlives neither.
+pub fn shutdown() void {
+    const r = live_renderer orelse return;
+    live_renderer = null;
+    pending_display = null;
+    pending_surface = null;
+    if (r.device) |d| vk.glin_vk_destroy(d);
+    r.device = null;
 }
 
 pub const Renderer = struct {
     alloc: std.mem.Allocator,
-    prog_rect: c_uint = 0,
-    prog_text: c_uint = 0,
-    prog_image: c_uint = 0,
-    vao: c_uint = 0,
-    vbo: c_uint = 0,
-    /// Cached uniform locations (queried once at init, reused per quad).
-    loc_rect_res: c_int = -1,
-    loc_rect_pos: c_int = -1,
-    loc_rect_size: c_int = -1,
-    loc_rect_col: c_int = -1,
-    loc_rect_rad: c_int = -1,
-    loc_rect_mode: c_int = -1,
-    loc_rect_border: c_int = -1,
-    loc_rect_scale: c_int = -1,
-    loc_image_res: c_int = -1,
-    loc_image_pos: c_int = -1,
-    loc_image_size: c_int = -1,
-    loc_image_tex: c_int = -1,
-    loc_text_res: c_int = -1,
-    loc_text_pos: c_int = -1,
-    loc_text_size: c_int = -1,
-    loc_text_col: c_int = -1,
-    loc_text_tex: c_int = -1,
+    device: ?*vk.GlinVk = null,
+    // True once a create was tried, so a machine without a Vulkan driver reports once instead of per frame.
+    device_attempted: bool = false,
     /// Text coverage texture LRU (see text_cache_size docs).
     text_cache: [text_cache_size]TextCacheEntry = [_]TextCacheEntry{.{}} ** text_cache_size,
     text_cache_clock: u64 = 0,
@@ -411,326 +299,333 @@ pub const Renderer = struct {
     img_cache_clock: u64 = 0,
     img_cache_hits: u64 = 0,
     img_cache_misses: u64 = 0,
-    /// Decodes performed this frame (budget: at most img_decode_budget misses decode per frame so opening a full gallery never stalls; the rest keep their.
+    /// Decodes performed this frame (budget: at most this many misses decode per frame, so a gallery opening never stalls).
     img_decodes_this_frame: u32 = 0,
-    /// The clip in force, in DEVICE pixels and GL orientation (x, y, w, h): already intersected with every scissor above it.
+    /// The clip in force for the vertices being accumulated, already intersected with every scissor above it.
     clip_rect: ?[4]i32 = null,
     /// The clips each `scissor_start` interrupted, so `scissor_end` restores its parent instead of clearing the clip.
     clip_stack: [max_clip_depth]?[4]i32 = @splat(null),
     clip_depth: usize = 0,
+    verts: std.ArrayList(Vertex) = .empty,
+    segs: std.ArrayList(vk.GlinSegment) = .empty,
+    seg_start: usize = 0,
+    seg_texture: u32 = 0,
+    seg_kind: c_int = Kind.rect,
+    /// True once the first frame has been described, so the log line appears exactly once.
+    reported_first_frame: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) !Renderer {
-        if (comptime builtin.is_test) return error.NoDisplay;
-        var self = Renderer{ .alloc = allocator };
-
-        // Shaders (compile once, log errors).
-        const vs_rect = try compileShader(gl.GL_VERTEX_SHADER, rect_vert_src);
-        defer gl.glDeleteShader(vs_rect);
-        const fs_rect = try compileShader(gl.GL_FRAGMENT_SHADER, rect_frag_src);
-        defer gl.glDeleteShader(fs_rect);
-        self.prog_rect = try linkProgram(vs_rect, fs_rect);
-
-        const vs_text = try compileShader(gl.GL_VERTEX_SHADER, text_vert_src);
-        defer gl.glDeleteShader(vs_text);
-        const fs_text = try compileShader(gl.GL_FRAGMENT_SHADER, text_frag_src);
-        defer gl.glDeleteShader(fs_text);
-        self.prog_text = try linkProgram(vs_text, fs_text);
-
-        // The image program shares the text vertex shader.
-        const vs_image = try compileShader(gl.GL_VERTEX_SHADER, text_vert_src);
-        defer gl.glDeleteShader(vs_image);
-        const fs_image = try compileShader(gl.GL_FRAGMENT_SHADER, image_frag_src);
-        defer gl.glDeleteShader(fs_image);
-        self.prog_image = try linkProgram(vs_image, fs_image);
-
-        // Cache uniform locations once (per-quad string lookups are pure overhead — see struct docs).
-        self.loc_rect_res = gl.glGetUniformLocation(self.prog_rect, "u_res");
-        self.loc_rect_pos = gl.glGetUniformLocation(self.prog_rect, "u_pos");
-        self.loc_rect_size = gl.glGetUniformLocation(self.prog_rect, "u_size");
-        self.loc_rect_col = gl.glGetUniformLocation(self.prog_rect, "u_color");
-        self.loc_rect_rad = gl.glGetUniformLocation(self.prog_rect, "u_radius");
-        self.loc_rect_mode = gl.glGetUniformLocation(self.prog_rect, "u_mode");
-        self.loc_rect_border = gl.glGetUniformLocation(self.prog_rect, "u_border");
-        self.loc_rect_scale = gl.glGetUniformLocation(self.prog_rect, "u_scale");
-        // An unset float uniform reads 0, which would make every `cov` return 0.5, so it starts at 1x.
-        if (self.loc_rect_scale >= 0) gl.glUniform1f(self.loc_rect_scale, 1.0);
-        self.loc_image_res = gl.glGetUniformLocation(self.prog_image, "u_res");
-        self.loc_image_pos = gl.glGetUniformLocation(self.prog_image, "u_pos");
-        self.loc_image_size = gl.glGetUniformLocation(self.prog_image, "u_size");
-        self.loc_image_tex = gl.glGetUniformLocation(self.prog_image, "u_tex");
-        self.loc_text_res = gl.glGetUniformLocation(self.prog_text, "u_res");
-        self.loc_text_pos = gl.glGetUniformLocation(self.prog_text, "u_pos");
-        self.loc_text_size = gl.glGetUniformLocation(self.prog_text, "u_size");
-        self.loc_text_col = gl.glGetUniformLocation(self.prog_text, "u_color");
-        self.loc_text_tex = gl.glGetUniformLocation(self.prog_text, "u_tex");
-
-        // Unit quad VBO (pos + uv) + VAO.
-        const quad: [4][4]f32 = .{
-            .{ 0, 0, 0, 0 },
-            .{ 1, 0, 1, 0 },
-            .{ 0, 1, 0, 1 },
-            .{ 1, 1, 1, 1 },
-        };
-        gl.glGenVertexArrays(1, @ptrCast(&self.vao));
-        gl.glBindVertexArray(self.vao);
-        gl.glGenBuffers(1, @ptrCast(&self.vbo));
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.vbo);
-        gl.glBufferData(gl.GL_ARRAY_BUFFER, @sizeOf(@TypeOf(quad)), @ptrCast(&quad), gl.GL_STATIC_DRAW);
-        gl.glEnableVertexAttribArray(0);
-        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(0));
-        gl.glEnableVertexAttribArray(1);
-        gl.glVertexAttribPointer(1, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(2 * @sizeOf(f32)));
-        gl.glBindVertexArray(0);
-        return self;
+        // No device yet: the window attaches its surface before the first frame, and a test may attach an offscreen device instead.
+        return .{ .alloc = allocator };
     }
 
     pub fn deinit(self: *Renderer) void {
-        for (&self.text_cache) |*e| {
-            if (e.valid and e.tex != 0) {
-                var t = e.tex;
-                gl.glDeleteTextures(1, @ptrCast(&t));
-                e.tex = 0;
-                e.valid = false;
-            }
-        }
-        for (&self.img_cache) |*e| {
-            if (e.valid and e.tex != 0) {
-                var t = e.tex;
-                gl.glDeleteTextures(1, @ptrCast(&t));
-                e.tex = 0;
-                e.valid = false;
-            }
-        }
-        if (self.vbo != 0) {
-            var v = self.vbo;
-            gl.glDeleteBuffers(1, @ptrCast(&v));
-        }
-        if (self.vao != 0) {
-            var a = self.vao;
-            gl.glDeleteVertexArrays(1, @ptrCast(&a));
-        }
-        if (self.prog_rect != 0) gl.glDeleteProgram(self.prog_rect);
-        if (self.prog_text != 0) gl.glDeleteProgram(self.prog_text);
-        if (self.prog_image != 0) gl.glDeleteProgram(self.prog_image);
-        self.* = undefined;
+        if (self.device) |d| vk.glin_vk_destroy(d);
+        self.device = null;
+        self.verts.deinit(self.alloc);
+        self.segs.deinit(self.alloc);
     }
 
-    fn drawQuad(self: *Renderer, prog: c_uint, win_w: i32, win_h: i32, x: f32, y: f32, w: f32, h: f32, color: [4]f32) void {
-        if (w <= 0 or h <= 0) return;
-        gl.glUseProgram(prog);
-        gl.glBindVertexArray(self.vao);
-        const rw: f32 = @floatFromInt(win_w);
-        const rh: f32 = @floatFromInt(win_h);
-        // Cached locations (queried once at init).
-        var loc_res = self.loc_rect_res;
-        var loc_pos = self.loc_rect_pos;
-        var loc_size = self.loc_rect_size;
-        var loc_col = self.loc_rect_col;
-        if (prog != self.prog_rect) {
-            loc_res = gl.glGetUniformLocation(prog, "u_res");
-            loc_pos = gl.glGetUniformLocation(prog, "u_pos");
-            loc_size = gl.glGetUniformLocation(prog, "u_size");
-            loc_col = gl.glGetUniformLocation(prog, "u_color");
-        }
-        if (loc_res >= 0) gl.glUniform2f(loc_res, rw, rh);
-        if (loc_pos >= 0) gl.glUniform2f(loc_pos, x, y);
-        if (loc_size >= 0) gl.glUniform2f(loc_size, w, h);
-        if (loc_col >= 0) {
-            const r = color[0] / 255.0;
-            const g = color[1] / 255.0;
-            const b = color[2] / 255.0;
-            const a = color[3] / 255.0;
-            // u32ToGLColor callers pass 0-255 Clay colors; normalized u32ToGLColor output (0-1) also works: values < 1 stay dim but visible.
-            const mx = @max(@max(color[0], color[1]), @max(color[2], color[3]));
-            if (mx <= 1.0) {
-                gl.glUniform4f(loc_col, color[0], color[1], color[2], color[3]);
-            } else {
-                gl.glUniform4f(loc_col, r, g, b, a);
-            }
-        }
-        // Reset the rounded path: drawQuad is the square fast path sharing prog_rect, so a stale u_radius/u_mode from drawRoundBox would otherwise leak into.
-        if (prog == self.prog_rect) {
-            if (self.loc_rect_rad >= 0) gl.glUniform4f(self.loc_rect_rad, 0, 0, 0, 0);
-            if (self.loc_rect_mode >= 0) gl.glUniform1i(self.loc_rect_mode, 0);
-            if (self.loc_rect_border >= 0) gl.glUniform1f(self.loc_rect_border, 0);
-        }
-        gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4);
-        gl.glBindVertexArray(0);
+    /// True when a device is actually driving the screen.
+    pub fn active(self: *const Renderer) bool {
+        return self.device != null;
     }
 
-    /// Pure helper: Clay CornerRadius -> rect-shader u_radius vec4 (TL, TR, BL, BR in px), clamped at zero (the shader additionally clamps to half the box.
+    /// The physical device's name, or "" before a device exists.
+    pub fn deviceName(self: *const Renderer) []const u8 {
+        const d = self.device orelse return "";
+        return std.mem.span(vk.glin_vk_device_name(d));
+    }
+
+    fn ensure(self: *Renderer, w: i32, h: i32) ?*vk.GlinVk {
+        if (self.device) |d| return d;
+        if (self.device_attempted) return null;
+        self.device_attempted = true;
+        const surface = pending_surface orelse return null;
+        const d = vk.glin_vk_create(
+            pending_display,
+            surface,
+            w,
+            h,
+            @ptrCast(quad_vert_spv.ptr),
+            quad_vert_spv.len,
+            @ptrCast(rect_frag_spv.ptr),
+            rect_frag_spv.len,
+            @ptrCast(text_frag_spv.ptr),
+            text_frag_spv.len,
+            @ptrCast(image_frag_spv.ptr),
+            image_frag_spv.len,
+        );
+        if (d == null) {
+            log.warn("vulkan renderer unavailable: {s}", .{std.mem.span(vk.glin_vk_last_error())});
+            return null;
+        }
+        self.device = d;
+        live_renderer = self;
+        std.log.info("linux renderer: vulkan on {s}", .{std.mem.span(vk.glin_vk_device_name(d))});
+        return d;
+    }
+
+    /// A device with no surface, for the GPU-vs-CPU parity test. False when this machine has no Vulkan device.
+    pub fn attachOffscreen(self: *Renderer) bool {
+        if (self.device != null) return true;
+        self.device_attempted = true;
+        const d = vk.glin_vk_create(
+            null,
+            null,
+            @intCast(1),
+            @intCast(1),
+            @ptrCast(quad_vert_spv.ptr),
+            quad_vert_spv.len,
+            @ptrCast(rect_frag_spv.ptr),
+            rect_frag_spv.len,
+            @ptrCast(text_frag_spv.ptr),
+            text_frag_spv.len,
+            @ptrCast(image_frag_spv.ptr),
+            image_frag_spv.len,
+        );
+        if (d == null) return false;
+        self.device = d;
+        return true;
+    }
+
+    /// Draw a full Clay render-command list, then present it.
+    pub fn drawCommands(self: *Renderer, commands: []cl.RenderCommand, win_w: i32, win_h: i32) void {
+        if (win_w <= 0 or win_h <= 0) return;
+        const s = ui_scale.current();
+        const px = scale.pixelSize(@intCast(win_w), @intCast(win_h), s);
+        const d = self.ensure(@intCast(px.w), @intCast(px.h)) orelse return;
+        _ = vk.glin_vk_resize(d, @intCast(px.w), @intCast(px.h));
+        self.build(commands, @intCast(px.w), @intCast(px.h), s);
+        const cc = clearColor();
+        const rc = vk.glin_vk_draw(
+            d,
+            @ptrCast(self.verts.items.ptr),
+            @intCast(self.verts.items.len),
+            self.segs.items.ptr,
+            @intCast(self.segs.items.len),
+            cc[0],
+            cc[1],
+            cc[2],
+            cc[3],
+        );
+        // -2 is the surface moving on between frames: the shim rebuilt its swapchain and the next frame draws.
+        if (rc < -1) log.warn("vulkan draw failed: {s}", .{std.mem.span(vk.glin_vk_last_error())});
+        if (self.reported_first_frame) return;
+        self.reported_first_frame = true;
+        std.log.info("linux first frame: {d}x{d} device px, {d} commands, {d} vertices, {d} segments", .{
+            px.w, px.h, commands.len, self.verts.items.len, self.segs.items.len,
+        });
+    }
+
+    /// Render a command list into an offscreen target and return RGBA bytes, so a test can compare the GPU against the CPU reference.
+    pub fn renderOffscreen(self: *Renderer, commands: []const cl.RenderCommand, w: i32, h: i32) ?[]u8 {
+        if (w <= 0 or h <= 0) return null;
+        const d = self.device orelse return null;
+        // Offscreen is always 1:1 device pixels: a parity test compares a device px with a device px.
+        self.build(commands, w, h, 1.0);
+        const out = self.alloc.alloc(u8, @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4) catch return null;
+        errdefer self.alloc.free(out);
+        const cc = clearColor();
+        if (vk.glin_vk_offscreen(
+            d,
+            @ptrCast(self.verts.items.ptr),
+            @intCast(self.verts.items.len),
+            self.segs.items.ptr,
+            @intCast(self.segs.items.len),
+            w,
+            h,
+            cc[0],
+            cc[1],
+            cc[2],
+            cc[3],
+            out.ptr,
+        ) != 0) {
+            self.alloc.free(out);
+            return null;
+        }
+        return out;
+    }
+
+    // ---- Command translation ----
+    fn build(self: *Renderer, commands: []const cl.RenderCommand, w: i32, h: i32, s: f32) void {
+        self.verts.clearRetainingCapacity();
+        self.segs.clearRetainingCapacity();
+        self.seg_start = 0;
+        self.seg_texture = 0;
+        self.seg_kind = Kind.rect;
+        self.clip_rect = null;
+        self.clip_depth = 0;
+        self.img_decodes_this_frame = 0;
+
+        for (commands) |*cmd| {
+            const bb = cmd.bounding_box;
+            switch (cmd.command_type) {
+                .rectangle => {
+                    const r = cmd.render_data.rectangle;
+                    if (r.background_color[3] <= 0) continue;
+                    const cr = cornerRadiusVec4(r.corner_radius);
+                    self.rect(bb.x * s, bb.y * s, bb.width * s, bb.height * s, .{ cr[0] * s, cr[1] * s, cr[2] * s, cr[3] * s }, 0, 0, r.background_color);
+                },
+                .border => self.border(cmd.render_data.border, bb, s),
+                .text => {
+                    const td = cmd.render_data.text;
+                    const bytes = td.string_contents.chars[0..@intCast(td.string_contents.length)];
+                    self.textRun(bb.x * s, bb.y * s, bb.height * s, bytes, td.font_size, td.text_color, s);
+                },
+                .scissor_start => self.pushScissor(bb.x * s, bb.y * s, bb.width * s, bb.height * s, w, h),
+                .scissor_end => self.popScissor(),
+                .image => {
+                    const im = cmd.render_data.image;
+                    if (im.image_data) |ptr| {
+                        const ref: *const ImageRef = @ptrCast(@alignCast(ptr));
+                        self.image(bb.x * s, bb.y * s, bb.width * s, bb.height * s, ref);
+                    }
+                },
+                else => {},
+            }
+        }
+        self.closeSegment();
+    }
+
+    /// Pure helper: Clay CornerRadius -> rect-shader radius vec4 (TL, TR, BL, BR in px), clamped at zero.
     pub fn cornerRadiusVec4(r: cl.CornerRadius) [4]f32 {
         return .{ @max(r.top_left, 0), @max(r.top_right, 0), @max(r.bottom_left, 0), @max(r.bottom_right, 0) };
     }
 
-    /// Rounded-rect draw over the unit-quad VBO: like drawQuad plus the u_radius/u_mode/u_border uniforms (mode 0 = fill, 1 = border outline of width.
-    fn drawRoundBox(self: *Renderer, win_w: i32, win_h: i32, x: f32, y: f32, w: f32, h: f32, radius: [4]f32, mode: c_int, border_w: f32, color: [4]f32) void {
+    fn rect(self: *Renderer, x: f32, y: f32, w: f32, h: f32, radius: [4]f32, mode: c_int, border_w: f32, color: [4]f32) void {
         if (w <= 0 or h <= 0) return;
-        gl.glUseProgram(self.prog_rect);
-        gl.glBindVertexArray(self.vao);
-        const rw: f32 = @floatFromInt(win_w);
-        const rh: f32 = @floatFromInt(win_h);
-        if (self.loc_rect_res >= 0) gl.glUniform2f(self.loc_rect_res, rw, rh);
-        if (self.loc_rect_pos >= 0) gl.glUniform2f(self.loc_rect_pos, x, y);
-        if (self.loc_rect_size >= 0) gl.glUniform2f(self.loc_rect_size, w, h);
-        if (self.loc_rect_rad >= 0) gl.glUniform4f(self.loc_rect_rad, radius[0], radius[1], radius[2], radius[3]);
-        if (self.loc_rect_mode >= 0) gl.glUniform1i(self.loc_rect_mode, mode);
-        if (self.loc_rect_border >= 0) gl.glUniform1f(self.loc_rect_border, border_w);
-        if (self.loc_rect_col >= 0) {
-            const mx = @max(@max(color[0], color[1]), @max(color[2], color[3]));
-            if (mx <= 1.0) {
-                gl.glUniform4f(self.loc_rect_col, color[0], color[1], color[2], color[3]);
-            } else {
-                gl.glUniform4f(self.loc_rect_col, color[0] / 255.0, color[1] / 255.0, color[2] / 255.0, color[3] / 255.0);
-            }
-        }
-        gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4);
-        gl.glBindVertexArray(0);
+        self.use(Kind.rect, 0);
+        const v = Vertex{
+            .pos = .{ 0, 0 },
+            .local = .{ 0, 0 },
+            .size = .{ w, h },
+            .radius = radius,
+            .color = soft.normalizeColorPublic(color),
+            .mode = @floatFromInt(mode),
+            .border = border_w,
+            .kind = 0,
+        };
+        var a = v;
+        var b = v;
+        var c = v;
+        var d = v;
+        a.pos = .{ x, y };
+        a.local = .{ 0, 0 };
+        b.pos = .{ x + w, y };
+        b.local = .{ w, 0 };
+        c.pos = .{ x + w, y + h };
+        c.local = .{ w, h };
+        d.pos = .{ x, y + h };
+        d.local = .{ 0, h };
+        self.verts.appendSlice(self.alloc, &.{ a, b, c, a, c, d }) catch {};
     }
 
-    fn drawRectCmd(self: *Renderer, win_w: i32, win_h: i32, x: f32, y: f32, w: f32, h: f32, clay_color: [4]f32, radius: cl.CornerRadius) void {
-        self.drawRoundBox(win_w, win_h, x, y, w, h, cornerRadiusVec4(radius), 0, 0, clay_color);
-    }
-
-    /// Draw a Clay BORDER command as a rounded inset outline (single quad, shader mode 1) when all four widths match (the `.outside()` shape every component.
-    fn drawBorderCmd(self: *Renderer, win_w: i32, win_h: i32, bb_x: f32, bb_y: f32, bb_w: f32, bb_h: f32, bd: cl.BorderRenderData) void {
-        const color = bd.color;
+    // A border is four sides in Clay's model; the shader takes one width, so unequal sides become four rects.
+    fn border(self: *Renderer, bd: cl.BorderRenderData, bb: cl.BoundingBox, k: f32) void {
         const top: f32 = @floatFromInt(bd.width.top);
         const bottom: f32 = @floatFromInt(bd.width.bottom);
         const left: f32 = @floatFromInt(bd.width.left);
         const right: f32 = @floatFromInt(bd.width.right);
         if (top == bottom and top == left and top == right) {
             if (top <= 0) return;
-            self.drawRoundBox(win_w, win_h, bb_x, bb_y, bb_w, bb_h, cornerRadiusVec4(bd.corner_radius), 1, top, color);
+            const cr = cornerRadiusVec4(bd.corner_radius);
+            self.rect(bb.x * k, bb.y * k, bb.width * k, bb.height * k, .{ cr[0] * k, cr[1] * k, cr[2] * k, cr[3] * k }, 1, top * k, bd.color);
             return;
         }
-        if (top > 0 and bb_w > 0) self.drawQuad(self.prog_rect, win_w, win_h, bb_x, bb_y, bb_w, @min(top, bb_h), color);
-        if (bottom > 0 and bb_w > 0) {
-            const bh = @min(bottom, bb_h);
-            self.drawQuad(self.prog_rect, win_w, win_h, bb_x, bb_y + bb_h - bh, bb_w, bh, color);
+        if (top > 0 and bb.width > 0) self.rect(bb.x * k, bb.y * k, bb.width * k, @min(top, bb.height) * k, .{ 0, 0, 0, 0 }, 0, 0, bd.color);
+        if (bottom > 0 and bb.width > 0) {
+            const bh = @min(bottom, bb.height);
+            self.rect(bb.x * k, (bb.y + bb.height - bh) * k, bb.width * k, bh * k, .{ 0, 0, 0, 0 }, 0, 0, bd.color);
         }
-        const inner_h = bb_h - @min(top, bb_h) - @min(bottom, bb_h);
+        const inner_h = bb.height - @min(top, bb.height) - @min(bottom, bb.height);
         if (inner_h > 0) {
-            if (left > 0) self.drawQuad(self.prog_rect, win_w, win_h, bb_x, bb_y + @min(top, bb_h), @min(left, bb_w), inner_h, color);
+            if (left > 0) self.rect(bb.x * k, (bb.y + @min(top, bb.height)) * k, @min(left, bb.width) * k, inner_h * k, .{ 0, 0, 0, 0 }, 0, 0, bd.color);
             if (right > 0) {
-                const rw = @min(right, bb_w);
-                self.drawQuad(self.prog_rect, win_w, win_h, bb_x + bb_w - rw, bb_y + @min(top, bb_h), rw, inner_h, color);
+                const rw = @min(right, bb.width);
+                self.rect((bb.x + bb.width - rw) * k, (bb.y + @min(top, bb.height)) * k, rw * k, inner_h * k, .{ 0, 0, 0, 0 }, 0, 0, bd.color);
             }
         }
     }
 
-    fn drawTextFallback(self: *Renderer, win_w: i32, win_h: i32, bbox_x: f32, bbox_y: f32, text_bytes: []const u8, font_size: u16, clay_color: [4]f32) void {
-        const adv = estimatorAdvance(if (font_size == 0) 16 else font_size);
-        const fs: f32 = @floatFromInt(if (font_size == 0) 16 else font_size);
-        var cursor: f32 = 0;
-        for (text_bytes) |_| {
-            self.drawRectCmd(win_w, win_h, bbox_x + cursor, bbox_y, adv * 0.7, @min(fs, 24), clay_color, .{});
-            cursor += adv;
-        }
-    }
-
-    /// One run of text: coverage rasterised with the face the layout measured it with, cached as an R8 texture, tinted by u_color.
-    fn drawTextCmd(self: *Renderer, win_w: i32, win_h: i32, bbox_x: f32, bbox_y: f32, bbox_h: f32, text_bytes: []const u8, font_size: u16, clay_color: [4]f32) void {
-        if (comptime builtin.is_test) return;
-        if (text_bytes.len == 0 or text_bytes.len > text_max_bytes) return;
+    /// One run of text: coverage rasterised with the face the layout measured it with, cached as an R8 texture, tinted by the vertex colour.
+    fn textRun(self: *Renderer, bbox_x: f32, bbox_y: f32, bbox_h: f32, bytes: []const u8, font_size: u16, clay_color: [4]f32, s: f32) void {
+        if (bytes.len == 0 or bytes.len > text_max_bytes) return;
         const fs: u16 = if (font_size == 0) 16 else font_size;
-        // A glyph texture is the one thing that cannot scale for free: rasterise it at the display density and place it back in points.
-        const s = ui_scale.current();
+        // A glyph texture is the one thing that cannot scale for free: rasterise it at the display density and place it back at that density.
         const fs_dev: u16 = @intFromFloat(@round(@as(f32, @floatFromInt(fs)) * s));
-        const ds = @as(f32, @floatFromInt(fs_dev)) / @as(f32, @floatFromInt(fs));
-        const box_h: i32 = @intFromFloat(@round(bbox_h * ds));
-        const dev_x = bbox_x * ds;
-        const dev_y = bbox_y * ds;
+        if (fs_dev == 0) return;
+        const box_h: i32 = @intFromFloat(@round(bbox_h));
         // The bitmap is blitted on whole device pixels and its glyphs snap from the same fractional origin, so it goes here.
-        const grid_x = @floor(dev_x);
-        const grid_y = @floor(dev_y);
+        const grid_x = @floor(bbox_x);
+        const grid_y = @floor(bbox_y);
+        const key = hashTextKey(bytes, fs_dev, box_h, bbox_x, bbox_y);
 
-        // A run's coverage does not depend on its colour, so a hover repaint finds it by (run, size, box, sub-pixel origin) — all in device pixels.
-        const key = hashTextKey(text_bytes, fs_dev, box_h, dev_x, dev_y);
         self.text_cache_clock += 1;
         for (&self.text_cache) |*e| {
             if (e.valid and e.hash == key and e.tex != 0) {
                 e.last_used = self.text_cache_clock;
                 self.text_cache_hits += 1;
-                self.drawCoverageQuad(e.tex, win_w, win_h, grid_x / ds, grid_y / ds, @as(f32, @floatFromInt(e.w)) / ds, @as(f32, @floatFromInt(e.h)) / ds, clay_color);
+                self.textQuad(e.tex, grid_x, grid_y, @floatFromInt(e.w), @floatFromInt(e.h), clay_color);
                 return;
             }
         }
         self.text_cache_misses += 1;
 
-        const bmp = text.rasterizeRun(self.alloc, text_bytes, fs_dev, dev_x, dev_y, @floatFromInt(box_h)) orelse {
-            self.drawTextFallback(win_w, win_h, bbox_x, bbox_y, text_bytes, font_size, clay_color);
+        const bmp = text.rasterizeRun(self.alloc, bytes, fs_dev, bbox_x, bbox_y, @floatFromInt(box_h)) orelse {
+            self.textFallback(grid_x, grid_y, bytes, font_size, clay_color, s);
             return;
         };
         defer bmp.deinit(self.alloc);
         if (bmp.width > text_max_w or bmp.height > text_max_h) {
-            self.drawTextFallback(win_w, win_h, bbox_x, bbox_y, text_bytes, font_size, clay_color);
+            self.textFallback(grid_x, grid_y, bytes, font_size, clay_color, s);
             return;
         }
-
-        var tex: c_uint = 0;
-        gl.glGenTextures(1, @ptrCast(&tex));
-        if (tex == 0) {
-            self.drawTextFallback(win_w, win_h, bbox_x, bbox_y, text_bytes, font_size, clay_color);
-            return;
-        }
-        gl.glBindTexture(gl.GL_TEXTURE_2D, tex);
-        gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1);
-        gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_R8, @intCast(bmp.width), @intCast(bmp.height), 0, gl.GL_RED, gl.GL_UNSIGNED_BYTE, @ptrCast(bmp.pixels.ptr));
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST);
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST);
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE);
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE);
-        gl.glBindTexture(gl.GL_TEXTURE_2D, 0);
-
-        const slot = lruVictim(&self.text_cache) orelse {
-            var t = tex;
-            gl.glDeleteTextures(1, @ptrCast(&t));
-            return;
+        const slot = lruVictim(&self.text_cache) orelse return;
+        const id: u32 = text_texture_base + @as(u32, @intCast(slot));
+        if (!self.upload(id, @ptrCast(bmp.pixels.ptr), @intCast(bmp.width), @intCast(bmp.height), 1)) return;
+        self.text_cache[slot] = .{
+            .hash = key,
+            .tex = id,
+            .w = @intCast(bmp.width),
+            .h = @intCast(bmp.height),
+            .valid = true,
+            .last_used = self.text_cache_clock,
         };
-        const ev = &self.text_cache[slot];
-        if (ev.valid and ev.tex != 0) {
-            var old = ev.tex;
-            gl.glDeleteTextures(1, @ptrCast(&old));
-        }
-        ev.* = .{ .hash = key, .tex = tex, .w = @intCast(bmp.width), .h = @intCast(bmp.height), .valid = true, .last_used = self.text_cache_clock };
-        self.drawCoverageQuad(tex, win_w, win_h, grid_x / ds, grid_y / ds, @as(f32, @floatFromInt(bmp.width)) / ds, @as(f32, @floatFromInt(bmp.height)) / ds, clay_color);
+        self.textQuad(id, grid_x, grid_y, @floatFromInt(bmp.width), @floatFromInt(bmp.height), clay_color);
     }
 
-    /// Blit an 8-bit coverage texture with the text program: the coverage is the alpha, `clay_color` the ink.
-    fn drawCoverageQuad(self: *Renderer, tex: c_uint, win_w: i32, win_h: i32, x: f32, y: f32, w: f32, h: f32, clay_color: [4]f32) void {
+    /// The stb-fallback shape: one box per character, which is what a run with no coverage bitmap gets.
+    fn textFallback(self: *Renderer, x: f32, y: f32, bytes: []const u8, font_size: u16, clay_color: [4]f32, s: f32) void {
+        const fs: u16 = if (font_size == 0) 16 else font_size;
+        const adv = estimatorAdvance(fs) * s;
+        const h = @min(@as(f32, @floatFromInt(fs)) * s, 24 * s);
+        var cursor: f32 = 0;
+        for (bytes) |_| {
+            self.rect(x + cursor, y, adv * 0.7, h, .{ 0, 0, 0, 0 }, 0, 0, clay_color);
+            cursor += adv;
+        }
+    }
+
+    /// Blit a coverage texture: the coverage is the alpha, `clay_color` the ink.
+    fn textQuad(self: *Renderer, tex: u32, x: f32, y: f32, w: f32, h: f32, clay_color: [4]f32) void {
         if (w <= 0 or h <= 0 or tex == 0) return;
-        gl.glUseProgram(self.prog_text);
-        gl.glActiveTexture(gl.GL_TEXTURE0);
-        gl.glBindTexture(gl.GL_TEXTURE_2D, tex);
-        gl.glBindVertexArray(self.vao);
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.vbo);
-        gl.glEnableVertexAttribArray(0);
-        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(0));
-        gl.glEnableVertexAttribArray(1);
-        gl.glVertexAttribPointer(1, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(2 * @sizeOf(f32)));
-        const rw: f32 = @floatFromInt(win_w);
-        const rh: f32 = @floatFromInt(win_h);
-        if (self.loc_text_res >= 0) gl.glUniform2f(self.loc_text_res, rw, rh);
-        if (self.loc_text_pos >= 0) gl.glUniform2f(self.loc_text_pos, x, y);
-        if (self.loc_text_size >= 0) gl.glUniform2f(self.loc_text_size, w, h);
-        if (self.loc_text_tex >= 0) gl.glUniform1i(self.loc_text_tex, 0);
-        const c = straightColor(clay_color);
-        if (self.loc_text_col >= 0) gl.glUniform4f(self.loc_text_col, c[0], c[1], c[2], c[3]);
-        gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4);
-        gl.glBindVertexArray(0);
-        gl.glBindTexture(gl.GL_TEXTURE_2D, 0);
+        self.use(Kind.text, tex);
+        self.pushQuad(x, y, w, h, .{ 0, 0, 1, 1 }, straightColor(clay_color), 1);
     }
 
     /// Max source side accepted for decode (refuse absurd headers before allocating).
     const img_max_side: c_int = 8192;
     /// Per-frame decode budget (see img_decodes_this_frame).
     const img_decode_budget: u32 = 2;
-    /// Placeholder fill while an image loads/fails (neutral dark).
-    const img_placeholder = Color.rgb(0x1a, 0x1a, 0x1a);
 
-    /// Decode path (NUL-terminated) via stb, downscale to max_dim, upload as an RGBA GL texture.
-    fn decodeUploadImage(self: *Renderer, cpath: [*:0]const u8, max_dim: u16) ?DecodedImage {
+    fn upload(self: *Renderer, id: u32, bytes: [*]const u8, w: i32, h: i32, channels: c_int) bool {
+        const d = self.device orelse return false;
+        return vk.glin_vk_set_texture(d, id, bytes, w, h, channels) == 0;
+    }
+
+    /// Decode path (NUL-terminated) via stb, downscale to max_dim, upload as an RGBA texture.
+    fn decodeUploadImage(self: *Renderer, cpath: [*:0]const u8, max_dim: u16, id: u32) ?DecodedImage {
         var iw: c_int = 0;
         var ih: c_int = 0;
         var nch: c_int = 0;
@@ -750,21 +645,11 @@ pub const Renderer = struct {
             if (out_ptr == null) return null;
             upload_ptr = resized.ptr;
         }
-        var tex: c_uint = 0;
-        gl.glGenTextures(1, @ptrCast(&tex));
-        if (tex == 0) return null;
-        gl.glBindTexture(gl.GL_TEXTURE_2D, tex);
-        gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4);
-        gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, @intCast(dw), @intCast(dh), 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, upload_ptr);
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR);
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR);
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE);
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE);
-        gl.glBindTexture(gl.GL_TEXTURE_2D, 0);
-        return .{ .tex = tex, .w = @intCast(dw), .h = @intCast(dh) };
+        if (!self.upload(id, upload_ptr, @intCast(dw), @intCast(dh), 4)) return null;
+        return .{ .tex = id, .w = @intCast(dw), .h = @intCast(dh) };
     }
 
-    /// Lookup-or-decode an image texture (LRU).
+    /// Lookup-or-decode an image texture (LRU, slot-stable texture id).
     fn imageTexture(self: *Renderer, path: []const u8, max_dim: u16) ?DecodedImage {
         if (path.len == 0) return null;
         const key = hashImageKey(path, max_dim);
@@ -783,198 +668,138 @@ pub const Renderer = struct {
         if (path.len + 1 > cbuf.len) return null;
         @memcpy(cbuf[0..path.len], path);
         cbuf[path.len] = 0;
-        const up = self.decodeUploadImage(@ptrCast(&cbuf), max_dim) orelse return null;
-        if (lruVictim(&self.img_cache)) |idx| {
-            const ev = &self.img_cache[idx];
-            if (ev.valid and ev.tex != 0) {
-                var old = ev.tex;
-                gl.glDeleteTextures(1, @ptrCast(&old));
-            }
-            ev.* = .{ .hash = key, .tex = up.tex, .w = up.w, .h = up.h, .valid = true, .last_used = self.img_cache_clock };
-        } else {
-            var t = up.tex;
-            gl.glDeleteTextures(1, @ptrCast(&t));
-            return null;
-        }
+        const slot = lruVictim(&self.img_cache) orelse return null;
+        const id: u32 = image_texture_base + @as(u32, @intCast(slot));
+        const up = self.decodeUploadImage(@ptrCast(&cbuf), max_dim, id) orelse return null;
+        self.img_cache[slot] = .{
+            .hash = key,
+            .tex = up.tex,
+            .w = up.w,
+            .h = up.h,
+            .valid = true,
+            .last_used = self.img_cache_clock,
+        };
         return up;
     }
 
-    /// Draw an RGBA texture with custom UVs (temp VBO), for a fit-mapped image.
-    fn drawImageQuad(self: *Renderer, tex: c_uint, win_w: i32, win_h: i32, x: f32, y: f32, w: f32, h: f32, uv: [4]f32) void {
-        if (w <= 0 or h <= 0 or tex == 0) return;
-        const prog = self.prog_image;
-        gl.glUseProgram(prog);
-        gl.glActiveTexture(gl.GL_TEXTURE0);
-        gl.glBindTexture(gl.GL_TEXTURE_2D, tex);
-        if (self.loc_image_tex >= 0) gl.glUniform1i(self.loc_image_tex, 0);
-        var verts: [4][4]f32 = .{
-            .{ 0, 0, uv[0], uv[1] },
-            .{ 1, 0, uv[2], uv[1] },
-            .{ 0, 1, uv[0], uv[3] },
-            .{ 1, 1, uv[2], uv[3] },
-        };
-        var tmp: c_uint = 0;
-        gl.glGenBuffers(1, @ptrCast(&tmp));
-        gl.glBindVertexArray(self.vao);
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, tmp);
-        gl.glBufferData(gl.GL_ARRAY_BUFFER, @sizeOf(@TypeOf(verts)), @ptrCast(&verts), gl.GL_STREAM_DRAW);
-        gl.glEnableVertexAttribArray(0);
-        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(0));
-        gl.glEnableVertexAttribArray(1);
-        gl.glVertexAttribPointer(1, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(2 * @sizeOf(f32)));
-        const rw: f32 = @floatFromInt(win_w);
-        const rh: f32 = @floatFromInt(win_h);
-        if (self.loc_image_res >= 0) gl.glUniform2f(self.loc_image_res, rw, rh);
-        if (self.loc_image_pos >= 0) gl.glUniform2f(self.loc_image_pos, x, y);
-        if (self.loc_image_size >= 0) gl.glUniform2f(self.loc_image_size, w, h);
-        gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4);
-        gl.glBindVertexArray(0);
-        gl.glDeleteBuffers(1, @ptrCast(&tmp));
-        // Restore unit-quad VBO binding for the rect path.
-        gl.glBindVertexArray(self.vao);
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.vbo);
-        gl.glEnableVertexAttribArray(0);
-        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(0));
-        gl.glEnableVertexAttribArray(1);
-        gl.glVertexAttribPointer(1, 2, gl.GL_FLOAT, gl.GL_FALSE, 4 * @sizeOf(f32), @ptrFromInt(2 * @sizeOf(f32)));
-        gl.glBindVertexArray(0);
-        gl.glBindTexture(gl.GL_TEXTURE_2D, 0);
-    }
-
     /// Draw one Clay IMAGE command: cache lookup, fit-mapped blit, or a placeholder rect while loading/failed.
-    fn drawImageCmd(self: *Renderer, win_w: i32, win_h: i32, bb_x: f32, bb_y: f32, bb_w: f32, bb_h: f32, ref: *const ImageRef) void {
-        if (comptime builtin.is_test) return;
-        if (bb_w <= 0 or bb_h <= 0) return;
+    fn image(self: *Renderer, x: f32, y: f32, w: f32, h: f32, ref: *const ImageRef) void {
+        if (w <= 0 or h <= 0) return;
         const path = ref.path_ptr[0..ref.path_len];
         const max_dim: u16 = if (ref.max_dim == 0) 256 else ref.max_dim;
         const t = self.imageTexture(path, max_dim) orelse {
-            self.drawRectCmd(win_w, win_h, bb_x, bb_y, bb_w, bb_h, img_placeholder.toClay(), .{});
+            self.rect(x, y, w, h, .{ 0, 0, 0, 0 }, 0, 0, soft.img_placeholder.toClay());
             return;
         };
         const iw: f32 = @floatFromInt(t.w);
         const ih: f32 = @floatFromInt(t.h);
         switch (ref.fit) {
             .cover => {
-                const uv = coverUv(iw, ih, bb_w, bb_h);
-                self.drawImageQuad(t.tex, win_w, win_h, bb_x, bb_y, bb_w, bb_h, uv);
+                const uv = coverUv(iw, ih, w, h);
+                self.use(Kind.image, t.tex);
+                self.pushQuad(x, y, w, h, uv, .{ 1, 1, 1, 1 }, 2);
             },
             .contain => {
-                self.drawRectCmd(win_w, win_h, bb_x, bb_y, bb_w, bb_h, img_placeholder.toClay(), .{});
-                const b = containBox(iw, ih, bb_w, bb_h);
-                self.drawImageQuad(t.tex, win_w, win_h, bb_x + b[0], bb_y + b[1], b[2], b[3], .{ 0, 0, 1, 1 });
+                self.rect(x, y, w, h, .{ 0, 0, 0, 0 }, 0, 0, soft.img_placeholder.toClay());
+                const b = containBox(iw, ih, w, h);
+                if (b[2] <= 0 or b[3] <= 0) return;
+                self.use(Kind.image, t.tex);
+                self.pushQuad(x + b[0], y + b[1], b[2], b[3], .{ 0, 0, 1, 1 }, .{ 1, 1, 1, 1 }, 2);
             },
             .stretch => {
-                self.drawImageQuad(t.tex, win_w, win_h, bb_x, bb_y, bb_w, bb_h, .{ 0, 0, 1, 1 });
+                self.use(Kind.image, t.tex);
+                self.pushQuad(x, y, w, h, .{ 0, 0, 1, 1 }, .{ 1, 1, 1, 1 }, 2);
             },
         }
     }
 
-    // Open a clip: it narrows whatever was already clipping, so a field's horizontal clip (as tall as its content) cannot widen the scroll box around it.
-    fn pushScissor(self: *Renderer, next: [4]i32) void {
+    // ---- Vertex and segment plumbing ----
+
+    /// A textured quad: `local` is the uv of each corner, so one writer serves text and images.
+    fn pushQuad(self: *Renderer, x: f32, y: f32, w: f32, h: f32, uv: [4]f32, color: [4]f32, kind: f32) void {
+        if (w <= 0 or h <= 0) return;
+        const v = Vertex{
+            .pos = .{ 0, 0 },
+            .local = .{ 0, 0 },
+            .size = .{ 0, 0 },
+            .radius = .{ 0, 0, 0, 0 },
+            .color = color,
+            .mode = 0,
+            .border = 0,
+            .kind = kind,
+        };
+        var a = v;
+        var b = v;
+        var c = v;
+        var d = v;
+        a.pos = .{ x, y };
+        a.local = .{ uv[0], uv[1] };
+        b.pos = .{ x + w, y };
+        b.local = .{ uv[2], uv[1] };
+        c.pos = .{ x + w, y + h };
+        c.local = .{ uv[2], uv[3] };
+        d.pos = .{ x, y + h };
+        d.local = .{ uv[0], uv[3] };
+        self.verts.appendSlice(self.alloc, &.{ a, b, c, a, c, d }) catch {};
+    }
+
+    /// A new segment: a texture or pipeline change closes the run being accumulated.
+    fn use(self: *Renderer, kind: c_int, tex: u32) void {
+        if (self.seg_kind == kind and self.seg_texture == tex) return;
+        self.closeSegment();
+        self.seg_kind = kind;
+        self.seg_texture = tex;
+    }
+
+    fn closeSegment(self: *Renderer) void {
+        const end = self.verts.items.len;
+        if (end > self.seg_start) {
+            const sc = self.clip_rect;
+            // An empty clip (two clips that do not overlap) hides the whole run, so the run is dropped, not drawn unscissored.
+            if (sc) |v| {
+                if (v[2] <= 0 or v[3] <= 0) {
+                    self.seg_start = end;
+                    return;
+                }
+            }
+            self.segs.append(self.alloc, .{
+                .start = @intCast(self.seg_start),
+                .count = @intCast(end - self.seg_start),
+                .has_scissor = if (sc != null) 1 else 0,
+                .sx = if (sc) |v| v[0] else 0,
+                .sy = if (sc) |v| v[1] else 0,
+                .sw = if (sc) |v| v[2] else 0,
+                .sh = if (sc) |v| v[3] else 0,
+                .texture_id = self.seg_texture,
+                .kind = self.seg_kind,
+            }) catch {};
+        }
+        self.seg_start = end;
+    }
+
+    // Open a clip: it narrows whatever was already clipping, so a field's horizontal clip cannot widen the scroll box around it.
+    fn pushScissor(self: *Renderer, x: f32, y: f32, w: f32, h: f32, win_w: i32, win_h: i32) void {
+        self.closeSegment();
+        const next = clampScissor(x, y, w, h, win_w, win_h);
         if (self.clip_depth < self.clip_stack.len) {
             self.clip_stack[self.clip_depth] = self.clip_rect;
             self.clip_depth += 1;
         }
         self.clip_rect = intersectClip(self.clip_rect, next);
-        self.applyClip();
     }
 
     fn popScissor(self: *Renderer) void {
+        self.closeSegment();
         if (self.clip_depth == 0) {
             self.clip_rect = null;
-            gl.glDisable(gl.GL_SCISSOR_TEST);
             return;
         }
         self.clip_depth -= 1;
         self.clip_rect = self.clip_stack[self.clip_depth];
-        self.applyClip();
-    }
-
-    fn applyClip(self: *Renderer) void {
-        const r = self.clip_rect orelse {
-            gl.glDisable(gl.GL_SCISSOR_TEST);
-            return;
-        };
-        // glScissor is in device pixels, bottom-left origin, and a zero-size box clips everything.
-        gl.glEnable(gl.GL_SCISSOR_TEST);
-        gl.glScissor(r[0], r[1], @max(r[2], 0), @max(r[3], 0));
-    }
-
-    // The overlap of two device-pixel clips; a zero size means nothing of the run is visible.
-    fn intersectClip(cur: ?[4]i32, next: [4]i32) [4]i32 {
-        const prev = cur orelse return next;
-        const x0 = @max(prev[0], next[0]);
-        const y0 = @max(prev[1], next[1]);
-        const x1 = @min(prev[0] + prev[2], next[0] + next[2]);
-        const y1 = @min(prev[1] + prev[3], next[1] + next[3]);
-        return .{ x0, y0, @max(x1 - x0, 0), @max(y1 - y0, 0) };
-    }
-
-    /// Draw a full Clay render-command list.
-    pub fn drawCommands(self: *Renderer, commands: []cl.RenderCommand, win_w: i32, win_h: i32) void {
-        // The commands are in points; the viewport is the device pixel buffer they are painted into, so a 2x display gets 2x the pixels.
-        const s = ui_scale.current();
-        const px = scale.pixelSize(@intCast(@max(win_w, 1)), @intCast(@max(win_h, 1)), s);
-        gl.glViewport(0, 0, @intCast(px.w), @intCast(px.h));
-        // The rounded-box AA band is one DEVICE pixel: at 2x a logical-unit band would leave every edge a quarter-transparent column.
-        if (self.loc_rect_scale >= 0) {
-            gl.glUseProgram(self.prog_rect);
-            gl.glUniform1f(self.loc_rect_scale, s);
-        }
-        gl.glDisable(gl.GL_SCISSOR_TEST);
-        self.clip_rect = null;
-        self.clip_depth = 0;
-        gl.glEnable(gl.GL_BLEND);
-        // Separate alpha factors: the window is opaque (glClear alpha 1.0), so keep the destination alpha saturated.
-        gl.glBlendFuncSeparate(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA, gl.GL_ONE, gl.GL_ONE_MINUS_SRC_ALPHA);
-        self.img_decodes_this_frame = 0;
-        for (commands) |*cmd| {
-            switch (cmd.command_type) {
-                .rectangle => {
-                    const bb = cmd.bounding_box;
-                    self.drawRectCmd(win_w, win_h, bb.x, bb.y, bb.width, bb.height, cmd.render_data.rectangle.background_color, cmd.render_data.rectangle.corner_radius);
-                },
-                .text => {
-                    const bb = cmd.bounding_box;
-                    const td = cmd.render_data.text;
-                    const bytes = td.string_contents.chars[0..@intCast(td.string_contents.length)];
-                    self.drawTextCmd(win_w, win_h, bb.x, bb.y, bb.height, bytes, td.font_size, td.text_color);
-                },
-                .scissor_start => {
-                    const bb = cmd.bounding_box;
-                    // glScissor is in device pixels, so the point-space box is scaled with everything else.
-                    const sx: c_int = @intFromFloat(@round(@max(bb.x, 0) * s));
-                    const sw: c_int = @intFromFloat(@round(@max(bb.width, 0) * s));
-                    // GL origin is bottom-left; Clay is top-left.
-                    const top: f32 = (bb.y + bb.height) * s;
-                    const sy: c_int = @intFromFloat(@max(@as(f32, @floatFromInt(px.h)) - top, 0));
-                    const sh: c_int = @intFromFloat(@round(@max(bb.height, 0) * s));
-                    self.pushScissor(.{ sx, sy, sw, sh });
-                },
-                .scissor_end => self.popScissor(),
-                .border => {
-                    const bb = cmd.bounding_box;
-                    self.drawBorderCmd(win_w, win_h, bb.x, bb.y, bb.width, bb.height, cmd.render_data.border);
-                },
-                .image => {
-                    const bb = cmd.bounding_box;
-                    const im = cmd.render_data.image;
-                    if (im.image_data) |ptr| {
-                        const ref: *const ImageRef = @ptrCast(@alignCast(ptr));
-                        self.drawImageCmd(win_w, win_h, bb.x, bb.y, bb.width, bb.height, ref);
-                    }
-                },
-                else => {},
-            }
-        }
-        gl.glDisable(gl.GL_SCISSOR_TEST);
     }
 };
 
-test "initGL returns an error headless instead of crashing" {
-    const result = initGL();
-    try std.testing.expectError(error.NoDisplay, result);
-}
+// ---- Tests ----
 
 test "u32ToClayColor maps hex to 0-255 Clay color" {
     const c = u32ToClayColor(0x112233);
@@ -982,7 +807,6 @@ test "u32ToClayColor maps hex to 0-255 Clay color" {
     try std.testing.expectEqual(@as(f32, 0x22), c[1]);
     try std.testing.expectEqual(@as(f32, 0x33), c[2]);
     try std.testing.expectEqual(@as(f32, 255), c[3]);
-    // Agnostic sample: literals only (no ui/theme import allowed here).
     const t = u32ToClayColor(0xf0f0f0);
     try std.testing.expectEqual(@as(f32, 0xf0), t[0]);
 }
@@ -1064,60 +888,69 @@ test "scaledDims downscales longest side, never upscales" {
 }
 
 test "coverUv crops sides of wide images, top-bottom of tall ones" {
-    // 16:9 image in a square box: crop sides, full height.
     const wide = coverUv(16, 9, 1, 1);
     try std.testing.expectApproxEqAbs(@as(f32, (1 - 9.0 / 16.0) * 0.5), wide[0], 1e-5);
     try std.testing.expectEqual(@as(f32, 0), wide[1]);
     try std.testing.expectApproxEqAbs(@as(f32, 1 - (1 - 9.0 / 16.0) * 0.5), wide[2], 1e-5);
     try std.testing.expectEqual(@as(f32, 1), wide[3]);
-    // 9:16 image in a square box: crop top/bottom, full width.
     const tall = coverUv(9, 16, 1, 1);
     try std.testing.expectEqual(@as(f32, 0), tall[0]);
     try std.testing.expectApproxEqAbs(@as(f32, (1 - 9.0 / 16.0) * 0.5), tall[1], 1e-5);
-    // Same aspect: identity.
     const same = coverUv(16, 9, 32, 18);
     try std.testing.expectEqual([4]f32{ 0, 0, 1, 1 }, same);
-    // Degenerate: identity.
     try std.testing.expectEqual([4]f32{ 0, 0, 1, 1 }, coverUv(0, 9, 1, 1));
 }
 
 test "containBox letterboxes inside the box" {
-    // 16:9 image in a square 100 box: full width, centered vertically.
     const wide = containBox(16, 9, 100, 100);
     try std.testing.expectApproxEqAbs(@as(f32, 0), wide[0], 1e-4);
     try std.testing.expectApproxEqAbs(@as(f32, (100 - 56.25) * 0.5), wide[1], 1e-4);
     try std.testing.expectApproxEqAbs(@as(f32, 100), wide[2], 1e-4);
     try std.testing.expectApproxEqAbs(@as(f32, 56.25), wide[3], 1e-4);
-    // 9:16 image in a square 100 box: full height, centered horizontally.
     const tall = containBox(9, 16, 100, 100);
     try std.testing.expectApproxEqAbs(@as(f32, (100 - 56.25) * 0.5), tall[0], 1e-4);
     try std.testing.expectApproxEqAbs(@as(f32, 0), tall[1], 1e-4);
 }
 
-test "rect shader keeps a 1px coverage band (crisp borders, true radius)" {
-    // Regression: the 2px smoothstep(-1,1,d) band spread a 1px border over two pixels (~0.7 + ~0.16 alpha) and eroded rounded corners, so row outlines.
-    try std.testing.expect(std.mem.indexOf(u8, rect_frag_src, "clamp(0.5 - d * u_scale, 0.0, 1.0)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rect_frag_src, "smoothstep(-1.0, 1.0,") == null);
-    // Both the outer shape and the border's inner cut use it.
-    try std.testing.expect(std.mem.indexOf(u8, rect_frag_src, "float a = cov(d);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rect_frag_src, "float a2 = cov(d2);") != null);
-    // The band is one DEVICE pixel: a logical-unit band leaves a quarter-transparent column on every edge of a 2x window.
-    try std.testing.expect(std.mem.indexOf(u8, rect_frag_src, "uniform float u_scale;") != null);
+test "clampScissor fits the viewport and never goes negative" {
+    try std.testing.expectEqual([4]i32{ 10, 20, 30, 40 }, clampScissor(10, 20, 30, 40, 200, 120));
+    // Past the right/bottom edge: the far edge moves in, the size follows.
+    try std.testing.expectEqual([4]i32{ 180, 100, 20, 20 }, clampScissor(180, 100, 200, 200, 200, 120));
+    // A negative origin is clipped to the framebuffer, not passed through (Vulkan has no negative scissor).
+    try std.testing.expectEqual([4]i32{ 0, 0, 60, 60 }, clampScissor(-10, -10, 60, 60, 200, 120));
+    // Entirely outside: zero area, which the renderer drops instead of drawing unscissored.
+    try std.testing.expectEqual([4]i32{ 300, 20, 0, 40 }, clampScissor(300, 20, 30, 40, 200, 120));
 }
 
-test "the AA band is a device pixel, so 2x does not soften a rect edge" {
-    // The shader's dead-zone is 0.5 units wide in the space `d` is measured in, and `d * u_scale` puts it in device pixels.
+test "intersectClip narrows and never widens" {
+    try std.testing.expectEqual([4]i32{ 10, 20, 30, 40 }, intersectClip(null, .{ 10, 20, 30, 40 }));
+    try std.testing.expectEqual([4]i32{ 10, 20, 30, 40 }, intersectClip(.{ 0, 0, 100, 100 }, .{ 10, 20, 30, 40 }));
+    const disjoint = intersectClip(.{ 0, 0, 10, 10 }, .{ 20, 20, 10, 10 });
+    try std.testing.expectEqual(@as(i32, 0), disjoint[2]);
+    try std.testing.expectEqual(@as(i32, 0), disjoint[3]);
+}
+
+test "rect shader keeps a 1px coverage band (crisp borders, true radius)" {
+    // Regression: a 2px smoothstep(-1,1,d) band spread a 1px border over two pixels and eroded rounded corners.
+    try std.testing.expect(std.mem.indexOf(u8, rect_frag_source, "clamp(0.5 - d, 0.0, 1.0)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rect_frag_source, "smoothstep(-1.0, 1.0,") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rect_frag_source, "float a = cov(d);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rect_frag_source, "float a2 = cov(d2);") != null);
+    // Geometry is device pixels, so there is no scale uniform left to get wrong at 2x.
+    try std.testing.expect(std.mem.indexOf(u8, rect_frag_source, "u_scale") == null);
+}
+
+test "the AA band is one device pixel at any display density" {
+    // The band is a fixed half-pixel in DEVICE space: at 2x the geometry itself doubles, so an edge pixel is fully covered either way.
     const band_at = struct {
-        fn f(d: f32, applied: f32) f32 {
-            return std.math.clamp(0.5 - d * applied, 0.0, 1.0);
+        fn f(d: f32) f32 {
+            return std.math.clamp(0.5 - d, 0.0, 1.0);
         }
     }.f;
-    // A device pixel one unit inside a 1x edge is fully covered; at 2x the same pixel is half a point inside, and must still be fully covered.
-    try std.testing.expectEqual(@as(f32, 1.0), band_at(-1.0, 1.0));
-    try std.testing.expectEqual(@as(f32, 1.0), band_at(-0.5, 2.0));
-    // Half a device pixel outside is empty at either density.
-    try std.testing.expectEqual(@as(f32, 0.0), band_at(0.5, 1.0));
-    try std.testing.expectEqual(@as(f32, 0.0), band_at(0.25, 2.0));
-    // And a logical-unit band (the bug) leaves the 2x edge pixel 75% covered.
-    try std.testing.expectApproxEqAbs(@as(f32, 0.75), band_at(-0.25, 1.0), 1e-6);
+    try std.testing.expectEqual(@as(f32, 1.0), band_at(-1.0));
+    // The same physical edge at 2x sits one DEVICE pixel inside, which is what the renderer builds.
+    try std.testing.expectEqual(@as(f32, 1.0), band_at(-1.0));
+    try std.testing.expectEqual(@as(f32, 0.0), band_at(0.5));
+    // A logical-unit band scaled by a missing factor (the old bug) would leave 75% coverage here.
+    try std.testing.expectApproxEqAbs(@as(f32, 0.75), band_at(-0.25), 1e-6);
 }
