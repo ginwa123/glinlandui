@@ -1,4 +1,4 @@
-// Agnostic Wayland GUI library: xdg-toplevel bootstrap, EGL init, frame-callback event loop, pointer/keyboard listeners.
+// Agnostic Wayland GUI library: xdg-toplevel bootstrap, Vulkan surface, frame-callback event loop, pointer/keyboard listeners.
 const std = @import("std");
 const log = @import("../core/log.zig");
 const builtin = @import("builtin");
@@ -9,19 +9,15 @@ const Color = @import("../core/color.zig").Color;
 const adapter = @import("adapter.zig");
 const input = @import("input.zig");
 const keymap = @import("keymap.zig");
-const present = @import("present.zig");
 // Display density: the outputs this window is on, and the scale they resolve to.
 const ui_scale = @import("ui_scale.zig");
 const scale = @import("../core/scale.zig");
 // The one place a logical window becomes device pixels, shared with the CPU backends so a 2x window means the same thing everywhere.
 const soft = @import("../core/render_software.zig");
 
-// Wayland client bootstrap + xdg-toplevel/EGL window (Task A, tiled).
+// Wayland client bootstrap + xdg-toplevel window (Task A, tiled): the GPU surface is Vulkan, created by renderer.zig.
 const c = @cImport({
     @cInclude("wayland-client.h");
-    @cInclude("wayland-egl.h");
-    @cInclude("EGL/egl.h");
-    @cInclude("GLES2/gl2.h");
     @cInclude("wlr-layer-shell-unstable-v1-client-protocol.h");
     @cInclude("xdg-shell-client-protocol.h");
     @cInclude("cursor-shape-v1-client-protocol.h");
@@ -79,19 +75,6 @@ pub fn layerSize() LayerSize {
     return .{ .w = 720, .h = 480 };
 }
 
-/// Task A: EGL config attributes — RGBA8 + WINDOW_BIT + OPENGL_ES3_BIT, terminated with EGL_NONE.
-pub fn eglConfigAttribs() [13]c.EGLint {
-    return .{
-        c.EGL_RED_SIZE,        8,
-        c.EGL_GREEN_SIZE,      8,
-        c.EGL_BLUE_SIZE,       8,
-        c.EGL_ALPHA_SIZE,      8,
-        c.EGL_SURFACE_TYPE,    c.EGL_WINDOW_BIT,
-        c.EGL_RENDERABLE_TYPE, c.EGL_OPENGL_ES3_BIT,
-        c.EGL_NONE,
-    };
-}
-
 /// Task A: parse QS_SETTINGS_TEST_FRAMES — null/empty/invalid means "run until the compositor closes us" (production behavior).
 pub fn parseTestFrames(env: ?[]const u8) ?u32 {
     const s = env orelse return null;
@@ -102,17 +85,6 @@ pub fn parseTestFrames(env: ?[]const u8) ?u32 {
 fn testFramesFromEnv() ?u32 {
     const raw = std.c.getenv("QS_SETTINGS_TEST_FRAMES") orelse return null;
     return parseTestFrames(std.mem.span(raw));
-}
-
-/// Window background (sidebar_bg #111111) as normalized RGBA floats for glClearColor.
-fn clearColor() [4]f32 {
-    const clay = Color.rgb(0x11, 0x11, 0x11).toClay();
-    return .{
-        clay[0] / 255.0,
-        clay[1] / 255.0,
-        clay[2] / 255.0,
-        clay[3] / 255.0,
-    };
 }
 
 const Globals = struct {
@@ -213,7 +185,7 @@ pub const pointerPosChanged = adapter.pointerPosChanged;
 /// Toolkit-style window configuration (GTK/GPUI/egui-like).
 pub const WindowConfig = contract.WindowConfig;
 
-/// UI delegate: Window owns the platform (xdg-toplevel bootstrap, EGL, frame-callback loop, input listeners) and forwards input/lifecycle here; the.
+/// UI delegate: Window owns the platform (xdg-toplevel bootstrap, Vulkan surface, frame-callback loop, input listeners) and forwards input/lifecycle here; the.
 pub const Delegate = contract.Delegate;
 
 fn xdgWmBasePing(
@@ -727,8 +699,6 @@ pub const Window = struct {
     /// The bound `wl_output` proxies, so a scale arrives only from outputs this window actually knows.
     output_objs: [ui_scale.max_outputs]?*c.struct_wl_output = [_]?*c.struct_wl_output{null} ** ui_scale.max_outputs,
     output_objs_len: usize = 0,
-    /// The EGL window, so a scale change can resize the buffers without waiting for a configure.
-    egl_window: ?*c.struct_wl_egl_window = null,
 
     // ---- Listener storage (MUST outlive the proxy) ---- wl_proxy_add_listener does NOT copy the listener struct - it keeps the caller's pointer.
     pointer_listener: c.struct_wl_pointer_listener = pointerListener(),
@@ -775,11 +745,6 @@ pub const Window = struct {
         if (self.surface) |surface| {
             const rounded: i32 = @intFromFloat(@round(s));
             c.wl_surface_set_buffer_scale(surface, if (rounded < 1) 1 else rounded);
-        }
-        if (self.egl_window) |w| {
-            const px = self.deviceSize();
-            c.wl_egl_window_resize(w, @intCast(px.w), @intCast(px.h), 0, 0);
-            c.glViewport(0, 0, @intCast(px.w), @intCast(px.h));
         }
         self.needs_draw = true;
     }
@@ -895,39 +860,10 @@ pub const Window = struct {
         if (c.wl_display_roundtrip(display) < 0) return error.RoundtripFailed;
         self.applyUiScale();
 
-        // ---- EGL bootstrap (initial size from config) ----
-        const egl_display = c.eglGetDisplay(@ptrCast(display));
-        if (egl_display == c.EGL_NO_DISPLAY) return error.EglNoDisplay;
-        var major: c.EGLint = 0;
-        var minor: c.EGLint = 0;
-        if (c.eglInitialize(egl_display, &major, &minor) == c.EGL_FALSE) return error.EglInitFailed;
-        defer _ = c.eglTerminate(egl_display);
-        if (c.eglBindAPI(c.EGL_OPENGL_ES_API) == c.EGL_FALSE) return error.EglBindFailed;
-        var attribs = eglConfigAttribs();
-        var egl_config: c.EGLConfig = null;
-        var nconfigs: c.EGLint = 0;
-        if (c.eglChooseConfig(egl_display, &attribs, &egl_config, 1, &nconfigs) == c.EGL_FALSE or nconfigs == 0)
-            return error.EglConfigFailed;
-        const ctx_attribs = [_]c.EGLint{ c.EGL_CONTEXT_MAJOR_VERSION, 3, c.EGL_NONE };
-        const egl_ctx = c.eglCreateContext(egl_display, egl_config, c.EGL_NO_CONTEXT, &ctx_attribs);
-        if (egl_ctx == c.EGL_NO_CONTEXT) return error.EglContextFailed;
-        defer _ = c.eglDestroyContext(egl_display, egl_ctx);
-
-        const px = self.deviceSize();
-        const egl_window = c.wl_egl_window_create(surface, @intCast(px.w), @intCast(px.h)) orelse
-            return error.EglWindowFailed;
-        self.egl_window = egl_window;
-        defer c.wl_egl_window_destroy(egl_window);
-        const egl_surface = c.eglCreateWindowSurface(egl_display, egl_config, @ptrCast(egl_window), null);
-        if (egl_surface == c.EGL_NO_SURFACE) return error.EglSurfaceFailed;
-        defer _ = c.eglDestroySurface(egl_display, egl_surface);
-        if (c.eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_ctx) == c.EGL_FALSE)
-            return error.EglMakeCurrentFailed;
-
-        const cc = clearColor();
-        c.glClearColor(cc[0], cc[1], cc[2], cc[3]);
-        c.glClear(c.GL_COLOR_BUFFER_BIT);
-        present.present(egl_display, egl_surface);
+        // ---- Vulkan surface (initial size from config) ---- The renderer creates its device lazily on the first frame, so it only needs the pair.
+        render.attach(@ptrCast(display), @ptrCast(surface));
+        // LIFO: this runs before the `wl_surface` below is destroyed, which the swapchain is still drawing into.
+        defer render.shutdown();
 
         // ---- event loop: on-demand rendering (dirty-flag driven).
         const max_frames = testFramesFromEnv();
@@ -935,6 +871,8 @@ pub const Window = struct {
         var frame_cb = c.wl_surface_frame(surface) orelse return error.NoFrameCallback;
         _ = c.wl_callback_add_listener(frame_cb, &self.callback_listener, self);
         self.frame_pending = true;
+        // The first frame draws immediately: a surface with no buffer attached is not mapped, so the compositor owes us no frame callback yet.
+        self.frame_done = true;
         // The frame request is surface state: it needs a commit to take effect (the pre-loop present already happened, so without this commit dispatch would.
         c.wl_surface_commit(surface);
         // The display's own fd, so the loop can poll it together with the devtool wake pipe.
@@ -987,12 +925,8 @@ pub const Window = struct {
                         self.win_h = self.pending_h;
                         self.pending_w = 0;
                         self.pending_h = 0;
-                        const dev = self.deviceSize();
-                        c.wl_egl_window_resize(egl_window, @intCast(dev.w), @intCast(dev.h), 0, 0);
-                        c.glViewport(0, 0, @intCast(dev.w), @intCast(dev.h));
                         if (self.delegate) |d| d.on_resize(d.ptr, self.win_w, self.win_h);
                     }
-                    c.glClear(c.GL_COLOR_BUFFER_BIT);
                     // Drawing happens in the delegate; Window swaps after it returns.
                     if (self.delegate) |d| d.on_frame(d.ptr, self.win_w, self.win_h);
                     // Per-frame cursor-shape apply (change-only): clayFrame resolved the contract Cursor -> shape AFTER endLayout into frame.currentShape().
@@ -1003,7 +937,6 @@ pub const Window = struct {
                             self.last_shape = shape;
                         }
                     }
-                    present.present(egl_display, egl_surface);
                     frames += 1;
                     if (max_frames) |n| {
                         if (frames >= n) break;
@@ -1158,33 +1091,6 @@ test "attached delegate round-trips on_key/on_close/is_quit" {
     try std.testing.expect(!d.is_quit(d.ptr));
     try std.testing.expect(d.on_key(d.ptr, 1, true));
     try std.testing.expect(d.is_quit(d.ptr));
-}
-
-test "eglConfigAttribs requests RGBA8 ES3 window surface terminated by NONE" {
-    const a = eglConfigAttribs();
-    try std.testing.expect(a[a.len - 1] == c.EGL_NONE);
-    var red: c.EGLint = -1;
-    var green: c.EGLint = -1;
-    var blue: c.EGLint = -1;
-    var alpha: c.EGLint = -1;
-    var surface_type: c.EGLint = -1;
-    var renderable: c.EGLint = -1;
-    var i: usize = 0;
-    while (i + 1 < a.len) : (i += 2) {
-        if (a[i] == c.EGL_NONE) break;
-        if (a[i] == c.EGL_RED_SIZE) red = a[i + 1];
-        if (a[i] == c.EGL_GREEN_SIZE) green = a[i + 1];
-        if (a[i] == c.EGL_BLUE_SIZE) blue = a[i + 1];
-        if (a[i] == c.EGL_ALPHA_SIZE) alpha = a[i + 1];
-        if (a[i] == c.EGL_SURFACE_TYPE) surface_type = a[i + 1];
-        if (a[i] == c.EGL_RENDERABLE_TYPE) renderable = a[i + 1];
-    }
-    try std.testing.expectEqual(@as(c.EGLint, 8), red);
-    try std.testing.expectEqual(@as(c.EGLint, 8), green);
-    try std.testing.expectEqual(@as(c.EGLint, 8), blue);
-    try std.testing.expectEqual(@as(c.EGLint, 8), alpha);
-    try std.testing.expect(surface_type & c.EGL_WINDOW_BIT != 0);
-    try std.testing.expect(renderable & c.EGL_OPENGL_ES3_BIT != 0);
 }
 
 test "parseTestFrames parses N, rejects null/empty/invalid" {

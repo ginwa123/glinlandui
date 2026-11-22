@@ -137,9 +137,10 @@ pub fn build(b: *std.Build) void {
 
         // System libs propagate to consumers via linkLibrary chain.
         mod.linkSystemLibrary("wayland-client", .{});
-        mod.linkSystemLibrary("wayland-egl", .{});
-        mod.linkSystemLibrary("EGL", .{});
-        mod.linkSystemLibrary("GLESv2", .{});
+        mod.linkSystemLibrary("vulkan", .{});
+        // The Vulkan shim: one C TU, with its plain-C header in src/linux so @cImport never sees a Vulkan header.
+        mod.addIncludePath(b.path("src/linux"));
+        mod.addCSourceFile(.{ .file = b.path("src/linux/vk.c"), .flags = &.{"-Werror"} });
     }
     // Clay is a portable C implementation, and every NATIVE host needs libc alongside it; all remaining native dependencies above are platform-gated.
     if (is_wasm) {
@@ -591,8 +592,8 @@ pub fn build(b: *std.Build) void {
         win_gpu_test_step.dependOn(&skip.step);
     }
 
-    // `native-test` runs the Linux-only Wayland/EGL/GLES3 tests.
-    const native_test_step = b.step("native-test", "Run the Linux-only native (Wayland/EGL/GLES3) tests");
+    // `native-test` runs the Linux-only Wayland/Vulkan tests.
+    const native_test_step = b.step("native-test", "Run the Linux-only native (Wayland/Vulkan) tests");
     if (native_protocols) |protocols| {
         native_test_step.dependOn(makeNativeTestStep(b, target, zclay_mod, protocols));
     }
@@ -857,6 +858,8 @@ fn makeNativeTestStep(
         .target = target,
     });
     m.addImport("zclay", zclay);
+    m.addIncludePath(b.path("src/linux"));
+    m.addCSourceFile(.{ .file = b.path("src/linux/vk.c"), .flags = &.{"-Werror"} });
     m.addIncludePath(protocols.xdg.header.dirname());
     m.addIncludePath(protocols.layer_shell.header.dirname());
     m.addIncludePath(protocols.cursor_shape.header.dirname());
@@ -870,11 +873,9 @@ fn makeNativeTestStep(
     m.addCSourceFile(.{ .file = b.path("src/core/stb_image_impl.c"), .flags = stbFlags(false) });
     const test_exe = b.addTest(.{ .root_module = m });
     test_exe.root_module.linkSystemLibrary("c", .{});
-    test_exe.root_module.linkSystemLibrary("GLESv2", .{});
+    test_exe.root_module.linkSystemLibrary("vulkan", .{});
     // wayland-client is required at link time: Window owns the listener structs as fields, so every wl_* symbol is referenced even though run() itself is.
     test_exe.root_module.linkSystemLibrary("wayland-client", .{});
-    test_exe.root_module.linkSystemLibrary("wayland-egl", .{});
-    test_exe.root_module.linkSystemLibrary("EGL", .{});
     return &b.addRunArtifact(test_exe).step;
 }
 

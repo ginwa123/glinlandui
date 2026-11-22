@@ -23,7 +23,7 @@ Rules for anyone (human or agent) changing this repository.
 ```sh
 zig build                  # the library, the demo, and the examples
 zig build test             # the cross-platform parity suite (982 tests on macOS)
-zig build native-test      # Linux only: the Wayland/EGL/GLES3 backend
+zig build native-test      # Linux only: the Wayland/Vulkan backend
 zig build run              # the demo window
 zig build run-calculator   # the calculator example
 zig build run-todo         # the MVVM todo example (see examples/todo/README.md)
@@ -73,7 +73,7 @@ src/root.zig        the public surface: Window, render, text, frame, host, compo
 src/platform.zig    the ONLY file that branches on OS
 src/core/           platform-agnostic: Clay components, renderer, text, testing harness
 src/core/devtools/  the inspector: the tree snapshot, the in-app window, the CLI
-src/linux/          Wayland / EGL / GLES3 backend
+src/linux/          Wayland / Vulkan backend (+ vk.c, its one C shim)
 src/mac/            Cocoa backend, plus the Objective-C shim
 src/file_dialog.zig system file dialog: NSOpenPanel on macOS, a portable stub elsewhere
 ```
@@ -157,7 +157,7 @@ when a listed backend starts honouring it (a stale entry). So the list can only 
 a line is the proof a fix landed. **The list is empty today:** macOS divides `glin_cocoa_backing_scale`
 in, Windows and the browser size their surface from the scale, and Linux binds `wl_output`, takes the
 largest scale among the outputs the surface has entered (plus `wl_surface.preferred_buffer_scale`),
-calls `set_buffer_scale`, sizes the EGL window in device pixels, and rasterises text at `fs * scale`
+calls `set_buffer_scale`, sizes the Vulkan swapchain in device pixels, and rasterises text at `fs * scale`
 so the glyphs are drawn at device resolution rather than upscaled.
 
 ## Scrolling and repaint

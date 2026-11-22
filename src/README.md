@@ -14,7 +14,7 @@ A platform-agnostic **Clay GUI library** in Zig 0.16. Clay (in `vendor/clay`) do
 layout + render-command emission; this library owns the window, the event loop,
 the renderer, text measurement, input dispatch, and a widget set.
 
-Two real backends: **Wayland/EGL/GLES3** on Linux, **Cocoa/CoreGraphics**
+Two real backends: **Wayland/Vulkan** on Linux, **Cocoa/CoreGraphics**
 on macOS. Consumers write `@import("glinlandui")` and get the same surface on both.
 
 ```
@@ -160,7 +160,7 @@ stating plainly because it is the most-asked question about this layout:
 
 | | rasterizes the UI | composites the frame | window |
 |---|---|---|---|
-| `linux/` | **on the GPU** (EGL + GLES3) | GPU swapchain | Wayland |
+| `linux/` | **on the GPU** (Vulkan) | Vulkan swapchain | Wayland |
 | `mac/` | on the CPU (`core/render_software.zig`) | CoreGraphics bitmap | NSWindow |
 | `windows/` | on the CPU (`core/render_software.zig`) | **D3D11 swapchain** (GDI if the GPU cannot rasterize) | HWND |
 
@@ -311,8 +311,9 @@ A gate that has never been seen to fail is not a gate.
 
 ### I4 — One C TU per platform folder
 
-`linux/` owns no C shim: its GLES text path draws with the shared `core/glyphs.zig` face. `mac/` owns exactly `shim.m`
-(+ `shim.h`); `windows/` owns exactly `shim.c` (+ `shim.h`). Vendored-library TUs
+`linux/` owns exactly `vk.c` (+ `vk.h`): the Vulkan objects, and nothing that decides anything. Its
+text still draws with the shared `core/glyphs.zig` face. `mac/` owns `shim.m` (+ `shim.h`) and
+`metal.m` (+ `metal.h`); `windows/` owns exactly `shim.c` (+ `shim.h`). Vendored-library TUs
 (`stb_*_impl.c`) live in `core/`.
 
 Consequence you must respect: **`mac/` and `windows/` both have a file called `shim.h` with
@@ -361,7 +362,7 @@ zig build test --summary all              # expect: 443/458 (15 skipped)  ← se
 ./ci/check_layering.sh                    # expect: layering: ok
 ./ci/check_component_imports.sh           # expect: component-imports: ok (25 component(s) through the façade)
 
-# Linux native backends (Wayland/EGL/GLES3). NOT part of the parity count.
+# Linux native backends (Wayland/Vulkan). NOT part of the parity count.
 zig build native-test --summary all       # expect: 99/99
 
 # Real build + a headless smoke test that proves pixels were painted.
@@ -395,9 +396,10 @@ them.
    Phase 1 of the refactor silently moved `native-test` from 65 to 87. Check
    `--summary all` after touching imports in a test root.
 
-3. **`@cImport` instances are per-file.** `linux/present.zig` takes
-   `?*anyopaque` rather than `c.EGLDisplay` precisely so two different EGL
-   `@cImport`s do not have to agree on a type identity. Do the same when passing
+3. **`@cImport` instances are per-file.** `linux/renderer.zig` takes
+   `?*anyopaque` for the `wl_display`/`wl_surface` it hands to `glin_vk_create`
+   precisely so two different `@cImport`s (Wayland in `window.zig`, Vulkan in
+   `vk.c`) do not have to agree on a type identity. Do the same when passing
    opaque C pointers across files.
 
 4. **An empty struct field named like a module collides.** `mac/window.zig` has a

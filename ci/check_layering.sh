@@ -112,7 +112,7 @@ scan src/core "$SOURCE_GLOB" 'os\.tag' \
 
 # Vendored stb is allowed: it is byte-identical on every host and build.zig adds
 # its include path unconditionally. Everything else names a platform.
-scan src/core "$SOURCE_GLOB" '@cInclude\("(EGL|GLES|pango|cocoa|wayland|d3d11|dxgi|windows)' \
+scan src/core "$SOURCE_GLOB" '@cInclude\("(vulkan|Vulkan|pango|cocoa|wayland|d3d11|dxgi|windows)' \
   "R3 violated: src/core/** includes a platform C header"
 
 # ---------------------------------------------------------------------------
