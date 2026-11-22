@@ -29,6 +29,11 @@ pub fn setSink(s: ?Sink) void {
     sink = s;
 }
 
+/// Put the default back (stderr in production, nothing in a test): what a caller that borrowed the sink restores.
+pub fn resetSink() void {
+    sink = &stderrSink;
+}
+
 /// Report a degraded-but-working condition.
 pub fn warn(comptime fmt: []const u8, args: anytype) void {
     emit(.warn, fmt, args);

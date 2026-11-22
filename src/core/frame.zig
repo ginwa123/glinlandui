@@ -507,6 +507,20 @@ pub fn checkElementCeiling() void {
 // A Release build logs a permanent overflow once, not sixty times a second.
 var capacity_warned: bool = false;
 
+// Past this many declared elements a frame warns once: README.md's cost model is linear in what an app DECLARES, so a tree that doubled is a regression the engine can name. 0 turns it off.
+pub var warn_past_elements: usize = 4000;
+
+var budget_warned: bool = false;
+
+/// Say so, once per host, when a frame declares more elements than the documented budget: the app that got slower is cheaper to find at the frame that crossed it than in a profiler.
+pub fn checkFrameBudget() void {
+    if (warn_past_elements == 0 or budget_warned) return;
+    const declared: usize = @intCast(@max(0, lastElementCount()));
+    if (declared <= warn_past_elements) return;
+    budget_warned = true;
+    log.warn("this frame declared {d} elements, past the {d} the cost model assumes: frame cost is linear in declared elements, so virtualise the list (examples/lazy_scroll) or raise frame.max_elements deliberately", .{ declared, warn_past_elements });
+}
+
 // One slot of the per-frame id set: the key, plus the frame generation that wrote it, so a new frame invalidates the whole table by counting.
 const IdSlot = struct { key: u64 = 0, gen: u32 = 0 };
 
@@ -742,6 +756,7 @@ pub fn initClay(alloc: std.mem.Allocator, w: u32, h: u32) ![]u8 {
     cl.on_element = claimId;
     cl.on_begin_frame = resetIds;
     capacity_warned = false;
+    budget_warned = false;
     memo.reset();
     return clay_mem;
 }
@@ -917,6 +932,8 @@ pub fn clayFrameWithOptions(
     const commands = cl.endLayout();
     // Before the truncated commands are used for anything: this is the only place a frame that overflowed the element ceiling becomes visible.
     checkElementCeiling();
+
+    checkFrameBudget();
     // What the app declared is the truth; the window paints it at the zoom in force.
     scaleCommands(@constCast(commands), content_zoom);
     // A frame that draws exactly what the last one did does not need presenting: the window already shows those pixels.
@@ -1078,6 +1095,35 @@ test "an off-screen background costs no render command, and culling off brings e
     declareCullColumn();
     const all = cl.endLayout();
     try std.testing.expectEqual(@as(usize, 40), all.len);
+}
+
+var budget_warnings: usize = 0;
+
+fn countWarn(_: log.Level, _: []const u8) void {
+    budget_warnings += 1;
+}
+
+test "a frame past the declared-element budget warns once, and only once" {
+    const headless = @import("testing/headless.zig");
+    const budget_before = warn_past_elements;
+    warn_past_elements = 4;
+    defer warn_past_elements = budget_before;
+    budget_warnings = 0;
+    log.setSink(countWarn);
+    defer log.resetSink();
+
+    var round: usize = 0;
+    while (round < 2) : (round += 1) {
+        headless.begin(.{ .x = 99999, .y = 99999 }, false);
+        cl.beginLayout();
+        var i: u32 = 0;
+        while (i < 10) : (i += 1) cl.UI()(.{ .id = .IDI("budget-row", i + 1) })({});
+        _ = cl.endLayout();
+        checkFrameBudget();
+    }
+
+    // Ten declared elements against a budget of four, on two frames: the app hears it once, not sixty times a second.
+    try std.testing.expectEqual(@as(usize, 1), budget_warnings);
 }
 
 test "shouldDrawHash answers exactly as shouldDraw does, on the digest the frame already computed" {
