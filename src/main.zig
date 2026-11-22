@@ -9,15 +9,6 @@ const App = demo_app.App;
 /// The browser's exported ABI, bound to this application.
 const web = glinlandui.platform.web_exports.Exports(App, App.root);
 
-/// The webapp's font, as a generated module.
-const font_data = @import("font_data");
-
-/// The embedded font, handed to the web entry point.
-pub const embedded_font: []const u8 = if (@import("builtin").cpu.arch.isWasm())
-    font_data.bytes
-else
-    &.{};
-
 // The freestanding C runtime: `malloc`, `free`, `calloc`, `realloc`, `strtol`, `abort`, `abs` and the `str*` family.
 comptime {
     if (@import("builtin").cpu.arch.isWasm()) {

@@ -68,6 +68,9 @@ pub const wayland_lib = platform;
 // The file / folder / save-target dialog. The system clipboard: `read(buf)` and `write(text)`. A no-op on a platform with no backend.
 pub const clipboard = platform.clipboard;
 
+/// The library's log sink: `setSink`, and the `info`/`warn`/`err` calls an app and the library share.
+pub const log = @import("core/log.zig");
+
 pub const file_dialog = struct {
     pub const Kind = platform.FileDialogKind;
     pub const Rule = platform.FileDialogRule;

@@ -47,7 +47,8 @@ pub const LazyViewModel = struct {
         if (!self.log or now_ns < self.log_next_ns) return;
         self.log_next_ns = now_ns + std.time.ns_per_s;
         const s = self.ui.stats();
-        std.debug.print("fps {d: >6.1}  frame {d: >5.2} ms  avg {d: >5.2}  max {d: >6.2}  declared {d}\n", .{
+        // Through the library's sink: stderr on a desktop, a counter in a browser (which has none), silent in a test.
+        glinlandui.log.info("fps {d: >6.1}  frame {d: >5.2} ms  avg {d: >5.2}  max {d: >6.2}  declared {d}", .{
             s.fps, s.last_ms, s.avg_ms, s.max_ms, self.ui.declared,
         });
     }

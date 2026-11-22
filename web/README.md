@@ -6,9 +6,11 @@ deliberately not part of `src/`, which holds only code that is compiled.
 
 ```
 web/
-├── index.html   the page: one <canvas>, a status line, a <noscript>
+├── index.html   the page: one full-bleed <canvas> and nothing in the way
 ├── shim.js      the browser shim — the peer of mac/shim.m
-├── style.css    page chrome + the canvas sizing contract
+├── gpu.js       the GPU backends: WebGPU first, WebGL2 second, `null` third
+├── parity.html  CPU vs GPU pixel diff, in a browser (a developer page)
+├── style.css    the canvas sizing contract, the top-edge app menu, the failure panel
 └── smoke.mjs    the off-browser verification (run by CI, not by the page)
 ```
 
@@ -44,6 +46,9 @@ it is checked on Linux and macOS as well as here:
 | resize storms → one resize per frame | `src/web/adapter.zig` |
 | RGBA8 → `ImageData` | `src/web/present.zig` (the identity) |
 | the dirty flag / idle-CPU decision | `src/web/window.zig` |
+| Clay commands → vertices + segments | `src/web/gpu.zig` |
+| the glyph atlas: packing and version | `src/web/gpu.zig` |
+| which renderer draws a frame | `src/web/renderer.zig` |
 
 `src/web/shim.h` is the ABI both sides agree on, and `smoke.mjs` cross-checks it
 against the module's real exports in both directions — a header that has drifted
@@ -64,11 +69,146 @@ The two things `shim.js` *does* own are the two it cannot delegate:
    intermittently — the failure mode `src/web/present.zig` documents from the Zig
    side.
 
+## The page is the window
+
+A desktop build opens a window and the app fills it. The page does the same: the
+canvas is fixed to the viewport, the toolkit lays out at that size, and there is
+no heading, no lede, no footer and no visible status text — `web/index.html` is a
+canvas, a screen-reader status line, and a `<noscript>`.
+
+A fixed-size screen reads better at its own size, so `?w=360&h=430` pins the
+canvas to that size and centres it with a window edge — the calculator at 360x430
+on a 1440x900 desktop, rather than maximised. Every app's desktop size is in the
+table below.
+
+Three things the page still owns, none of them in the way:
+
+- **The app menu**, a 5px strip at the top edge that expands into a menu bar on
+  hover or keyboard focus (`#apps`, filled by `shim.js` from its `APPS` list).
+  Hidden, it covers nothing anyone is aiming at.
+- **The status line**, `role="status"` and visually hidden: it is what a screen
+  reader hears and what CI-side tooling can read, not chrome.
+- **The failure panel**, created only when something goes wrong. A page that
+  works has no overlay at all; a page that cannot fetch the module says so in one
+  visible line instead of a blank window.
+
+## The apps
+
+`zig build web` installs one wasm module per app, and `?app=<id>` picks it — one
+library, six entry points, one page:
+
+| `?app=` | module | desktop size | what it is |
+|---|---|---|---|
+| `demo` (default) | `glinlandui.wasm` | 480x360 | the demo: click, toggle, slider, file dialog |
+| `calculator` | `glinlandui-calculator.wasm` | 360x430 | the keypad example, with a working keyboard |
+| `todo` | `glinlandui-todo.wasm` | 720x640 | MVVM: state, ViewModel, view |
+| `catalog` | `glinlandui-catalog.wasm` | 960x760 | every component on one scrolling screen |
+| `file-dialog` | `glinlandui-file-dialog.wasm` | 520x300 | the dialog API. A browser has no filesystem, so it shows the portable stub's "unsupported" answer — the app runs, its SUBJECT cannot |
+| `lazy-scroll` | `glinlandui-lazy-scroll.wasm` | 900x640 | 10,000 virtualised rows |
+
+Add `&w=<px>&h=<px>` to any of those URLs to open the app at its desktop size
+instead of maximised: `?app=calculator&w=360&h=430`.
+
+```sh
+zig build -Dweb run-todo        # build all modules, serve, print the URL
+zig build -Dweb run-catalog
+```
+
+`web/smoke.mjs` boots **every** module (init, run, one frame, painted pixels, no
+log errors, the font installed, then a GPU frame and a fall back to the CPU), so
+"the examples run in a browser" is a gate rather than a claim. The one thing the
+page cannot do is the file dialog's actual job, and the example says so on
+screen.
+
+The face is the **library's**, not an app's: `build.zig`'s `-Dfont` compiles the
+TTF into the `font_data` module, `src/web/exports.zig` installs it from
+`glin_web_init`, and no application — native or browser — declares a typeface.
+
+### Images
+
+An app names a path — `image(.{ .path = "examples/catalog/assets/disc.png" })` —
+and that does not change for the browser. `build.zig` embeds the app's `assets/`
+directory into a generated `asset_data` module, the app's `web.zig` hands it to
+the engine (`ExportsWithAssets`), and `core/image_store.zig` serves those bytes to
+the same decoder the desktop build uses for a file. The CPU path blits the
+decoded pixels; the GPU path uploads them as textures and names them in
+`kind == 2` segments.
+
+An app with no `assets/` directory carries none of this, so nothing is paid for
+it. `web/smoke.mjs` checks both halves: the catalog decodes exactly three images
+once a window is tall enough to show them, and every other module reports zero.
+
+### Zoom and display density
+
+A browser reports pointer positions in the canvas **backing store** (CSS pixels ×
+`devicePixelRatio`) while the toolkit lays out in CSS pixels — so `src/web/input.zig`'s
+`toLayout` divides the display scale back out before a hit test sees the point. That
+conversion is the browser's alone: Wayland and AppKit already report logical points.
+
+It was missing once, and the symptom was "the components are dead unless the zoom is
+100%": at 200% every click landed twice as far from the top-left, at 80% it landed
+short. Three unit tests pin it now (2x, 1.25x, a nonsense scale), plus an end-to-end
+Clay hit test at 2x and a `web/smoke.mjs` check that clicks a keypad at 2x scale.
+
+Zooming also changes `devicePixelRatio` **without** necessarily resizing the CSS box
+(a pinned `?w=&h=` canvas is a fixed box by definition), so `shim.js` watches
+`matchMedia("(resolution: Ndppx)")` and re-arms it on every change: `resize` alone
+misses a zoom on a fixed-size canvas.
+
+## The renderer ladder: WebGPU, else WebGL2, else the CPU
+
+The browser target renders with the best backend the page can create:
+
+| order | renderer | where the geometry comes from | what the page does |
+|---|---|---|---|
+| 1 | **WebGPU** (WGSL) | `src/web/gpu.zig` | uploads the vertex buffer, binds the atlas, one render pass |
+| 2 | **WebGL2** (GLSL ES 300) | the same buffer, byte for byte | `drawArrays` per segment, scissor per segment |
+| 3 | **CPU rasterizer** | `core/render_software.zig` | `putImageData` of the RGBA8 surface |
+
+The ladder is not a performance hint: it is the browser's copy of the native
+fallbacks. macOS tries Metal and drops to the CPU rasterizer plus a CoreGraphics
+blit; Windows tries D3D11 and drops to GDI. Here the toolkit asks
+`glin_web_gpu_ready(kind)` — 1 WebGPU, 2 WebGL2, 0 none — and a browser with
+neither API keeps exactly the behaviour it had before the GPU path existed.
+
+**The order lives in `web/gpu.js`, and it has to.** A canvas hands out ONE kind of
+context for its lifetime, so `getContext("2d")` first would make WebGL2 and WebGPU
+impossible afterwards; `shim.js` therefore asks for the GPU *before* the 2d
+context, and only falls through to `2d` when both GPU APIs said no. Everything
+else is still Zig: the vertex/segment buffers, the clipping, the text baseline,
+the atlas packing and the frame size all come out of `src/web/gpu.zig`, which is
+the same code as `src/mac/renderer.zig` with the API calls removed.
+
+`?gpu=off`, `?gpu=webgl` and `?gpu=webgpu` force one rung, which is how the three
+paths are compared on one machine — and how the CPU fallback is proven to still
+work in a browser that has a GPU.
+
+### What the page is given, per frame
+
+`src/web/shim.h` documents the ABI; the short version is that the page reads
+
+- `glin_web_gpu_verts_ptr/_len` — 17-float vertices, 68 bytes each;
+- `glin_web_gpu_segs_ptr/_count` — 9 int32 per segment: `start`, `count`, a
+  scissor, a texture id and a kind (0 rect, 1 text, 2 image);
+- `glin_web_gpu_atlas_ptr/_version` — 1024x1024 8-bit coverage, re-uploaded when
+  the version changes;
+- `glin_web_gpu_width/_height` and `glin_web_gpu_clear_rgba`.
+
+`glin_web_gpu_vertex_stride()` and `_segment_stride()` exist so the page never
+hardcodes a layout: `web/gpu.js` asserts them against 68/36 and throws if the Zig
+side ever changes shape, which turns a silent mis-draw into a message.
+
 ## Verifying it without a browser
 
 ```sh
 zig build web && node web/smoke.mjs
 ```
+
+That run also covers the Zig half of the GPU path: `glin_web_gpu_ready(1)`
+switches the renderer with no device in sight, and the smoke test asserts the
+vertex buffer, the segment coverage, the atlas and the frame size, then switches
+back to the CPU and asserts the surface returns. What Node cannot cover is the
+draw call itself.
 
 `smoke.mjs` drives the module through `src/web/shim.h` in Node and exits non-zero
 on failure. It is the browser's peer of `ci/check_macos_colors.sh`: the canvas, the
@@ -114,3 +254,38 @@ the key — which is the app's answer, decided in Zig by `components.input`. Tha
 keeps Tab, Space and the arrows working for the toolkit's own text fields while
 still letting them scroll or move focus when nothing wants them, and it keeps the
 decision out of the one file here that has no tests.
+
+## Verifying it IN a browser, pixel for pixel
+
+```
+zig build web && zig build serve        # http://localhost:8080/parity.html
+```
+
+`web/parity.html` is the browser's peer of `golden_test.zig`: it instantiates the
+module twice, renders one frame with the CPU rasterizer and the same frame with
+whatever GPU backend the browser gives it, reads the GPU result back through a
+2d canvas and prints the difference. The toolkit's standard is 1/255.
+
+Measured on the machine this landed on (Firefox, WebGL2 over llvmpipe, 480x360):
+
+```
+CPU  480x360, 691200 bytes, 172800 painted, 0 error(s)
+GPU  WebGL2 (kind 2)
+     480x360, 606 vertices, 6 segment(s), atlas v1 (1048576 bytes)
+     draw returned true
+DIFF 172800 pixels: mean |d| 0.00/255, max 1, 0.00% over 8, 0.00% over 32
+```
+
+The same page picks WebGPU when the browser has it; that is the only way to
+exercise the WGSL path, and a browser without WebGPU (Firefox on Linux today)
+reports WebGL2 instead.
+
+Two things about headless verification, both learned the hard way:
+
+- **A `firefox --headless --screenshot` of a WebGL canvas is blank**, even when
+  the frame is correct — the compositor's GL layer is not captured. Read the
+  pixels back (`drawImage` into a 2d canvas, then `getImageData`) and print the
+  numbers; that is what `parity.html` does.
+- **A screenshot fires on `load`, before an async wasm fetch finishes.** If you
+  script a screenshot, delay the load event (a slow `<img>`) or you will capture
+  the page before its first frame.

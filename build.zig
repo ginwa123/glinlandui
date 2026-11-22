@@ -180,10 +180,9 @@ pub fn build(b: *std.Build) void {
     web.initial_memory = 16 * 1024 * 1024;
     web.max_memory = 256 * 1024 * 1024;
 
-    // The embedded font, handed to the entry point as a GENERATED MODULE.
+    // The embedded font, as a GENERATED MODULE, imported by the LIBRARY: `src/web/exports.zig` installs it, because a browser has no font paths and no application should have to declare a typeface.
     const font_module = makeFontModule(b, font_path);
     web_lib.addImport("font_data", font_module);
-    web.root_module.addImport("font_data", font_module);
 
     const install_web = b.addInstallArtifact(web, .{
         .dest_dir = .{ .override = .{ .custom = "web" } },
@@ -217,11 +216,10 @@ pub fn build(b: *std.Build) void {
         exe_opt = exe;
         b.installArtifact(exe);
 
-        // `zig build run` — and `zig build run --web`, which builds the webapp, serves it and prints the URL instead of launching a window.
-        const run_step = b.step("run", "Run the app (--web to build and serve the browser version)");
+        // `zig build run`, or `zig build -Dweb run`: the second builds every browser module, serves the page and prints the URL instead of opening a window.
+        const run_step = b.step("run", "Run the app (-Dweb to build and serve the browser version)");
         if (web_flag) {
-            run_step.dependOn(&install_web.step);
-            run_step.dependOn(&install_assets.step);
+            run_step.dependOn(web_step);
             run_step.dependOn(&serve_and_print(b, "demo").step);
         } else {
             const run_cmd = b.addRunArtifact(exe);
@@ -241,8 +239,6 @@ pub fn build(b: *std.Build) void {
     if (calc_supported) {
         const calc_mod = exampleModule(b, "calculator", target, optimize, mod);
         const calc_web_mod = exampleModule(b, "calculator", web_target, optimize, web_lib);
-        // The wasm entry reads the font through the app, so the module carries the generated font.
-        calc_web_mod.addImport("font_data", font_module);
         calc_mod_for_web = calc_web_mod;
 
         const calc = exampleExe(b, "calculator", target, optimize, mod, calc_mod);
@@ -258,7 +254,6 @@ pub fn build(b: *std.Build) void {
         web_calc.stack_size = 1024 * 1024;
         web_calc.initial_memory = 16 * 1024 * 1024;
         web_calc.max_memory = 256 * 1024 * 1024;
-        web_calc.root_module.addImport("font_data", font_module);
 
         const install_web_calc = b.addInstallArtifact(web_calc, .{
             .dest_dir = .{ .override = .{ .custom = "web" } },
@@ -267,12 +262,13 @@ pub fn build(b: *std.Build) void {
         const web_calc_step = b.step("web-calculator", "Build the calculator for the browser");
         web_calc_step.dependOn(&install_web_calc.step);
         web_calc_step.dependOn(&install_assets.step);
+        // `zig build web` is the whole set, the calculator included.
+        web_step.dependOn(&install_web_calc.step);
 
-        const run_calc_step = b.step("run-calculator", "Run the calculator (--web to build and serve the browser version)");
+        const run_calc_step = b.step("run-calculator", "Run the calculator (-Dweb to build and serve the browser version)");
         if (web_flag) {
-            // `--web`: build the wasm artifact, install the page, serve, print URL.
-            run_calc_step.dependOn(&install_web_calc.step);
-            run_calc_step.dependOn(&install_assets.step);
+            // `-Dweb`: every browser module and the page, served, with the URL printed.
+            run_calc_step.dependOn(web_step);
             run_calc_step.dependOn(&serve_and_print(b, "calculator").step);
         } else {
             const run_calc = b.addRunArtifact(calc);
@@ -303,12 +299,17 @@ pub fn build(b: *std.Build) void {
         const build_lazy_step = b.step("build-lazy-scroll", "Compile the lazy-scroll example (no window)");
         build_lazy_step.dependOn(&lazy.step);
 
-        const run_lazy_step = b.step("run-lazy-scroll", "Run the 10,000-row lazy-scroll example");
-        const run_lazy = b.addRunArtifact(lazy);
-        run_lazy_step.dependOn(&run_lazy.step);
-        run_lazy.step.dependOn(b.getInstallStep());
-        if (b.args) |args| {
-            run_lazy.addArgs(args);
+        const run_lazy_step = b.step("run-lazy-scroll", "Run the 10,000-row lazy-scroll example (-Dweb to build and serve the browser version)");
+        if (web_flag) {
+            run_lazy_step.dependOn(web_step);
+            run_lazy_step.dependOn(&serve_and_print(b, "lazy_scroll").step);
+        } else {
+            const run_lazy = b.addRunArtifact(lazy);
+            run_lazy_step.dependOn(&run_lazy.step);
+            run_lazy.step.dependOn(b.getInstallStep());
+            if (b.args) |args| {
+                run_lazy.addArgs(args);
+            }
         }
 
         // The frame-time measurement: no window, no vsync, just the frame the toolkit produces.
@@ -316,6 +317,15 @@ pub fn build(b: *std.Build) void {
         const bench_lazy = b.addRunArtifact(lazy);
         bench_lazy.addArgs(&.{ "--bench", "600" });
         bench_lazy_step.dependOn(&bench_lazy.step);
+
+        // ---- the same example, for the browser ---- One wasm artifact from `examples/lazy_scroll/web.zig`, sharing this library and the page.
+        const lazyscroll_web = exampleWebExe(b, "lazy_scroll", web_target, lazy_optimize, web_lib, exampleModule(b, "lazy_scroll", web_target, lazy_optimize, web_lib));
+        const install_lazyscroll_web = b.addInstallArtifact(lazyscroll_web, .{ .dest_dir = .{ .override = .{ .custom = "web" } } });
+        const step_lazy_scroll_web = b.step("web-lazy-scroll", "Build the lazy_scroll example for the browser");
+        step_lazy_scroll_web.dependOn(&install_lazyscroll_web.step);
+        step_lazy_scroll_web.dependOn(&install_assets.step);
+        // `zig build web` builds the whole set, so one command produces every app the page can show.
+        web_step.dependOn(&install_lazyscroll_web.step);
 
         lazy_test = exampleTest(b, lazy_mod);
 
@@ -333,13 +343,27 @@ pub fn build(b: *std.Build) void {
         const build_dlg_step = b.step("build-file-dialog", "Compile the file-dialog example (no window)");
         build_dlg_step.dependOn(&dlg.step);
 
-        const run_dlg_step = b.step("run-file-dialog", "Run the file-dialog example");
-        const run_dlg = b.addRunArtifact(dlg);
-        run_dlg_step.dependOn(&run_dlg.step);
-        run_dlg.step.dependOn(b.getInstallStep());
-        if (b.args) |args| {
-            run_dlg.addArgs(args);
+        const run_dlg_step = b.step("run-file-dialog", "Run the file-dialog example (-Dweb to build and serve the browser version)");
+        if (web_flag) {
+            run_dlg_step.dependOn(web_step);
+            run_dlg_step.dependOn(&serve_and_print(b, "file_dialog").step);
+        } else {
+            const run_dlg = b.addRunArtifact(dlg);
+            run_dlg_step.dependOn(&run_dlg.step);
+            run_dlg.step.dependOn(b.getInstallStep());
+            if (b.args) |args| {
+                run_dlg.addArgs(args);
+            }
         }
+
+        // ---- the same example, for the browser ---- One wasm artifact from `examples/file_dialog/web.zig`, sharing this library and the page.
+        const filedialog_web = exampleWebExe(b, "file_dialog", web_target, optimize, web_lib, exampleModule(b, "file_dialog", web_target, optimize, web_lib));
+        const install_filedialog_web = b.addInstallArtifact(filedialog_web, .{ .dest_dir = .{ .override = .{ .custom = "web" } } });
+        const step_file_dialog_web = b.step("web-file-dialog", "Build the file_dialog example for the browser");
+        step_file_dialog_web.dependOn(&install_filedialog_web.step);
+        step_file_dialog_web.dependOn(&install_assets.step);
+        // `zig build web` builds the whole set, so one command produces every app the page can show.
+        web_step.dependOn(&install_filedialog_web.step);
 
         dlg_test = exampleTest(b, dlg_mod);
 
@@ -357,13 +381,28 @@ pub fn build(b: *std.Build) void {
         const build_todo_step = b.step("build-todo", "Compile the todo example (no window)");
         build_todo_step.dependOn(&todo.step);
 
-        const run_todo_step = b.step("run-todo", "Run the MVVM todo example");
-        const run_todo = b.addRunArtifact(todo);
-        run_todo_step.dependOn(&run_todo.step);
-        run_todo.step.dependOn(b.getInstallStep());
-        if (b.args) |args| {
-            run_todo.addArgs(args);
+        const run_todo_step = b.step("run-todo", "Run the MVVM todo example (-Dweb to build and serve the browser version)");
+        if (web_flag) {
+            // `-Dweb`: build EVERY browser module and the page, then serve, so the app switcher works too.
+            run_todo_step.dependOn(web_step);
+            run_todo_step.dependOn(&serve_and_print(b, "todo").step);
+        } else {
+            const run_todo = b.addRunArtifact(todo);
+            run_todo_step.dependOn(&run_todo.step);
+            run_todo.step.dependOn(b.getInstallStep());
+            if (b.args) |args| {
+                run_todo.addArgs(args);
+            }
         }
+
+        // ---- the same example, for the browser ---- One wasm artifact from `examples/todo/web.zig`, sharing this library and the page.
+        const todo_web = exampleWebExe(b, "todo", web_target, optimize, web_lib, exampleModule(b, "todo", web_target, optimize, web_lib));
+        const install_todo_web = b.addInstallArtifact(todo_web, .{ .dest_dir = .{ .override = .{ .custom = "web" } } });
+        const step_todo_web = b.step("web-todo", "Build the todo example for the browser");
+        step_todo_web.dependOn(&install_todo_web.step);
+        step_todo_web.dependOn(&install_assets.step);
+        // `zig build web` builds the whole set, so one command produces every app the page can show.
+        web_step.dependOn(&install_todo_web.step);
 
         todo_test = exampleTest(b, todo_mod);
         // The E2E suite: the real App, driven by the headless driver.
@@ -384,13 +423,29 @@ pub fn build(b: *std.Build) void {
         const build_catalog_step = b.step("build-catalog", "Compile the catalog example (no window)");
         build_catalog_step.dependOn(&catalog.step);
 
-        const run_catalog_step = b.step("run-catalog", "Run the component catalog example");
-        const run_catalog = b.addRunArtifact(catalog);
-        run_catalog_step.dependOn(&run_catalog.step);
-        run_catalog.step.dependOn(b.getInstallStep());
-        if (b.args) |args| {
-            run_catalog.addArgs(args);
+        const run_catalog_step = b.step("run-catalog", "Run the component catalog example (-Dweb to build and serve the browser version)");
+        if (web_flag) {
+            run_catalog_step.dependOn(web_step);
+            run_catalog_step.dependOn(&serve_and_print(b, "catalog").step);
+        } else {
+            const run_catalog = b.addRunArtifact(catalog);
+            run_catalog_step.dependOn(&run_catalog.step);
+            run_catalog.step.dependOn(b.getInstallStep());
+            if (b.args) |args| {
+                run_catalog.addArgs(args);
+            }
         }
+
+        // ---- the same example, for the browser ---- One wasm artifact from `examples/catalog/web.zig`, sharing this library and the page.
+        const catalog_web = exampleWebExe(b, "catalog", web_target, optimize, web_lib, exampleModule(b, "catalog", web_target, optimize, web_lib));
+        // The catalog is the one example that draws images, so it is the one whose browser build carries them: `examples/catalog/web.zig` imports the generated module by this name.
+        catalog_web.root_module.addImport("asset_data", makeAssetsModule(b, "catalog"));
+        const install_catalog_web = b.addInstallArtifact(catalog_web, .{ .dest_dir = .{ .override = .{ .custom = "web" } } });
+        const step_catalog_web = b.step("web-catalog", "Build the catalog example for the browser");
+        step_catalog_web.dependOn(&install_catalog_web.step);
+        step_catalog_web.dependOn(&install_assets.step);
+        // `zig build web` builds the whole set, so one command produces every app the page can show.
+        web_step.dependOn(&install_catalog_web.step);
 
         catalog_test = exampleTest(b, catalog_mod);
 
@@ -681,10 +736,9 @@ fn makeClay(
 
 // Serve `zig-out/web` and print the URL — what "run" means for a webapp.
 fn serve_and_print(b: *std.Build, app: []const u8) *std.Build.Step.Run {
-    const url = if (std.mem.eql(u8, app, "calculator"))
-        "http://localhost:8080/?app=calculator"
-    else
-        "http://localhost:8080/";
+    // Every app is one page away: `?app=<name>` is the only routing there is, and the dashed spelling is what `web/shim.js` lists.
+    const dashed = std.mem.replaceOwned(u8, b.allocator, app, "_", "-") catch @panic("OOM");
+    const url = b.fmt("http://localhost:8080/?app={s}", .{dashed});
     const cmd = b.addSystemCommand(&.{
         "bash", "-c",
     });
@@ -936,6 +990,79 @@ fn exampleExe(
             },
         }),
     });
+}
+
+// An app's `assets/` directory, for the browser: the same bytes, emitted as source, because a page has no
+// filesystem to open them from. The engine's image store decodes them with the same decoder as a file.
+fn makeAssetsModule(b: *std.Build, name: []const u8) *std.Build.Module {
+    const dir_path = b.fmt("examples/{s}/assets", .{name});
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    var out = std.array_list.Managed(u8).init(b.allocator);
+    out.appendSlice(
+        \\// GENERATED by build.zig — do not edit, do not commit.
+        \\//
+        \\// The browser build's copy of this app's assets. Registered through the app's `web.zig`, decoded by
+        \\// `core/image_store.zig` and `render_software.decodeImageBytes`, which is the same decoder the disk
+        \\// path uses: a page and a desktop window draw the same pixels.
+        \\pub const Asset = struct { path: []const u8, bytes: []const u8 };
+        \\pub const files = [_]Asset{
+        \\
+    ) catch @panic("OOM");
+
+    var count: usize = 0;
+    if (std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true })) |dir| {
+        var d = dir;
+        var it = d.iterate();
+        while (it.next(io) catch null) |entry| {
+            if (entry.kind != .file) continue;
+            const path = b.fmt("{s}/{s}", .{ dir_path, entry.name });
+            const data = std.Io.Dir.cwd().readFileAlloc(io, path, b.allocator, .limited(16 << 20)) catch continue;
+            out.print("    .{{ .path = \"{s}\", .bytes = \"", .{path}) catch @panic("OOM");
+            for (data) |byte| out.print("\\x{x:0>2}", .{byte}) catch @panic("OOM");
+            out.appendSlice("\" },\n") catch @panic("OOM");
+            count += 1;
+        }
+    } else |_| {}
+
+    if (count == 0) out.appendSlice("    // This app has no assets.\n") catch @panic("OOM");
+    out.appendSlice("};\n") catch @panic("OOM");
+    std.debug.print("web: {s}: {d} asset(s) embedded for the browser\n", .{ name, count });
+    const file = b.addWriteFiles().add("asset_data.zig", out.items);
+    return b.createModule(.{ .root_source_file = file });
+}
+
+// An example's BROWSER artifact: `examples/<name>/web.zig` as the root, `entry = .disabled`, and the page drives it.
+fn exampleWebExe(
+    b: *std.Build,
+    name: []const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    lib: *std.Build.Module,
+    mod: *std.Build.Module,
+) *std.Build.Step.Compile {
+    // The page fetches `glinlandui-<name>.wasm`; the dashed name is the one CI and `?app=` use.
+    const dashed = std.mem.replaceOwned(u8, b.allocator, name, "_", "-") catch @panic("OOM");
+    const exe = b.addExecutable(.{
+        .name = b.fmt("glinlandui-{s}", .{dashed}),
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(b.fmt("examples/{s}/web.zig", .{name})),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "glinlandui", .module = lib },
+                .{ .name = name, .module = mod },
+            },
+        }),
+    });
+    // No `_start`, no `main`: the module is a library the page drives.
+    exe.entry = .disabled;
+    // Keep the `export fn` surface even though nothing inside the module calls it.
+    exe.rdynamic = true;
+    exe.stack_size = 1024 * 1024;
+    exe.initial_memory = 16 * 1024 * 1024;
+    exe.max_memory = 256 * 1024 * 1024;
+    return exe;
 }
 
 // An example's own tests: every file's `test` blocks, reached through the module's root.

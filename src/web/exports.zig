@@ -5,11 +5,31 @@ const window_mod = @import("window.zig");
 const input_mod = @import("input.zig");
 const adapter = @import("adapter.zig");
 const glyphs = @import("../core/glyphs.zig");
+const gpu = @import("gpu.zig");
+const image_store = @import("../core/image_store.zig");
+const renderer = @import("renderer.zig");
 
-/// The application this module serves, as a comptime parameter.
+/// The face the page draws with, compiled in by `build.zig`'s `-Dfont` option. It lives in the LIBRARY, not in an application: a browser has no font paths, and a toolkit that made every app carry a typeface would be making every app know how it is being hosted.
+const embedded_font: []const u8 = @import("font_data").bytes;
+
+/// The application this module serves, as a comptime parameter. No assets, for an app whose page needs none.
 pub fn Exports(
     comptime App: type,
     comptime root_fn: *const fn (?*anyopaque, u32, u32) void,
+) type {
+    return ExportsWithAssets(App, root_fn, &[_]image_store.Source{});
+}
+
+/// The same ABI, plus the images this app's BROWSER build carries.
+///
+/// A page has no filesystem to open `examples/catalog/assets/*.png` from, so `build.zig` emits them as a
+/// generated `asset_data` module and the app's browser entry passes the list here. The engine decodes
+/// them with the same decoder the disk path uses, so the page and a desktop window draw the same pixels —
+/// and the app itself is untouched: registering assets is browser glue, not app code.
+pub fn ExportsWithAssets(
+    comptime App: type,
+    comptime root_fn: *const fn (?*anyopaque, u32, u32) void,
+    comptime assets: anytype,
 ) type {
     return struct {
         /// The longest `KeyboardEvent.code` is well under this ("NumpadSubtract" is 14, "LaunchApplication2" is 17); 32 is slack, and the page writes event.
@@ -59,6 +79,8 @@ pub fn Exports(
             // The app is allocated here rather than declared as a global because its type is only known at comptime.
             const app_ptr = alloc.create(App) catch return 0;
             app_ptr.* = .{};
+            // `onCreate`: the same call every native `main.zig` makes BEFORE the Host exists, so a browser app starts started. Without it a screen whose `start` seeds the model (todo's focus, catalog's fields, lazy-scroll's pump) would draw an unstarted app.
+            if (@hasDecl(App, "start")) App.start(app_ptr);
 
             g_host = @import("../core/host.zig").Host.init(alloc, app_ptr, root_fn) catch return 0;
             const host = if (g_host) |*h| h else return 0;
@@ -85,11 +107,11 @@ pub fn Exports(
             scratch[0] = 0;
             g_key_scratch = scratch;
 
-            // Install the application's embedded font, if it has one.
-            if (@hasDecl(App, "embedded_font")) {
-                const bytes = App.embedded_font;
-                if (bytes.len > 0) installEmbeddedFont(bytes);
-            }
+            // The images this build carries, registered before the first frame: the renderer looks them up by the same path the app declared.
+            image_store.register(assets);
+
+            // The engine's own typeface, installed before the first frame, so text is glyphs from the very first draw. A page that wants a different face calls `glin_web_font`.
+            if (embedded_font.len > 0) installEmbeddedFont(embedded_font);
 
             return 1;
         }
@@ -157,6 +179,129 @@ pub fn Exports(
         export fn glin_web_frames() u32 {
             const w = window() orelse return 0;
             return w.frames;
+        }
+
+        // GPU
+
+        /// The page tells the toolkit which backend it created: 0 = none (the CPU rasterizer), 1 = WebGPU, 2 = WebGL2.
+        export fn glin_web_gpu_ready(kind: u32) void {
+            const w = window() orelse return;
+            w.setBackendKind(kind);
+        }
+
+        /// What the last `glin_web_gpu_ready` said. 0 means the CPU rasterizer is drawing, which is a supported browser, not a failure.
+        export fn glin_web_gpu_kind() u32 {
+            return renderer.backendKind();
+        }
+
+        /// An OFFSET into wasm memory (0 when the buffer is empty), like every other pointer this ABI exposes.
+        export fn glin_web_gpu_verts_ptr() u32 {
+            return offsetOf(gpu.vertices());
+        }
+
+        /// The vertex buffer's length in BYTES: `len / glin_web_gpu_vertex_stride()` is the vertex count the segments index into.
+        export fn glin_web_gpu_verts_len() u32 {
+            return @intCast(gpu.vertices().len);
+        }
+
+        export fn glin_web_gpu_segs_ptr() u32 {
+            return offsetOf(gpu.segments());
+        }
+
+        export fn glin_web_gpu_segs_count() u32 {
+            return gpu.segmentCount();
+        }
+
+        /// Bytes per vertex (17 floats, 68) and per segment (9 int32, 36), so the page never hardcodes a layout.
+        export fn glin_web_gpu_vertex_stride() u32 {
+            return gpu.vertexStride();
+        }
+
+        export fn glin_web_gpu_segment_stride() u32 {
+            return gpu.segmentStride();
+        }
+
+        /// The 8-bit glyph atlas, and the version that changes only when its CONTENTS changed, so the page re-uploads on demand.
+        export fn glin_web_gpu_atlas_ptr() u32 {
+            return offsetOf(gpu.atlasBytes());
+        }
+
+        export fn glin_web_gpu_atlas_len() u32 {
+            return @intCast(gpu.atlasBytes().len);
+        }
+
+        export fn glin_web_gpu_atlas_version() u32 {
+            return gpu.atlasVersion();
+        }
+
+        export fn glin_web_gpu_atlas_width() u32 {
+            return gpu.atlas_w;
+        }
+
+        export fn glin_web_gpu_atlas_height() u32 {
+            return gpu.atlas_h;
+        }
+
+        /// The frame's target size in DEVICE pixels: the canvas backing store the geometry is expressed in.
+        export fn glin_web_gpu_width() u32 {
+            return gpu.width();
+        }
+
+        export fn glin_web_gpu_height() u32 {
+            return gpu.height();
+        }
+
+        /// How many image textures this frame's segments can name. The page keeps one GPU texture per id and
+        /// uploads it when the version changes; a segment of kind 2 names its image in `texture_id`.
+        export fn glin_web_gpu_image_count() u32 {
+            return gpu.imageCount();
+        }
+
+        /// Per-image accessors. `index` is 0..count-1; a bad index answers 0 rather than trapping.
+        export fn glin_web_gpu_image_id(index: u32) u32 {
+            const t = gpu.imageAt(index) orelse return 0;
+            return t.id;
+        }
+
+        export fn glin_web_gpu_image_version(index: u32) u32 {
+            const t = gpu.imageAt(index) orelse return 0;
+            return t.version;
+        }
+
+        export fn glin_web_gpu_image_width(index: u32) u32 {
+            const t = gpu.imageAt(index) orelse return 0;
+            return t.width;
+        }
+
+        export fn glin_web_gpu_image_height(index: u32) u32 {
+            const t = gpu.imageAt(index) orelse return 0;
+            return t.height;
+        }
+
+        /// The decoded RGBA8 bytes, as an offset into wasm memory (`width * height * 4` of them).
+        export fn glin_web_gpu_image_ptr(index: u32) u32 {
+            const t = gpu.imageAt(index) orelse return 0;
+            return offsetOf(t.pixels);
+        }
+
+        export fn glin_web_gpu_image_len(index: u32) u32 {
+            const t = gpu.imageAt(index) orelse return 0;
+            return @intCast(t.pixels.len);
+        }
+
+        /// The clear colour as packed RGBA8, low byte red: one integer rather than four floats crossing the boundary per frame.
+        export fn glin_web_gpu_clear_rgba() u32 {
+            const c = gpu.clearColor();
+            const r: u32 = @intFromFloat(@round(@min(@max(c[0], 0), 1) * 255));
+            const g: u32 = @intFromFloat(@round(@min(@max(c[1], 0), 1) * 255));
+            const b: u32 = @intFromFloat(@round(@min(@max(c[2], 0), 1) * 255));
+            const a: u32 = @intFromFloat(@round(@min(@max(c[3], 0), 1) * 255));
+            return r | (g << 8) | (b << 16) | (a << 24);
+        }
+
+        fn offsetOf(bytes: []const u8) u32 {
+            if (bytes.len == 0) return 0;
+            return @intCast(@intFromPtr(bytes.ptr));
         }
 
         export fn glin_web_log_errors() u32 {

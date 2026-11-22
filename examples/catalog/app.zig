@@ -45,9 +45,9 @@ pub const App = struct {
             .vm = model,
             .state = model.uiState(),
         };
-        // A screenshot helper: `CATALOG_SCROLLY=2400` opens the page at that offset, so a section can be looked at.
-        if (std.c.getenv("CATALOG_SCROLLY")) |raw| {
-            const y = std.fmt.parseFloat(f32, std.mem.span(raw)) catch 0;
+        // A screenshot helper: `CATALOG_SCROLLY=2400` opens the page at that offset, so a section can be looked at. The engine answers null where there is no environment.
+        if (glinlandui.platform.getenv("CATALOG_SCROLLY")) |raw| {
+            const y = std.fmt.parseFloat(f32, raw) catch 0;
             glinlandui.components.scroll.scrollBy("catalog.scroll", 0, y);
         }
         view.CatalogScreen(&scope);

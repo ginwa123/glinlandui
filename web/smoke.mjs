@@ -307,45 +307,170 @@ async function main() {
   eq(ex.glin_web_surface_height(), 400, "the surface adopted the new height");
   eq(ex.glin_web_surface_len(), 600 * 400 * 4, "and its length with it");
 
+  // ---- 8b. the GPU geometry path, exercised without a GPU ----
+  //
+  // A browser with WebGPU or WebGL2 gets a vertex buffer instead of pixels, and
+  // Node has neither — which is exactly what makes this the right place to test
+  // the ZIG half of that path: `glin_web_gpu_ready(1)` switches the renderer with
+  // no device in sight, and the assertions below are the contract `web/gpu.js`
+  // consumes. What cannot be checked here is the draw call itself; `web/README.md`
+  // is explicit about that gap, and about what would close it.
+  eq(ex.glin_web_gpu_kind(), 0, "no page has claimed a GPU backend, so the CPU rasterizer drew every frame so far");
+  eq(ex.glin_web_gpu_vertex_stride(), 68, "a vertex is 17 floats: the same layout the Vulkan and Metal backends use");
+  eq(ex.glin_web_gpu_segment_stride(), 36, "a segment is 9 int32: start/count, scissor, texture, kind");
+
+  ex.glin_web_gpu_ready(1);
+  eq(ex.glin_web_gpu_kind(), 1, "the page claimed WebGPU");
+  eq(ex.glin_web_needs_frame(), 1, "switching the backend marks the frame dirty");
+  // A hover change, so the frame command digest differs from the last one: the
+  // frame memo skips an identical frame, and this test wants a real geometry build.
+  ex.glin_web_pointer(0, 0, 120, 300);
+  ex.glin_web_frame();
+
+  const gverts = ex.glin_web_gpu_verts_len();
+  const gsegs = ex.glin_web_gpu_segs_count();
+  const vstride = ex.glin_web_gpu_vertex_stride();
+  const sstride = ex.glin_web_gpu_segment_stride();
+  check(gverts > 0, "the GPU path built vertices for a real frame", `verts=${gverts}`);
+  check(gsegs > 0, "and at least one segment to draw them with", `segs=${gsegs}`);
+  eq(gverts % vstride, 0, "the vertex buffer is a whole number of vertices");
+  eq(gverts / vstride % 6, 0, "and a whole number of quads (6 vertices each)");
+  eq(ex.glin_web_surface_ptr(), 0, "with a GPU there is no CPU surface, so `putImageData` cannot run");
+  eq(ex.glin_web_gpu_width(), 600, "the GPU frame is the backing store's width");
+  eq(ex.glin_web_gpu_height(), 400, "and its height");
+  check(ex.glin_web_gpu_atlas_version() > 0, "text put glyphs in the atlas, so there is something to sample");
+  eq(
+    ex.glin_web_gpu_atlas_len(),
+    ex.glin_web_gpu_atlas_width() * ex.glin_web_gpu_atlas_height(),
+    "the atlas is width*height coverage bytes",
+  );
+
+  // The segments must cover every vertex exactly once: a gap is a shape the page
+  // never draws, and an overlap is a shape drawn twice.
+  const segBase = ex.glin_web_gpu_segs_ptr();
+  check(segBase !== 0, "the segment buffer has an address");
+  const segView = new DataView(ex.memory.buffer, segBase, gsegs * sstride);
+  let covered = 0;
+  let clipped = 0;
+  for (let i = 0; i < gsegs; i++) {
+    covered += segView.getInt32(i * sstride + 4, true);
+    if (segView.getInt32(i * sstride + 8, true) !== 0) clipped += 1;
+  }
+  eq(covered, gverts / vstride, "the segments cover every vertex exactly once");
+  check(clipped >= 0, "clipped segments are reported, not dropped silently", `${clipped} with a scissor`);
+
+  // ---- 8c. and back to the CPU, which must still work ----
+  //
+  // This is the fallback a browser WITHOUT either GPU API takes, driven through
+  // the same export the page calls. It is the browser's peer of the GDI blit on
+  // Windows and the CoreGraphics blit on macOS: the same pixels, no device.
+  ex.glin_web_gpu_ready(0);
+  eq(ex.glin_web_gpu_kind(), 0, "the page handed the frame back to the CPU rasterizer");
+  ex.glin_web_pointer(0, 0, 200, 320);
+  ex.glin_web_frame();
+  check(ex.glin_web_surface_ptr() !== 0, "the CPU surface is back, so `putImageData` works again");
+  check(ex.glin_web_painted_pixels() > 0, "the CPU fallback still paints pixels");
+  eq(ex.glin_web_surface_len(), ex.glin_web_surface_width() * ex.glin_web_surface_height() * 4, "and its length matches its size");
+
+  // An unknown backend number is refused rather than trusted: a page cannot
+  // switch the renderer to a pipeline that does not exist.
+  ex.glin_web_gpu_ready(9);
+  eq(ex.glin_web_gpu_kind(), 0, "an out-of-range backend id falls back to the CPU rasterizer");
+
   // ---- 9. shutdown is safe and idempotent-ish ----
   ex.glin_web_shutdown();
   ex.glin_web_shutdown();
   eq(ex.glin_web_needs_frame(), 0, "a shut-down window wants no frames");
 
-  // ---- 10. the calculator, if it was built ----
+  // ---- 10. every app `zig build web` installs ----
   //
-  // A SECOND module from a second entry point, sharing the library and the ABI.
-  // This is the check that the calculator's keyboard path works in a browser:
-  // `src/web/keymap.zig` translates `"NumpadAdd"` to evdev 78, and the
-  // calculator's own `onKey` maps 78 to `plus`. Driving it here proves the whole
-  // chain — DOM-shaped code string, keymap, the Host's KeyChain, the app's
-  // handler, the re-render — without a browser.
-  const calcPath = join(root, "zig-out", "web", "glinlandui-calculator.wasm");
-  let calcBytes = null;
-  try {
-    calcBytes = await readFile(calcPath);
-  } catch {
-    console.log("\n  note  the calculator was not built; run `zig build web-calculator`");
-  }
+  // ONE wasm module per app, from one library and one page: `?app=<id>` picks the
+  // file. Booting each here is the browser's half of "the examples all still
+  // work": a module that traps on init, logs an error or paints nothing fails the
+  // run, and the frame hash proves the picture is not a flat clear.
+  //
+  // The size is the window each app's native `main.zig` opens with. A browser gets
+  // its size from the canvas, so these are just sane boxes for the assertions.
+  const apps = [
+    { id: "calculator", file: "glinlandui-calculator.wasm", w: 360, h: 430 },
+    { id: "todo", file: "glinlandui-todo.wasm", w: 720, h: 640 },
+    { id: "catalog", file: "glinlandui-catalog.wasm", w: 960, h: 760 },
+    { id: "file-dialog", file: "glinlandui-file-dialog.wasm", w: 520, h: 300 },
+    { id: "lazy-scroll", file: "glinlandui-lazy-scroll.wasm", w: 900, h: 640 },
+  ];
 
-  if (calcBytes) {
-    console.log("\n  --- calculator ---");
-    const calcModule = await WebAssembly.compile(calcBytes);
-    const calcImports = WebAssembly.Module.imports(calcModule);
+  for (const app of apps) {
+    const path = join(root, "zig-out", "web", app.file);
+    let bytes = null;
+    try {
+      bytes = await readFile(path);
+    } catch {
+      console.log(`\n  note  ${app.id} was not built; run \`zig build web\``);
+      continue;
+    }
+
+    console.log(`\n  --- ${app.id} ---`);
+    const m = await WebAssembly.compile(bytes);
     check(
-      calcImports.length === 0,
-      "the calculator module is dependency-free too",
-      calcImports.map((i) => `${i.module}.${i.name}`).join(", "),
+      WebAssembly.Module.imports(m).length === 0,
+      `${app.id}: dependency-free like the demo module`,
+      WebAssembly.Module.imports(m).map((i) => `${i.module}.${i.name}`).join(", "),
     );
 
-    const cx = await WebAssembly.instantiate(calcModule, {}).then((i) => i.exports);
-    eq(cx.glin_web_init(360, 430, 360, 430), 1, "the calculator initialises");
-    eq(cx.glin_web_run(), 1, "the calculator arms its loop");
-    cx.glin_web_frame();
-    check(cx.glin_web_painted_pixels() > 0, "the calculator painted pixels");
-    eq(cx.glin_web_log_errors(), 0, "the calculator logged no errors");
+    const ex = await WebAssembly.instantiate(m, {}).then((i) => i.exports);
+    eq(ex.glin_web_init(app.w, app.h, 240, 180), 1, `${app.id}: initialises`);
+    eq(ex.glin_web_run(), 1, `${app.id}: arms its loop`);
+    ex.glin_web_frame();
+    check(ex.glin_web_painted_pixels() > 0, `${app.id}: painted pixels`, `painted=${ex.glin_web_painted_pixels()}`);
+    check((ex.glin_web_frame_hash() >>> 0) !== 0, `${app.id}: the frame is not a flat clear`);
+    eq(ex.glin_web_log_errors(), 0, `${app.id}: logged no errors`);
+    eq(ex.glin_web_font_error(), 0, `${app.id}: the embedded font installed`);
 
-    // Type "7 + 8 =" through the keymap and assert the display changed.
+    // The same module must also accept a GPU frame: `?gpu=webgl` switches the
+    // renderer for every app, not only for the demo.
+    ex.glin_web_gpu_ready(2);
+    ex.glin_web_pointer(0, 0, app.w >> 1, app.h >> 1);
+    ex.glin_web_frame();
+    check(ex.glin_web_gpu_verts_len() > 0, `${app.id}: builds GPU geometry too`, `verts=${ex.glin_web_gpu_verts_len()}`);
+    check(ex.glin_web_gpu_segs_count() > 0, `${app.id}: with at least one segment`);
+    eq(ex.glin_web_log_errors(), 0, `${app.id}: the GPU frame logged no errors`);
+
+    // Images: `build.zig` embeds an app's `assets/` directory and the ENGINE decodes it, so a page draws
+    // what a desktop window draws. The catalog is the app that has them, and its three live at the BOTTOM
+    // of a scroll container — so at this size they are culled (a texture nobody can see is not decoded),
+    // and a window tall enough to show them is what proves the pipeline.
+    if (app.id === "catalog") {
+      eq(ex.glin_web_gpu_image_count(), 0, "catalog: images below the fold are culled, not decoded");
+      ex.glin_web_resize(1000, 4000);
+      ex.glin_web_gpu_ready(2);
+      ex.glin_web_frame();
+      eq(ex.glin_web_gpu_image_count(), 3, "catalog: a window tall enough decodes its three assets");
+      const imgW = ex.glin_web_gpu_image_width(0);
+      const imgH = ex.glin_web_gpu_image_height(0);
+      check(imgW > 0 && imgH > 0, "catalog: the first image has a size", `${imgW}x${imgH}`);
+      eq(ex.glin_web_gpu_image_len(0), imgW * imgH * 4, "catalog: and RGBA8 bytes to match");
+      check(ex.glin_web_gpu_image_id(0) > 0, "catalog: with an id a segment can name");
+      eq(ex.glin_web_gpu_image_id(3), 0, "catalog: an out-of-range index answers 0, not a trap");
+      ex.glin_web_gpu_ready(0);
+      ex.glin_web_frame();
+      check(ex.glin_web_surface_ptr() !== 0, "catalog: and the CPU path still presents it");
+      // Back to the size this app was booted at; the sections below are the calculator's.
+      ex.glin_web_resize(app.w, app.h);
+      ex.glin_web_frame();
+    } else {
+      eq(ex.glin_web_gpu_image_count(), 0, `${app.id}: no assets embedded, so no image textures`);
+    }
+    ex.glin_web_gpu_ready(0);
+    ex.glin_web_frame();
+    check(ex.glin_web_surface_ptr() !== 0, `${app.id}: and falls back to the CPU surface`);
+
+    if (app.id !== "calculator") continue;
+
+    // The calculator's keyboard path, end to end: `src/web/keymap.zig` translates
+    // `"NumpadAdd"` to evdev 78, and the app's own `onKey` maps 78 to `plus`.
+    // Driving it here proves DOM-shaped code string → keymap → KeyChain → handler
+    // → re-render, without a browser.
+    const cx = ex;
     const cscratch = cx.glin_web_key_scratch();
     const cscratchLen = cx.glin_web_key_scratch_len();
     const typeKey = (code) => {
@@ -383,6 +508,25 @@ async function main() {
       (cx.glin_web_frame_hash() >>> 0) !== beforeClick,
       "a click on the keypad changed the calculator's display",
     );
+
+    // ZOOM. A page reports the canvas BACKING STORE (CSS x devicePixelRatio) while the toolkit lays out
+    // in CSS pixels, so at 2x the same physical key arrives at twice the coordinate. Both must press it:
+    // before the fix only the 1x click did, which is the "it only works at 100%" report.
+    cx.glin_web_resize(720, 860);
+    cx.glin_web_scale(2);
+    cx.glin_web_frame();
+    const beforeZoomClick = cx.glin_web_frame_hash() >>> 0;
+    cx.glin_web_pointer(1, 0, 2 * 40, 2 * 200);
+    cx.glin_web_pointer(2, 0, 2 * 40, 2 * 200);
+    cx.glin_web_frame();
+    check(
+      (cx.glin_web_frame_hash() >>> 0) !== beforeZoomClick,
+      "a click at 2x device scale presses the key the user aimed at",
+      `0x${beforeZoomClick.toString(16)} -> 0x${(cx.glin_web_frame_hash() >>> 0).toString(16)}`,
+    );
+    cx.glin_web_scale(1);
+    cx.glin_web_resize(360, 430);
+    cx.glin_web_frame();
   }
 
   console.log(

@@ -3,6 +3,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const scale = @import("scale.zig");
 const stbi = @cImport({
+    // A browser has no stdio, and `stb_image.h` only reaches for it to open a FILE — which is the one thing a page cannot do. Defining this prunes `stbi_load` and keeps `stbi_load_from_memory`, the entry the byte-supplied images use.
+    if (builtin.cpu.arch.isWasm()) @cDefine("STBI_NO_STDIO", "1");
     @cInclude("stb/stb_image.h");
     @cInclude("stb/stb_image_resize2.h");
 });
@@ -14,6 +16,8 @@ const common = @import("render_common.zig");
 const Color = @import("color.zig").Color;
 // The disk half of image decoding is native-only: a browser has no filesystem, and `std.fs.max_path_bytes` cannot even be analysed for freestanding.
 const has_fs = !builtin.cpu.arch.isWasm();
+// Images a host supplies as bytes (a browser, which has no filesystem) go through the same decoder as the disk path.
+const image_store = @import("image_store.zig");
 
 pub const ImageFit = common.ImageFit;
 pub const ImageRef = common.ImageRef;
@@ -667,8 +671,15 @@ pub const Surface = struct {
         }
     }
 
-    // Read a file off disk, downscale it to `max_dim` and hand back RGBA8 the caller owns.
+    // Decode `path` to RGBA8 at `max_dim`, from the bytes the host registered or from disk, and hand back pixels this surface owns.
     fn decodeImage(self: *Surface, path: []const u8, max_dim: u16) ?Image {
+        // A host that supplies the bytes (a browser) goes through the SAME decoder and downscale as the disk path, so the two cannot disagree about a pixel.
+        if (image_store.find(path)) |bytes| {
+            const img = decodeImageBytes(self.alloc, bytes, max_dim) orelse return null;
+            // The block came from `self.alloc`, so handing it to the surface's owned list is a const-cast, not a lie.
+            self.owned_pixels.append(self.alloc, @constCast(img.pixels)) catch {};
+            return img;
+        }
         // A browser has no filesystem — and `std.fs.max_path_bytes` does not even ANALYSE there, so the disk half must be pruned, not guarded.
         if (comptime has_fs) return self.decodeImageFromDisk(path, max_dim);
         return null;
@@ -685,19 +696,9 @@ pub const Surface = struct {
         var nch: c_int = 0;
         const raw = stbi.stbi_load(@ptrCast(&cbuf), &iw, &ih, &nch, 4) orelse return null;
         defer stbi.stbi_image_free(raw);
-        if (iw <= 0 or ih <= 0) return null;
-
-        const dims = common.scaledDims(@intCast(iw), @intCast(ih), max_dim);
-        const len: usize = @as(usize, dims[0]) * dims[1] * 4;
-        const out = self.alloc.alloc(u8, len) catch return null;
-        if (dims[0] == @as(u32, @intCast(iw)) and dims[1] == @as(u32, @intCast(ih))) {
-            @memcpy(out, raw[0..len]);
-        } else if (stbi.stbir_resize_uint8_linear(raw, iw, ih, 0, out.ptr, @intCast(dims[0]), @intCast(dims[1]), 0, stbi.STBIR_RGBA) == null) {
-            self.alloc.free(out);
-            return null;
-        }
-        self.owned_pixels.append(self.alloc, out) catch {};
-        return .{ .width = dims[0], .height = dims[1], .pixels = out };
+        const img = scaledRgba(self.alloc, raw, iw, ih, max_dim) orelse return null;
+        self.owned_pixels.append(self.alloc, @constCast(img.pixels)) catch {};
+        return img;
     }
 
     fn drawImageCmd(self: *Surface, bb: cl.BoundingBox, ref: *const ImageRef) void {
@@ -816,6 +817,34 @@ pub fn hasGlyphFont() bool {
 
 // The clear colour of the most recent frame, mirrored so a GPU backend clears to the same pixels.
 var frame_clear_rgb: [4]f32 = .{ 0, 0, 0, 255 };
+
+/// Decode an in-memory image to RGBA8 at `max_dim`, with an allocator the CALLER owns: the same decoder,
+//  the same downscale and the same memory order as `decodeImageFromDisk`, so a host that supplies bytes
+//  and a host with a filesystem produce identical pixels.
+pub fn decodeImageBytes(alloc: std.mem.Allocator, bytes: []const u8, max_dim: u16) ?Image {
+    if (bytes.len == 0) return null;
+    var iw: c_int = 0;
+    var ih: c_int = 0;
+    var nch: c_int = 0;
+    const raw = stbi.stbi_load_from_memory(bytes.ptr, @intCast(bytes.len), &iw, &ih, &nch, 4) orelse return null;
+    defer stbi.stbi_image_free(raw);
+    return scaledRgba(alloc, raw, iw, ih, max_dim);
+}
+
+// Downscale decoded pixels to `max_dim` (never up) and copy them into a block the caller owns.
+fn scaledRgba(alloc: std.mem.Allocator, raw: [*c]const u8, iw: c_int, ih: c_int, max_dim: u16) ?Image {
+    if (iw <= 0 or ih <= 0) return null;
+    const dims = common.scaledDims(@intCast(iw), @intCast(ih), max_dim);
+    const len: usize = @as(usize, dims[0]) * dims[1] * 4;
+    const out = alloc.alloc(u8, len) catch return null;
+    if (dims[0] == @as(u32, @intCast(iw)) and dims[1] == @as(u32, @intCast(ih))) {
+        @memcpy(out, raw[0..len]);
+    } else if (stbi.stbir_resize_uint8_linear(raw, iw, ih, 0, out.ptr, @intCast(dims[0]), @intCast(dims[1]), 0, stbi.STBIR_RGBA) == null) {
+        alloc.free(out);
+        return null;
+    }
+    return .{ .width = dims[0], .height = dims[1], .pixels = out };
+}
 
 /// The colour a GPU backend should clear to, in the same 0-255 (or 0-1) range `setClearColor` accepts.
 pub fn currentClearColor() [4]f32 {

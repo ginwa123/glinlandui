@@ -47,6 +47,22 @@ pub fn toToolkitPoint(w: u32, h: u32, x: f32, y: f32) adapter.Point {
     return adapter.clampToView(w, h, x, y);
 }
 
+/// Backing-store pixels into LAYOUT points: the one conversion this backend owes the toolkit.
+///
+/// The DOM reports `offsetX`/`offsetY` in CSS pixels and the page multiplies them by
+/// `devicePixelRatio` to get the canvas backing store, which is the space `Raw` documents. The toolkit
+/// lays out in CSS pixels (a 360-point window is 360 wide whatever the density), and Clay's bounding
+/// boxes — which every hit test compares against — are in that space. So the display scale has to come
+/// back OUT here, and the browser is the only backend that has to do it: Wayland and AppKit both report
+/// logical points already.
+///
+/// Without this a click at 200% zoom landed twice as far from the top-left as the user aimed, and a
+/// click at 80% landed short — which reads as "the components are dead unless the zoom is 100%".
+pub fn toLayout(x: f32, y: f32, scale: f32) adapter.Point {
+    const s = if (scale > 0) scale else 1;
+    return .{ .x = x / s, .y = y / s };
+}
+
 /// Translate one DOM pointer event: the shared switch, bound to the DOM's numbering and origin.
 pub fn translate(w: u32, h: u32, raw: Raw, held: bool) Translated {
     return contract.translate(@This(), w, h, .{ .kind = raw.kind, .button_number = raw.button, .x = raw.x, .y = raw.y }, held);
@@ -250,30 +266,62 @@ test "a browser click reaches a real laid-out button's handler" {
     try std.testing.expectEqual(@as(usize, 1), app.hit.fired);
 }
 
-test "a HiDPI click still lands on the button the user aimed at" {
-    // The scale asymmetry bug: the DOM reports CSS pixels while layout is in backing-store pixels.
+test "a click at 2x display scale lands where the user aimed" {
+    // THE zoom regression guard. The DOM hands over a BACKING-STORE point (CSS x devicePixelRatio) while
+    // layout is in CSS pixels, so a device point has to be divided back before it reaches Clay.
+    const aimed = toLayout(160, 120, 2.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 80), aimed.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 60), aimed.y, 0.01);
+    // The same physical spot, reported at 100% zoom, agrees.
+    const one = toLayout(80, 60, 1.0);
+    try std.testing.expectApproxEqAbs(aimed.x, one.x, 0.01);
+    try std.testing.expectApproxEqAbs(aimed.y, one.y, 0.01);
+}
+
+test "a click at a fractional zoom lands where the user aimed" {
+    // 80% zoom is devicePixelRatio 1.25 in most browsers, and it is the case a 1x-tested build gets wrong by a quarter of the screen.
+    const at_125 = toLayout(250, 500, 1.25);
+    try std.testing.expectApproxEqAbs(@as(f32, 200), at_125.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 400), at_125.y, 0.01);
+}
+
+test "a nonsense scale is treated as 1 rather than dividing by zero" {
+    const a = toLayout(10, 20, 0);
+    const b = toLayout(10, 20, -3);
+    try std.testing.expectEqual(@as(f32, 10), a.x);
+    try std.testing.expectEqual(@as(f32, 20), b.y);
+}
+
+test "a HiDPI click reaches a real laid-out button, end to end" {
     const w: u32 = 200;
     const h: u32 = 200;
     var app = App{};
+    // Clay keeps a process-global context pointer into the init arena, so a test Host must not be deinit'd — the same discipline the calculator example's.
     var host = try host_mod.Host.init(std.heap.page_allocator, &app, App.root);
     host.frame(w, h);
+
+    const reg = @import("../core/component.zig").click_registry;
+    reg.registerZCursor(cl.getElementId("test-hit-box"), App.onClick, &app, 0, 0, .pointer);
 
     const data = cl.getElementData(cl.getElementId("test-hit-box"));
     try std.testing.expect(data.found);
     const bb = data.bounding_box;
 
-    // A point 20% down the window, expressed as a DOM coordinate at 2x and then scaled into the backing store.
+    // The user aims at the middle of the box on a 2x display: the DOM reports TWICE the CSS point.
     const device_scale: f32 = 2.0;
-    const backing_x = bb.x + bb.width * 0.5;
-    const backing_y = bb.y + bb.height * 0.2;
-    const t = translate(w, h, .{
-        .kind = DOWN,
-        .button = 0,
-        .x = backing_x / device_scale * device_scale,
-        .y = backing_y / device_scale * device_scale,
-    }, false);
+    const aimed_x = bb.x + bb.width * 0.5;
+    const aimed_y = bb.y + bb.height * 0.5;
+    const dom = toLayout(aimed_x * device_scale, aimed_y * device_scale, device_scale);
 
-    try std.testing.expectApproxEqAbs(backing_y, t.y, 0.5);
-    // And it really is in the top half of the box, not the bottom.
-    try std.testing.expect(t.y < bb.y + bb.height * 0.5);
+    var st = dispatch.PtrState{};
+    const down = translate(w, h, .{ .kind = DOWN, .button = 0, .x = dom.x, .y = dom.y }, false);
+    dispatch.pointerEvent(&st, down.x, down.y, down.pressed, down.button, w, h);
+    const up = translate(w, h, .{ .kind = UP, .button = 0, .x = dom.x, .y = dom.y }, true);
+    dispatch.pointerEvent(&st, up.x, up.y, up.pressed, up.button, w, h);
+
+    try std.testing.expectEqual(@as(usize, 1), app.hit.fired);
+
+    // And the round trip is exact: the point the user aimed at is the point Clay tests against.
+    try std.testing.expectApproxEqAbs(aimed_x, dom.x, 0.01);
+    try std.testing.expectApproxEqAbs(aimed_y, dom.y, 0.01);
 }

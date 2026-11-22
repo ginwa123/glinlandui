@@ -236,6 +236,115 @@ uint32_t glin_web_key_scratch(void);
 uint32_t glin_web_key_scratch_len(void);
 
 /* ---------------------------------------------------------------------------
+ * GPU: WebGPU, else WebGL2, else the CPU rasterizer
+ *
+ * The renderer picks a backend in that order, and the page does the picking,
+ * because only the page can create a `GPUDevice` or a `WebGL2RenderingContext`.
+ * It then tells the toolkit the answer with `glin_web_gpu_ready` and, from then
+ * on, draws the buffers below instead of the CPU surface:
+ *
+ *   - `glin_web_gpu_ready(0)` — no GPU context, or one that failed. The toolkit
+ *     rasterizes on the CPU exactly as it did before this ABI existed, and the
+ *     page blits `glin_web_surface_ptr()` with `putImageData`. Nothing is lost:
+ *     this is the browser's GDI fallback.
+ *   - `glin_web_gpu_ready(1)` — WebGPU, `(2)` — WebGL2. From the next frame on,
+ *     `glin_web_surface_ptr()` returns 0 (there are no CPU pixels to blit) and
+ *     the frame lives in the vertex and segment buffers below.
+ *
+ * The CALL DIRECTION is the same as everywhere else in this header: the page
+ * calls into the module. The module imports NOTHING — `WebAssembly.Module.imports()`
+ * on this module must stay empty, which is why the GPU calls run from JS over
+ * these accessors rather than from Zig over `extern` functions.
+ *
+ * ## One vertex, 17 floats (68 bytes)
+ *
+ *     float pos[2]     device pixels, top-left origin
+ *     float local[2]   rect: box-local px; text/image: normalized uv
+ *     float size[2]    rect box size in device px; 0 for text
+ *     float radius[4]  rect corner radii TL, TR, BL, BR in device px
+ *     float color[4]   straight (non-premultiplied) 0..1 RGBA
+ *     float mode       rect: 0 fill, 1 border outline
+ *     float border     rect: border width in device px
+ *     float kind       0 rect, 1 text coverage, 2 image
+ *
+ * `glin_web_gpu_vertex_stride()` returns 68: never hardcode it. The layout is
+ * the same one `src/linux/vk.h` and `src/mac/metal.h` declare, so the shaders in
+ * `web/gpu.js` are a port rather than a second design.
+ *
+ * ## One segment, 9 int32 (36 bytes)
+ *
+ *     int32 start, count     first vertex index, vertex count
+ *     int32 has_scissor     0 = no clip
+ *     int32 sx, sy, sw, sh   scissor in device pixels, top-left origin
+ *     uint32 texture_id      0 = the glyph atlas; 1.. reserved for images
+ *     int32 kind             0 rect, 1 text (atlas), 2 image
+ *
+ * A segment is a run of vertices sharing one scissor and one pipeline, because
+ * Clay interleaves boxes and text and a scrolled container's clip cannot be a
+ * single per-frame rectangle. Draw them in order: the buffer is already sorted
+ * by depth and the blend state is straight-alpha over.
+ * ------------------------------------------------------------------------ */
+
+/* The page's answer: 0 = none (CPU rasterizer), 1 = WebGPU, 2 = WebGL2. Anything
+ * above 2 is treated as 0 rather than trusted. Marks the frame dirty, so the next
+ * `glin_web_frame` is built for the backend that will draw it. */
+void glin_web_gpu_ready(uint32_t kind);
+
+/* What the last `glin_web_gpu_ready` said. 0 is a supported browser, not a failure. */
+uint32_t glin_web_gpu_kind(void);
+
+/* The frame's geometry. Every pointer is an OFFSET into wasm memory (0 when the
+ * buffer is empty) and every length is bytes, so the page's views must obey the
+ * memory rule at the top of this header: rebuild them when `memory.buffer`
+ * identity changes, because a frame can grow the heap. */
+uint32_t glin_web_gpu_verts_ptr(void);
+uint32_t glin_web_gpu_verts_len(void);
+uint32_t glin_web_gpu_segs_ptr(void);
+uint32_t glin_web_gpu_segs_count(void);
+uint32_t glin_web_gpu_vertex_stride(void);
+uint32_t glin_web_gpu_segment_stride(void);
+
+/* The 8-bit glyph atlas (width * height coverage bytes, ALREADY in device
+ * pixels) and a version that changes only when its CONTENTS changed. Re-upload
+ * the whole texture when the version differs from the one uploaded last; sample
+ * it with LINEAR filtering and CLAMP_TO_EDGE, red channel only. 0 / 0 means the
+ * frame had no text, which is not an error. */
+uint32_t glin_web_gpu_atlas_ptr(void);
+uint32_t glin_web_gpu_atlas_len(void);
+uint32_t glin_web_gpu_atlas_version(void);
+uint32_t glin_web_gpu_atlas_width(void);
+uint32_t glin_web_gpu_atlas_height(void);
+
+/* The frame's target size in DEVICE pixels. The geometry is already expressed in
+ * that space, so a shader needs only this to map pixels to clip space, and the
+ * canvas backing store should match it. 0 before the first draw. */
+uint32_t glin_web_gpu_width(void);
+uint32_t glin_web_gpu_height(void);
+
+/* The clear colour, packed RGBA8 with red in the low byte: one integer instead
+ * of four floats crossing the boundary per frame. Alpha is 255 in practice; a
+ * transparent clear is still honoured by the page's blend setup. */
+uint32_t glin_web_gpu_clear_rgba(void);
+
+/* The image textures the frame names, in draw order. A segment of kind 2 names
+ * one in `texture_id`; a segment of kind 0 or 1 binds the glyph atlas.
+ *
+ * Each image is decoded ONCE, by the engine, from the bytes `build.zig` embedded
+ * (`asset_data`) — the same decoder the disk path uses, so the page and a desktop
+ * window draw the same pixels. Upload the RGBA8 bytes as a texture when `version`
+ * changes, and keep it keyed by `id` (ids wrap at 255, and a wrap bumps the
+ * version, so a reused id is replaced rather than reused silently).
+ *
+ * `index` is 0..`glin_web_gpu_image_count()`-1; a bad index answers 0. */
+uint32_t glin_web_gpu_image_count(void);
+uint32_t glin_web_gpu_image_id(uint32_t index);
+uint32_t glin_web_gpu_image_version(uint32_t index);
+uint32_t glin_web_gpu_image_width(uint32_t index);
+uint32_t glin_web_gpu_image_height(uint32_t index);
+uint32_t glin_web_gpu_image_ptr(uint32_t index);
+uint32_t glin_web_gpu_image_len(uint32_t index);
+
+/* ---------------------------------------------------------------------------
  * Diagnostics the page may want to surface
  * ------------------------------------------------------------------------ */
 
