@@ -47,17 +47,7 @@ pub fn toToolkitPoint(w: u32, h: u32, x: f32, y: f32) adapter.Point {
     return adapter.clampToView(w, h, x, y);
 }
 
-/// Backing-store pixels into LAYOUT points: the one conversion this backend owes the toolkit.
-///
-/// The DOM reports `offsetX`/`offsetY` in CSS pixels and the page multiplies them by
-/// `devicePixelRatio` to get the canvas backing store, which is the space `Raw` documents. The toolkit
-/// lays out in CSS pixels (a 360-point window is 360 wide whatever the density), and Clay's bounding
-/// boxes — which every hit test compares against — are in that space. So the display scale has to come
-/// back OUT here, and the browser is the only backend that has to do it: Wayland and AppKit both report
-/// logical points already.
-///
-/// Without this a click at 200% zoom landed twice as far from the top-left as the user aimed, and a
-/// click at 80% landed short — which reads as "the components are dead unless the zoom is 100%".
+/// Backing-store pixels into LAYOUT points: the DOM reports CSS x `devicePixelRatio`, the toolkit lays out in CSS pixels, so the display scale comes back OUT here — the browser is the only backend that has to do it (Wayland and AppKit report logical points), and without it a click at 200% landed twice as far from the top-left and at 80% landed short.
 pub fn toLayout(x: f32, y: f32, scale: f32) adapter.Point {
     const s = if (scale > 0) scale else 1;
     return .{ .x = x / s, .y = y / s };
@@ -267,8 +257,7 @@ test "a browser click reaches a real laid-out button's handler" {
 }
 
 test "a click at 2x display scale lands where the user aimed" {
-    // THE zoom regression guard. The DOM hands over a BACKING-STORE point (CSS x devicePixelRatio) while
-    // layout is in CSS pixels, so a device point has to be divided back before it reaches Clay.
+    // THE zoom regression guard: the DOM hands over a BACKING-STORE point while layout is in CSS pixels, so a device point has to be divided back before it reaches Clay.
     const aimed = toLayout(160, 120, 2.0);
     try std.testing.expectApproxEqAbs(@as(f32, 80), aimed.x, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 60), aimed.y, 0.01);

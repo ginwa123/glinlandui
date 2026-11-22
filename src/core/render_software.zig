@@ -825,9 +825,7 @@ pub fn hasGlyphFont() bool {
 // The clear colour of the most recent frame, mirrored so a GPU backend clears to the same pixels.
 var frame_clear_rgb: [4]f32 = .{ 0, 0, 0, 255 };
 
-/// Decode an in-memory image to RGBA8 at `max_dim`, with an allocator the CALLER owns: the same decoder,
-//  the same downscale and the same memory order as `decodeImageFromDisk`, so a host that supplies bytes
-//  and a host with a filesystem produce identical pixels.
+/// Decode an in-memory image to RGBA8 at `max_dim`, with an allocator the CALLER owns: the same decoder, downscale and memory order as `decodeImageFromDisk`, so a host that supplies bytes and a host with a filesystem produce identical pixels.
 pub fn decodeImageBytes(alloc: std.mem.Allocator, bytes: []const u8, max_dim: u16) ?Image {
     if (bytes.len == 0) return null;
     var iw: c_int = 0;

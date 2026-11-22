@@ -20,12 +20,7 @@ pub fn Exports(
     return ExportsWithAssets(App, root_fn, &[_]image_store.Source{});
 }
 
-/// The same ABI, plus the images this app's BROWSER build carries.
-///
-/// A page has no filesystem to open `examples/catalog/assets/*.png` from, so `build.zig` emits them as a
-/// generated `asset_data` module and the app's browser entry passes the list here. The engine decodes
-/// them with the same decoder the disk path uses, so the page and a desktop window draw the same pixels —
-/// and the app itself is untouched: registering assets is browser glue, not app code.
+/// The same ABI, plus the images this app's BROWSER build carries: a page has no filesystem, so `build.zig` emits an `asset_data` module and the app's browser entry passes the list here — the engine decodes them, and the app itself is untouched.
 pub fn ExportsWithAssets(
     comptime App: type,
     comptime root_fn: *const fn (?*anyopaque, u32, u32) void,
@@ -251,8 +246,7 @@ pub fn ExportsWithAssets(
             return gpu.height();
         }
 
-        /// How many image textures this frame's segments can name. The page keeps one GPU texture per id and
-        /// uploads it when the version changes; a segment of kind 2 names its image in `texture_id`.
+        /// How many image textures this frame's segments can name: the page keeps one GPU texture per id, uploads it when the version changes, and a segment of kind 2 names its image in `texture_id`.
         export fn glin_web_gpu_image_count() u32 {
             return gpu.imageCount();
         }

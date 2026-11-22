@@ -1024,8 +1024,7 @@ fn exampleExe(
     });
 }
 
-// An app's `assets/` directory, for the browser: the same bytes, emitted as source, because a page has no
-// filesystem to open them from. The engine's image store decodes them with the same decoder as a file.
+// An app's `assets/` directory, for the browser: the same bytes, emitted as source, because a page has no filesystem to open them from — and decoded by the same decoder the disk path uses.
 fn makeAssetsModule(b: *std.Build, name: []const u8) *std.Build.Module {
     const dir_path = b.fmt("examples/{s}/assets", .{name});
     const io = std.Io.Threaded.global_single_threaded.io();
