@@ -47,7 +47,13 @@ Verified, on the code that landed:
 Regenerate the shaders with `sh tools/build_shaders.sh` (needs `glslang-tools`); the build itself
 never compiles GLSL, so the committed `.spv` is what a Linux `zig build` reads.
 
-Two bugs only a real compositor could find, both fixed:
+Three bugs the tests had to find, all fixed:
+
+- **Never hand the shim floats mixed with more than six integers.** Zig 0.16's x86_64 backend
+  shifted the stack layout of such a call, so the offscreen call's `out` pointer arrived holding
+  the bits of the clear colour: a segfault on the x86_64 CI runner and never on arm64, which passes
+  eight integer arguments in registers. `GlinVkFrame` exists for exactly this reason — two pointer
+  arguments and the clear colour inside the struct, one shape for drawing and for readback.
 
 - **The first frame cannot wait for a frame callback.** A surface with no buffer attached is not
   mapped, so the compositor owes it no callback — the old pre-loop `glClear` + `eglSwapBuffers` had

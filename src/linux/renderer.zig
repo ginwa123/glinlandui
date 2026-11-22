@@ -404,17 +404,17 @@ pub const Renderer = struct {
         _ = vk.glin_vk_resize(d, @intCast(px.w), @intCast(px.h));
         self.build(commands, @intCast(px.w), @intCast(px.h), s);
         const cc = clearColor();
-        const rc = vk.glin_vk_draw(
-            d,
-            @ptrCast(self.verts.items.ptr),
-            @intCast(self.verts.items.len),
-            self.segs.items.ptr,
-            @intCast(self.segs.items.len),
-            cc[0],
-            cc[1],
-            cc[2],
-            cc[3],
-        );
+        var frame = vk.GlinVkFrame{
+            .verts = @ptrCast(self.verts.items.ptr),
+            .nverts = @intCast(self.verts.items.len),
+            .segs = self.segs.items.ptr,
+            .nsegs = @intCast(self.segs.items.len),
+            .w = @intCast(px.w),
+            .h = @intCast(px.h),
+            .clear = .{ cc[0], cc[1], cc[2], cc[3] },
+            .out = null,
+        };
+        const rc = vk.glin_vk_draw(d, &frame);
         // -2 is the surface moving on between frames: the shim rebuilt its swapchain and the next frame draws.
         if (rc < -1) log.warn("vulkan draw failed: {s}", .{std.mem.span(vk.glin_vk_last_error())});
         if (self.reported_first_frame) return;
@@ -433,20 +433,17 @@ pub const Renderer = struct {
         const out = self.alloc.alloc(u8, @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4) catch return null;
         errdefer self.alloc.free(out);
         const cc = clearColor();
-        if (vk.glin_vk_offscreen(
-            d,
-            @ptrCast(self.verts.items.ptr),
-            @intCast(self.verts.items.len),
-            self.segs.items.ptr,
-            @intCast(self.segs.items.len),
-            w,
-            h,
-            cc[0],
-            cc[1],
-            cc[2],
-            cc[3],
-            out.ptr,
-        ) != 0) {
+        var frame = vk.GlinVkFrame{
+            .verts = @ptrCast(self.verts.items.ptr),
+            .nverts = @intCast(self.verts.items.len),
+            .segs = self.segs.items.ptr,
+            .nsegs = @intCast(self.segs.items.len),
+            .w = w,
+            .h = h,
+            .clear = .{ cc[0], cc[1], cc[2], cc[3] },
+            .out = out.ptr,
+        };
+        if (vk.glin_vk_offscreen(d, &frame) != 0) {
             self.alloc.free(out);
             return null;
         }

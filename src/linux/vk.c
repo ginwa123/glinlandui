@@ -1198,9 +1198,7 @@ static void begin_clear_pass(VkCommandBuffer cb, VkRenderPass pass, VkFramebuffe
     vkCmdBeginRenderPass(cb, &bi, VK_SUBPASS_CONTENTS_INLINE);
 }
 
-int glin_vk_draw(GlinVk *v, const GlinVkVertex *verts, int nverts,
-                 const GlinSegment *segs, int nsegs,
-                 float r, float g, float b, float a) {
+int glin_vk_draw(GlinVk *v, const GlinVkFrame *fr) {
     Frame *f;
     uint32_t image_index = 0;
     VkResult ar;
@@ -1211,8 +1209,10 @@ int glin_vk_draw(GlinVk *v, const GlinVkVertex *verts, int nverts,
     VkSemaphore wait_sem;
     VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkDeviceSize need;
+    const float *c;
 
-    if (!v || !v->has_surface || v->sc == VK_NULL_HANDLE) return -1;
+    if (!v || !fr || !v->has_surface || v->sc == VK_NULL_HANDLE) return -1;
+    c = fr->clear;
     f = &v->frames[v->frame_index];
 
     if (vkWaitForFences(v->dev, 1, &f->fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) return fail("vkWaitForFences failed");
@@ -1230,12 +1230,12 @@ int glin_vk_draw(GlinVk *v, const GlinVkVertex *verts, int nverts,
         return fail("acquired image %u of %u", image_index, v->sc_count);
     }
 
-    need = (VkDeviceSize)nverts * GLIN_VK_VERTEX_SIZE;
+    need = (VkDeviceSize)fr->nverts * GLIN_VK_VERTEX_SIZE;
     if (need > f->cap && grow_vertex_buffer(v, f, need) != 0) {
         vkResetFences(v->dev, 1, &f->fence);
         return -1;
     }
-    if (need > 0 && verts) memcpy(f->map, verts, (size_t)need);
+    if (need > 0 && fr->verts) memcpy(f->map, fr->verts, (size_t)need);
 
     vkResetCommandBuffer(f->cmd, 0);
     memset(&bi, 0, sizeof bi);
@@ -1247,11 +1247,11 @@ int glin_vk_draw(GlinVk *v, const GlinVkVertex *verts, int nverts,
     }
     cb = f->cmd;
 
-    begin_clear_pass(cb, v->sc_pass, v->sc_fb[image_index], v->sc_extent, r, g, b, a);
-    if (nverts > 0 && nsegs > 0 && verts) {
+    begin_clear_pass(cb, v->sc_pass, v->sc_fb[image_index], v->sc_extent, c[0], c[1], c[2], c[3]);
+    if (fr->nverts > 0 && fr->nsegs > 0 && fr->verts) {
         VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(cb, 0, 1, &f->buffer, &offset);
-        record_draws(v, cb, v->sc_extent, segs, nsegs);
+        record_draws(v, cb, v->sc_extent, fr->segs, fr->nsegs);
     }
     vkCmdEndRenderPass(cb);
     vkEndCommandBuffer(cb);
@@ -1277,16 +1277,12 @@ int glin_vk_draw(GlinVk *v, const GlinVkVertex *verts, int nverts,
     pi.pSwapchains = &v->sc;
     pi.pImageIndices = &image_index;
     ar = vkQueuePresentKHR(v->queue, &pi);
+    v->frame_index = (v->frame_index + 1) % GLIN_VK_MAX_FRAMES;
     if (ar == VK_ERROR_OUT_OF_DATE_KHR) {
         // The frame did reach the screen queue; the next one rebuilds the swapchain.
-        v->frame_index = (v->frame_index + 1) % GLIN_VK_MAX_FRAMES;
         return 0;
     }
-    if (ar != VK_SUCCESS && ar != VK_SUBOPTIMAL_KHR) {
-        v->frame_index = (v->frame_index + 1) % GLIN_VK_MAX_FRAMES;
-        return fail("vkQueuePresentKHR failed (%d)", (int)ar);
-    }
-    v->frame_index = (v->frame_index + 1) % GLIN_VK_MAX_FRAMES;
+    if (ar != VK_SUCCESS && ar != VK_SUBOPTIMAL_KHR) return fail("vkQueuePresentKHR failed (%d)", (int)ar);
     return 0;
 }
 
@@ -1314,7 +1310,6 @@ static int ensure_offscreen(GlinVk *v, int w, int h) {
                                  &v->read_buffer, &v->read_memory, &v->read_map) != 0)
                 return -1;
             v->read_cap = need;
-            fprintf(stderr, "vk ensure(readback, same target): map=%p cap=%llu\n", v->read_map, (unsigned long long)v->read_cap);
         }
         return 0;
     }
@@ -1389,10 +1384,7 @@ static int readback_ready(GlinVk *v, VkDeviceSize need) {
     return 0;
 }
 
-int glin_vk_offscreen(GlinVk *v, const GlinVkVertex *verts, int nverts,
-                      const GlinSegment *segs, int nsegs, int w, int h,
-                      float r, float g, float b, float a,
-                      unsigned char *out) {
+int glin_vk_offscreen(GlinVk *v, const GlinVkFrame *fr) {
     Frame *f;
     VkCommandBuffer cb;
     VkCommandBufferBeginInfo bi;
@@ -1400,8 +1392,15 @@ int glin_vk_offscreen(GlinVk *v, const GlinVkVertex *verts, int nverts,
     VkBufferImageCopy copy;
     VkDeviceSize need;
     VkExtent2D extent;
+    const float *c;
+    int w, h;
+    unsigned char *out;
 
-    if (!v || !out || w <= 0 || h <= 0) return fail("bad offscreen request");
+    if (!v || !fr || !fr->out || fr->w <= 0 || fr->h <= 0) return fail("bad offscreen request");
+    w = fr->w;
+    h = fr->h;
+    out = fr->out;
+    c = fr->clear;
     if (ensure_offscreen(v, w, h) != 0) return -1;
     if (readback_ready(v, (VkDeviceSize)w * (VkDeviceSize)h * 4) != 0) return -1;
     if (v->off_fb == VK_NULL_HANDLE) return fail("offscreen target missing");
@@ -1409,9 +1408,9 @@ int glin_vk_offscreen(GlinVk *v, const GlinVkVertex *verts, int nverts,
     f = &v->frames[0];
     vkWaitForFences(v->dev, 1, &f->fence, VK_TRUE, UINT64_MAX);
 
-    need = (VkDeviceSize)nverts * GLIN_VK_VERTEX_SIZE;
+    need = (VkDeviceSize)fr->nverts * GLIN_VK_VERTEX_SIZE;
     if (need > f->cap && grow_vertex_buffer(v, f, need) != 0) return -1;
-    if (need > 0 && verts) memcpy(f->map, verts, (size_t)need);
+    if (need > 0 && fr->verts) memcpy(f->map, fr->verts, (size_t)need);
 
     vkResetCommandBuffer(f->cmd, 0);
     memset(&bi, 0, sizeof bi);
@@ -1422,11 +1421,11 @@ int glin_vk_offscreen(GlinVk *v, const GlinVkVertex *verts, int nverts,
 
     extent.width = (uint32_t)w;
     extent.height = (uint32_t)h;
-    begin_clear_pass(cb, v->off_pass, v->off_fb, extent, r, g, b, a);
-    if (nverts > 0 && nsegs > 0 && verts) {
+    begin_clear_pass(cb, v->off_pass, v->off_fb, extent, c[0], c[1], c[2], c[3]);
+    if (fr->nverts > 0 && fr->nsegs > 0 && fr->verts) {
         VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(cb, 0, 1, &f->buffer, &offset);
-        record_draws(v, cb, extent, segs, nsegs);
+        record_draws(v, cb, extent, fr->segs, fr->nsegs);
     }
     vkCmdEndRenderPass(cb);
 
@@ -1448,10 +1447,6 @@ int glin_vk_offscreen(GlinVk *v, const GlinVkVertex *verts, int nverts,
     if (vkWaitForFences(v->dev, 1, &f->fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) return fail("vkWaitForFences failed (offscreen)");
 
     if (readback_ready(v, (VkDeviceSize)w * (VkDeviceSize)h * 4) != 0) return -1;
-    fprintf(stderr, "vk offscreen: out=%p map=%p cap=%llu buf=%p need=%llu sizeof_v=%zu rm_off=%zu\n",
-            (void *)out, v->read_map, (unsigned long long)v->read_cap, (void *)v->read_buffer,
-            (unsigned long long)((VkDeviceSize)w * (VkDeviceSize)h * 4), sizeof(GlinVk),
-            (size_t)((char *)&v->read_map - (char *)v));
     memcpy(out, v->read_map, (size_t)w * (size_t)h * 4);
     return 0;
 }

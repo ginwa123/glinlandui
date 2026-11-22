@@ -81,21 +81,35 @@ int glin_vk_resize(GlinVk *v, int w, int h);
 int glin_vk_set_texture(GlinVk *v, unsigned int id,
                         const unsigned char *bytes, int w, int h, int channels);
 
-/* Clear to the given colour, draw every segment, present. 0 when a frame was
+/* One frame: the geometry, the target size and the clear colour.
+ *
+ * A struct rather than nine scalars on purpose. A C call that mixes floats
+ * with more than six integer arguments puts some of them on the stack, and
+ * Zig 0.16's x86_64 backend shifts that stack layout: `out` arrived holding
+ * the bits of the clear colour, which is a segfault, not a wrong pixel. Two
+ * pointer arguments have no such edge, and one shape serves both entries.
+ */
+typedef struct {
+    const GlinVkVertex *verts;
+    int nverts;
+    const GlinSegment *segs;
+    int nsegs;
+    int w;               /* target size in device pixels */
+    int h;
+    float clear[4];      /* straight (non-premultiplied) 0..1 RGBA */
+    unsigned char *out;  /* offscreen readback, NULL to present */
+} GlinVkFrame;
+
+/* Clear to the frame's colour, draw every segment, present. 0 when a frame was
  * presented, negative when there is no usable surface right now (minimised,
  * out of date, no swapchain). */
-int glin_vk_draw(GlinVk *v, const GlinVkVertex *verts, int nverts,
-                 const GlinSegment *segs, int nsegs,
-                 float r, float g, float b, float a);
+int glin_vk_draw(GlinVk *v, const GlinVkFrame *frame);
 
-/* Render the same vertices into an offscreen RGBA8 target and write the
- * displayed bytes into `out` (w*h*4, row 0 = top row), so the GPU output can
- * be compared against the CPU reference. Needs no window and no display.
+/* Render the same frame into an offscreen RGBA8 target and write the displayed
+ * bytes into `frame->out` (w*h*4, row 0 = top row), so the GPU output can be
+ * compared against the CPU reference. Needs no window and no display.
  * 0 on success. */
-int glin_vk_offscreen(GlinVk *v, const GlinVkVertex *verts, int nverts,
-                      const GlinSegment *segs, int nsegs, int w, int h,
-                      float r, float g, float b, float a,
-                      unsigned char *out);
+int glin_vk_offscreen(GlinVk *v, const GlinVkFrame *frame);
 
 /* The physical device's name, for a log line ("llvmpipe (LLVM ...)" on
  * lavapipe). Empty before a device is created. */
