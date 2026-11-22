@@ -1049,6 +1049,37 @@ test "FrameMemo draws first frame, skips identical repeat" {
     try std.testing.expectEqual(@as(u64, 2), m.draws);
 }
 
+fn declareCullRow(i: u32) void {
+    cl.UI()(.{ .id = .IDI("cull-row", i + 1), .layout = .{ .sizing = .{ .h = .fixed(60) } }, .background_color = .{ 30, 30, 30, 255 } })({});
+}
+
+fn declareCullColumn() void {
+    // One column, so the rows are STACKED: elements declared at the root are separate trees and all start at the origin, where nothing is off screen.
+    cl.UI()(.{ .id = .ID("cull-column"), .layout = .{ .direction = .top_to_bottom, .sizing = .{ .w = .grow, .h = .fit } } })({
+        var i: u32 = 0;
+        while (i < 40) : (i += 1) declareCullRow(i);
+    });
+}
+
+test "an off-screen background costs no render command, and culling off brings every one back" {
+    const headless = @import("testing/headless.zig");
+    // 40 rows of 60 pt in a 480 pt viewport: eight are visible, so the other 32 must not reach the renderer — or the digest, which hashes every command.
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.beginLayout();
+    declareCullColumn();
+    const culled = cl.endLayout();
+    try std.testing.expectEqual(@as(usize, 9), culled.len);
+
+    // Culling disabled is the escape hatch for an app doing its own scrolling; then every row must come back.
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    cl.setCullingEnabled(false);
+    defer cl.setCullingEnabled(true);
+    cl.beginLayout();
+    declareCullColumn();
+    const all = cl.endLayout();
+    try std.testing.expectEqual(@as(usize, 40), all.len);
+}
+
 test "shouldDrawHash answers exactly as shouldDraw does, on the digest the frame already computed" {
     // The frame hashes once for `commandsRepeated` and hands that digest to the memo; `shouldDraw` would hash the same commands a second time.
     var by_commands = FrameMemo{};
