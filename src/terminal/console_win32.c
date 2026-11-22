@@ -55,6 +55,18 @@ int glin_term_write(const char *buf, int len) {
     return (int)wrote;
 }
 
+long long glin_term_now_us(void) {
+    static LARGE_INTEGER freq;
+    static int have_freq = 0;
+    LARGE_INTEGER now;
+    if (!have_freq) {
+        QueryPerformanceFrequency(&freq);
+        have_freq = 1;
+    }
+    QueryPerformanceCounter(&now);
+    return (long long)((now.QuadPart * 1000000LL) / freq.QuadPart);
+}
+
 void glin_term_restore(void) {
     if (!saved) return;
     SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), saved_in);

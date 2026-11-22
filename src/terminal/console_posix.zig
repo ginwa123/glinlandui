@@ -81,6 +81,14 @@ pub const Console = struct {
         }
     }
 
+    /// Monotonic microseconds, for the frame statistics line.
+    pub fn nowUs(self: *Console) i64 {
+        _ = self;
+        var ts: std.c.timespec = undefined;
+        if (std.c.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts) != 0) return 0;
+        return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1000);
+    }
+
     pub fn close(self: *Console) void {
         self.disableRaw();
     }

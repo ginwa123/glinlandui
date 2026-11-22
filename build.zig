@@ -11,7 +11,17 @@ const NativeProtocols = struct {
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+
+    // ---- `-Dtui`: build the terminal backend instead of a desktop window ---- The same engine, the same components, drawn into a terminal.
+    const tui_flag = b.option(bool, "tui", "Build the terminal (TUI) backend instead of the desktop window") orelse false;
+
+    // `-Doptimize` still wins; without it a terminal build is ReleaseSafe, because a terminal frame does real per-pixel work and Debug is ~10x slower at it.
+    const optimize = b.option(std.builtin.OptimizeMode, "optimize", "Prioritize performance, safety, or binary size") orelse switch (b.release_mode) {
+        .off => if (tui_flag) std.builtin.OptimizeMode.ReleaseSafe else std.builtin.OptimizeMode.Debug,
+        .safe, .any => .ReleaseSafe,
+        .fast => .ReleaseFast,
+        .small => .ReleaseSmall,
+    };
 
     // ---- the webapp's font ---- The browser build EMBEDS a font, so `zig build web` produces a webapp whose text is glyphs with no fetch, no `assets/`.
     const font_opt = b.option(
@@ -30,9 +40,6 @@ pub fn build(b: *std.Build) void {
     const is_macos = target.result.os.tag == .macos;
     // The third real backend.
     const is_wasm = target.result.cpu.arch.isWasm();
-
-    // ---- `-Dtui`: build the terminal backend instead of a desktop window ---- The same engine, the same components, drawn into a terminal.
-    const tui_flag = b.option(bool, "tui", "Build the terminal (TUI) backend instead of the desktop window") orelse false;
 
     // ---- `-Dweb`: build for the browser instead of the desktop ---- `zig build run-calculator -Dweb` builds the calculator for wasm, serves it, and.
     const web_flag = b.option(bool, "web", "Build for the browser (wasm) instead of the desktop") orelse false;

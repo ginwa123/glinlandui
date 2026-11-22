@@ -87,6 +87,30 @@ scene with one element moving one pixel per frame:
 The first frame of a session, a resize, and a scroll of the whole viewport are still full
 frames — there is nothing smaller to send.
 
+## Wire cost, and the zlib probe
+
+Scrolling is the case patches cannot help with: the whole viewport changes, so the
+whole image is re-sent. At 2x on a 90x30 terminal that is 1440x960 pixels — 5.5 MB of
+base64 per scroll step, which is what makes a pixel terminal feel heavy.
+
+kitty can inflate the payload (`o=z`), and a flat UI frame compresses ~95x. So at
+startup the window sends a **1x1 query** (`a=q,q=1,o=z,i=99`) and waits up to 150 ms
+for `ESC _ G i=99 ; OK ESC \`; only a terminal that answers gets compressed frames.
+`GLIN_TUI_COMPRESS=1|0` forces the answer. Payloads under 16K pixels stay raw, because
+compressing a few hundred bytes costs more than it saves.
+
+Measured on an M-series Mac, `ReleaseSafe`, 90x30 cells, `zig build -Dtui run-lazy-scroll`,
+ten wheel events:
+
+| build | bytes written | per frame, after the first two |
+|---|---|---|
+| before (1x, no patches) | 4.16 MB | full frame each time, ~18 ms |
+| patches, 2x, raw | 11.09 MB | 5.5 MB per scroll step |
+| patches, 2x, `o=z` | **0.32 MB** | **~5 KB and 2.6 ms** |
+
+The first frame of a session costs ~26 ms (raster + zlib + base64) and 59 KB; after
+that a scroll step is 2.6 ms and a patch of a few KB.
+
 ## Sharpness: the device ratio
 
 A terminal image is drawn into a box measured in *device* pixels. Rasterising at 1x on a

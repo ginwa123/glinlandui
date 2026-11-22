@@ -7,6 +7,7 @@ extern fn glin_term_size(cols: *c_ulong, rows: *c_ulong) c_int;
 extern fn glin_term_read(buf: [*]u8, len: c_int, timeout_ms: c_int) c_int;
 extern fn glin_term_write(buf: [*]const u8, len: c_int) c_int;
 extern fn glin_term_restore() void;
+extern fn glin_term_now_us() i64;
 
 pub const Console = struct {
     cols: u16 = 80,
@@ -54,6 +55,12 @@ pub const Console = struct {
             if (n <= 0) return;
             off += @intCast(n);
         }
+    }
+
+    /// Monotonic microseconds, for the frame statistics line.
+    pub fn nowUs(self: *Console) i64 {
+        _ = self;
+        return glin_term_now_us();
     }
 
     pub fn close(self: *Console) void {

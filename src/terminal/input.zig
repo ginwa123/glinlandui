@@ -87,6 +87,14 @@ pub const Decoder = struct {
                 press(sink, keymap.fromSS3(s[2]));
                 break :blk 3;
             },
+            // An APC/DCS reply (a kitty graphics answer, a device attribute): swallowed whole, never typed as text.
+            '_', 'P' => blk: {
+                const end = std.mem.indexOf(u8, s[2..], "\x1b\\") orelse {
+                    if (s.len > 4096) break :blk s.len;
+                    break :blk 0;
+                };
+                break :blk end + 4;
+            },
             // Alt+key: press Alt, then the key, then release Alt — the engine reads modifiers off the key chain.
             else => blk: {
                 const n = self.plainWith(s[1..], sink, true);
@@ -384,4 +392,16 @@ test "UTF-8 text arrives whole" {
     var d = Decoder{};
     d.feed("é", log.sink());
     try std.testing.expectEqualStrings("é", log.texts.items);
+}
+
+test "a terminal reply is swallowed, never typed" {
+    var log = Log{};
+    defer log.deinit();
+    var d = Decoder{};
+    d.feed("\x1b_Gi=99;OK\x1b\\", log.sink());
+    try std.testing.expectEqual(@as(usize, 0), log.keys.items.len);
+    try std.testing.expectEqual(@as(usize, 0), log.texts.items.len);
+    // And typing still works right after it.
+    d.feed("a", log.sink());
+    try std.testing.expectEqualStrings("a", log.texts.items);
 }

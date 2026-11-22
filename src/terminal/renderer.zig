@@ -26,6 +26,8 @@ pub const Attach = struct {
     px_h: u16 = 0,
     /// Keep the last frame as text. Off by default: it is a full-grid scan, and only a headless run or a test reads it.
     capture_text: bool = false,
+    /// The terminal inflates zlib payloads (`o=z`). The window asks before it turns this on; a wrong guess means no picture.
+    compress: bool = false,
 };
 
 fn discard(_: ?*anyopaque, _: []const u8) void {}
@@ -39,6 +41,19 @@ pub fn attach(a: Attach) void {
 
 /// Keep the most recent frame as text, so a headless run (and a test) can read what was painted.
 var last_text: []const u8 = &.{};
+/// What the last frame wrote and which tier painted it: the window's GLIN_TUI_STATS line reads these.
+var last_bytes: usize = 0;
+var last_tier: term.Mode = .cells;
+
+/// Bytes the last frame wrote: the difference between a patch and a whole frame.
+pub fn lastBytes() usize {
+    return last_bytes;
+}
+
+/// The tier the last frame used.
+pub fn tierNow() term.Mode {
+    return last_tier;
+}
 
 /// The last frame the renderer produced, as one line per row. Owned by this module until the next frame.
 pub fn lastFrameText() []const u8 {
@@ -108,8 +123,12 @@ pub const Renderer = struct {
     next_id: u32 = 1,
     /// The id the frame in flight was sent with.
     last_id: u32 = 0,
+    /// Bytes this frame wrote, so the statistics line can tell a patch from a frame.
+    bytes_out: usize = 0,
     frames: u32 = 0,
     capture_text: bool = false,
+    /// Whether this terminal takes `o=z`, and whether this renderer asked for it.
+    compress: bool = false,
     /// The next frame must repaint everything: the first one, or the first after a resize.
     whole: bool = true,
     /// The display scale that was in force before this renderer took the process-wide one over.
@@ -131,6 +150,7 @@ pub const Renderer = struct {
             .grid = try cells.Grid.init(alloc, a.cols, a.rows),
             .prev = try cells.Grid.init(alloc, a.cols, a.rows),
             .capture_text = a.capture_text,
+            .compress = a.compress,
         };
         errdefer self.deinit();
         self.scale_before = soft.renderScale();
@@ -170,9 +190,16 @@ pub const Renderer = struct {
         return self.grid.toText(alloc);
     }
 
+    fn emit(self: *Renderer, bytes: []const u8) void {
+        self.sink.write(self.sink.ctx, bytes);
+        self.bytes_out += bytes.len;
+    }
+
     pub fn drawCommands(self: *Renderer, commands: []const cl.RenderCommand, win_w: i32, win_h: i32) void {
         if (win_w <= 0 or win_h <= 0) return;
         self.frames += 1;
+        self.bytes_out = 0;
+        last_tier = self.mode;
         // The cell grid is always built: it is the fallback tier, and it is what says which cells actually changed.
         self.grid.clear(cells.Color.default_bg);
         self.grid.render(commands, win_w, win_h);
@@ -186,6 +213,7 @@ pub const Renderer = struct {
             self.scale = 1.0;
             soft.setRenderScale(1.0);
             self.paintCells();
+            last_tier = .cells;
             return;
         }
         self.prev.clear(cells.Color.default_bg);
@@ -207,7 +235,7 @@ pub const Renderer = struct {
         else
             kitty.deleteOne(self.alloc, self.patch_id) catch return;
         defer self.alloc.free(esc);
-        self.sink.write(self.sink.ctx, esc);
+        self.emit(esc);
         if (all) self.patch_id = 0;
     }
 
@@ -220,9 +248,10 @@ pub const Renderer = struct {
     fn paintCells(self: *Renderer) void {
         self.out.clearRetainingCapacity();
         ansi.emit(&self.out, self.alloc, if (self.frames == 1) null else &self.prev, &self.grid, self.depth) catch return;
-        if (self.out.items.len != 0) self.sink.write(self.sink.ctx, self.out.items);
+        if (self.out.items.len != 0) self.emit(self.out.items);
         self.prev.clear(cells.Color.default_bg);
         self.prev.copyFrom(&self.grid);
+        last_bytes = self.bytes_out;
         self.keepText();
     }
 
@@ -249,7 +278,10 @@ pub const Renderer = struct {
         const dirty: cells.Rect = if (self.whole)
             .{ .x0 = 0, .y0 = 0, .x1 = self.grid.cols, .y1 = self.grid.rows }
         else
-            self.grid.dirtyRect(&self.prev) orelse return true;
+            self.grid.dirtyRect(&self.prev) orelse {
+                last_bytes = self.bytes_out;
+                return true;
+            };
         if (self.whole) {
             s.clear();
             // A full frame replaces the screen: every placement from a previous frame or size goes first.
@@ -270,12 +302,13 @@ pub const Renderer = struct {
         const cols: u16 = @intCast(dirty.x1 - dirty.x0);
         const rows: u16 = @intCast(dirty.y1 - dirty.y0);
         const payload = switch (self.mode) {
+            // Compressing a handful of cells costs more than it saves, so only a real area takes the zlib path.
             .kitty => kitty.encodedRegion(self.alloc, s.pixels, px_w, px_h, .{
                 .x = region.x,
                 .y = region.y,
                 .w = region.w,
                 .h = region.h,
-            }, cols, rows, self.takeId()) catch |e| blk: {
+            }, cols, rows, self.takeId(), if (self.compress and region.w * region.h >= 16 * 1024) .zlib else .raw) catch |e| blk: {
                 self.err = @errorName(e);
                 break :blk null;
             },
@@ -292,10 +325,11 @@ pub const Renderer = struct {
         // Position the cursor on the region's own top-left cell, then paint: both protocols anchor at the cursor.
         var buf: [32]u8 = undefined;
         const move = std.fmt.bufPrint(&buf, "\x1b[{d};{d}H", .{ dirty.y0 + 1, dirty.x0 + 1 }) catch "\x1b[H";
-        self.sink.write(self.sink.ctx, move);
-        self.sink.write(self.sink.ctx, bytes);
-        self.sink.write(self.sink.ctx, "\x1b[H");
+        self.emit(move);
+        self.emit(bytes);
+        self.emit("\x1b[H");
         self.whole = false;
+        last_bytes = self.bytes_out;
         self.keepText();
         return true;
     }
