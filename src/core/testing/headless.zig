@@ -17,9 +17,16 @@ var canvas: ?[]u8 = null;
 /// Start a 720x480 headless frame with the stub measurer and `pointer` already installed. Call `cl.endLayout()` to finish it.
 pub fn begin(pointer: cl.Vector2, pressed: bool) void {
     // The ONLY `page_allocator` in the tree: Clay holds a process-global pointer into this arena and never releases it, so a leak-checking allocator would fail a correct test.
-    if (canvas == null) canvas = std.heap.page_allocator.alloc(u8, cl.minMemorySize()) catch @panic("headless Clay arena");
+    const needed: usize = cl.minMemorySize();
+    var stale: ?[]u8 = null;
+    if (canvas == null or canvas.?.len < needed) {
+        stale = canvas;
+        canvas = std.heap.page_allocator.alloc(u8, needed) catch @panic("headless Clay arena");
+    }
     const arena = cl.Arena.init(canvas.?);
     _ = cl.initialize(arena, .{ .w = 720, .h = 480 }, .{});
+    // Freed only AFTER the init above: Clay reads the context it is replacing, and that context points into the old arena.
+    if (stale) |old| std.heap.page_allocator.free(old);
     // The frame's viewport is what a widget reads instead of being handed the window: a harness says it too.
     frame_mod.setViewport(frame_mod.viewportOf(720, 480));
     cl.setMeasureTextFunction(void, {}, stubMeasure);
