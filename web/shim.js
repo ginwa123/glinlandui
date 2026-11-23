@@ -68,9 +68,11 @@ import { createStore } from "./store.js";
  * same app type to the same ABI, so the page needs no per-app code at all.
  *
  * Keep this list in step with `zig build web`: `web/smoke.mjs` boots every module
- * named here, and a name with no file is a page that 404s.
+ * named here, and a name with no file is a page that 404s. An app that lives in
+ * its OWN repository is not in this list — it ships an `apps.json` beside its
+ * module instead, and `loadApps` below merges the two.
  */
-const APPS = {
+const BUILT_IN_APPS = {
   demo: { file: "glinlandui.wasm", label: "demo" },
   calculator: { file: "glinlandui-calculator.wasm", label: "calculator" },
   todo: { file: "glinlandui-todo.wasm", label: "todo (MVVM)" },
@@ -78,6 +80,37 @@ const APPS = {
   "file-dialog": { file: "glinlandui-file-dialog.wasm", label: "file dialog" },
   "lazy-scroll": { file: "glinlandui-lazy-scroll.wasm", label: "10,000 rows" },
 };
+
+/**
+ * The apps this PAGE serves: the built-ins, plus whatever `apps.json` beside the
+ * module adds.
+ *
+ * A toolkit that can only run the modules compiled inside its own repository is a
+ * toolkit you cannot ship with: an app in its own repo builds its own wasm module
+ * and needs only a name, a file and a label to appear in `?app=`. The file is
+ * optional and its absence is normal — the built-in list is what `zig build web`
+ * installs, and a page without `apps.json` behaves exactly as before. A malformed
+ * entry is skipped for the same reason: a page that cannot read one line of its
+ * menu should still boot the apps it carries.
+ */
+async function loadApps() {
+  let extra = null;
+  try {
+    const response = await fetch("apps.json", { cache: "no-cache" });
+    if (response.ok) extra = await response.json();
+  } catch {
+    extra = null;
+  }
+  if (extra === null || typeof extra !== "object") return BUILT_IN_APPS;
+  const merged = { ...BUILT_IN_APPS };
+  for (const [id, entry] of Object.entries(extra)) {
+    if (!entry || typeof entry.file !== "string" || entry.file.length === 0) continue;
+    merged[id] = { file: entry.file, label: typeof entry.label === "string" ? entry.label : id };
+  }
+  return merged;
+}
+
+const APPS = await loadApps();
 
 /**
  * Which application to load.
