@@ -12,6 +12,7 @@ const route = @import("../core/route.zig");
 const store = @import("storage.zig");
 const text_index = @import("../core/text_index.zig");
 const frame_mod = @import("../core/frame.zig");
+const net = @import("net.zig");
 
 /// The face the page draws with, compiled in by `build.zig`'s `-Dfont` option. It lives in the LIBRARY, not in an application: a browser has no font paths, and a toolkit that made every app carry a typeface would be making every app know how it is being hosted.
 const embedded_font: []const u8 = @import("font_data").bytes;
@@ -116,6 +117,9 @@ pub fn ExportsWithAssets(
 
             // A page reloads with the document it stored, so a fresh window starts with nothing adopted and nothing owed.
             store.reset();
+
+            // The page names the API it talks to after this call, so a fresh window starts with no origin and no answer waiting.
+            net.reset();
 
             // The images this build carries, registered before the first frame: the renderer looks them up by the same path the app declared.
             image_store.register(assets);
@@ -588,6 +592,80 @@ pub fn ExportsWithAssets(
         /// The page confirming it wrote what it read: the app is free to stage the next document.
         export fn glin_web_store_clean() void {
             store.clean();
+        }
+
+        // The network: the request the app staged, and the page's way of settling an answer.
+
+        /// A block the page writes the API origin it was told to use into.
+        export fn glin_web_net_origin_scratch() u32 {
+            return offsetOf(net.originScratch());
+        }
+
+        export fn glin_web_net_origin_scratch_len() u32 {
+            return @intCast(net.originScratch().len);
+        }
+
+        /// The page naming the origin every path is resolved against. A zero length leaves the app's own default.
+        export fn glin_web_net_origin(ptr: u32, len: u32) void {
+            if (ptr == 0 or len == 0) return;
+            if (len > net.originScratch().len) return;
+            const p: [*]const u8 = @ptrFromInt(ptr);
+            if (!net.setOrigin(p[0..len])) return;
+            // The origin usually arrives before the first frame, and the first frame is the one that asks for data.
+            @import("../core/frame.zig").requestFrame();
+        }
+
+        /// The request the page must send, as an offset into wasm memory (0 when nothing is owed).
+        export fn glin_web_net_request_ptr() u32 {
+            return offsetOf(net.staged() orelse "");
+        }
+
+        export fn glin_web_net_request_len() u32 {
+            const bytes = net.staged() orelse return 0;
+            return @intCast(bytes.len);
+        }
+
+        /// The page confirming it read the request, so the app may stage the next one.
+        export fn glin_web_net_request_clean() void {
+            net.clean();
+        }
+
+        /// A block the page writes `"<status>\n<etag>\n<version>\n"` into.
+        export fn glin_web_net_meta_scratch() u32 {
+            return offsetOf(net.metaScratch());
+        }
+
+        export fn glin_web_net_meta_scratch_len() u32 {
+            return @intCast(net.metaScratch().len);
+        }
+
+        /// A block the page writes a response body into, so settling one allocates nothing and cannot grow the heap.
+        export fn glin_web_net_body_scratch() u32 {
+            return offsetOf(net.bodyScratch());
+        }
+
+        export fn glin_web_net_body_scratch_len() u32 {
+            return @intCast(net.bodyScratch().len);
+        }
+
+        /// The page's answer: the ticket it belongs to, and the lengths it wrote. Returns the revision it records as answered.
+        export fn glin_web_net_reply(ticket: u32, meta_len: u32, body_len: u32) u32 {
+            // A page is not trusted with a length: past the meta block it is not a status, and slicing it would trap.
+            if (meta_len > net.metaScratch().len) return net.revision();
+            // A body longer than the block is an answer whose bytes could not be carried: the status still counts, and the app sees a truncated reply.
+            const settled = if (body_len > net.bodyScratch().len)
+                net.settleOverlong(ticket, meta_len)
+            else
+                net.settle(ticket, meta_len, body_len);
+            if (!settled) return net.revision();
+            // An answer lands between frames, so ask for the one that draws what it says.
+            @import("../core/frame.zig").requestFrame();
+            return net.revision();
+        }
+
+        /// Moves on every answer, so the app can tell one arrived without comparing bytes.
+        export fn glin_web_net_revision() u32 {
+            return net.revision();
         }
     };
 }

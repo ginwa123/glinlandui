@@ -755,6 +755,83 @@ async function main() {
     storeTimer = setTimeout(flushStore, 250);
   }
 
+  // ---- the network ----
+  //
+  // The app stages ONE request at a time (`src/core/net.zig`), and this block
+  // moves it: read the bytes, tell the module it may stage the next, `fetch`,
+  // then write the status, the two delta-sync headers and the body back. Every
+  // decision — a retry, a `304`, a `422` — stays in Zig, where it is tested.
+  // What is here is the parse of a format the module wrote and the call into
+  // `fetch`; nothing else.
+  const netMetaScratch = exports.glin_web_net_meta_scratch();
+  const netMetaScratchLen = exports.glin_web_net_meta_scratch_len();
+  const netBodyScratch = exports.glin_web_net_body_scratch();
+  const netBodyScratchLen = exports.glin_web_net_body_scratch_len();
+  const netDecoder = new TextDecoder();
+
+  /** Hand one answer back: the meta block, the body, then the call that applies it. */
+  function settleNet(ticket, status, etag, version, body) {
+    if (netMetaScratch === 0 || netBodyScratch === 0) return;
+    const meta = encoder.encode(`${status}\n${etag}\n${version}\n`);
+    const bodyBytes = encoder.encode(body);
+    new Uint8Array(memory.buffer, netMetaScratch, netMetaScratchLen).set(meta, 0);
+    // A body longer than the block is NOT truncated here: the true length is
+    // reported and the module settles the answer as truncated itself, because
+    // "a half-read body is worse than none" is its decision, not this page's.
+    new Uint8Array(memory.buffer, netBodyScratch, netBodyScratchLen).set(
+      bodyBytes.subarray(0, netBodyScratchLen),
+      0,
+    );
+    exports.glin_web_net_reply(ticket, meta.length, bodyBytes.length);
+    drawNow();
+  }
+
+  /** Turn one staged request into a `fetch`, and settle whatever comes back. */
+  async function sendRequest(text) {
+    const split = text.indexOf("\n\n");
+    const head = split < 0 ? text : text.slice(0, split);
+    const body = split < 0 ? "" : text.slice(split + 2);
+    const lines = head.split("\n");
+    const [ticketText, method, url] = (lines[0] ?? "").split(" ");
+    const ticket = Number(ticketText);
+    if (!Number.isInteger(ticket) || !method || !url) return;
+    const headers = {};
+    for (const line of lines.slice(1)) {
+      const at = line.indexOf(":");
+      if (at <= 0) continue;
+      headers[line.slice(0, at).trim()] = line.slice(at + 1).trim();
+    }
+    const init = { method, headers, mode: "cors", credentials: "omit" };
+    if (body.length > 0) init.body = body;
+    try {
+      const response = await fetch(url, init);
+      // The two headers a delta sync needs are read verbatim; the module decides
+      // what a `304` or a `422` means.
+      settleNet(
+        ticket,
+        response.status,
+        response.headers.get("etag") ?? "",
+        response.headers.get("x-schema-version") ?? "",
+        await response.text(),
+      );
+    } catch {
+      // A transport failure is `status 0`: the module decides whether to retry.
+      settleNet(ticket, 0, "", "", "");
+    }
+  }
+
+  /** Read the request the app owes, free the slot, and send it. */
+  function syncNet() {
+    const len = exports.glin_web_net_request_len();
+    if (len === 0) return;
+    const ptr = exports.glin_web_net_request_ptr();
+    // Decoded before `clean`, for the same reason the stored document is: the
+    // module may overwrite the block the moment it stops owing a request.
+    const text = netDecoder.decode(new Uint8Array(memory.buffer, ptr, len));
+    exports.glin_web_net_request_clean();
+    void sendRequest(text);
+  }
+
   addEventListener("keydown", (event) => {
     const consumed = sendKey(event.code, 1);
     // Draw before deciding on `preventDefault`: the key has already been applied
@@ -899,6 +976,20 @@ async function main() {
   // the restored screen once instead of drawing the default one and flipping.
   await adoptStored();
 
+  // The API origin: `?api=` when the page carries one, else the app's own
+  // default. The app composes every address from it, so this is a string and no
+  // decision; a page served next to its backend passes nothing at all.
+  const netOriginScratch = exports.glin_web_net_origin_scratch();
+  const netOriginScratchLen = exports.glin_web_net_origin_scratch_len();
+  const apiOrigin = new URLSearchParams(location.search).get("api");
+  if (apiOrigin && netOriginScratch !== 0 && netOriginScratchLen !== 0) {
+    const bytes = encoder.encode(apiOrigin);
+    if (bytes.length <= netOriginScratchLen) {
+      new Uint8Array(memory.buffer, netOriginScratch, netOriginScratchLen).set(bytes, 0);
+      exports.glin_web_net_origin(netOriginScratch, bytes.length);
+    }
+  }
+
   // ---- the loop ----
   let reported = false;
   function loop() {
@@ -908,6 +999,7 @@ async function main() {
       syncRoute();
       syncStore();
       syncText();
+      syncNet();
       reportOnce();
     }
     requestAnimationFrame(loop);

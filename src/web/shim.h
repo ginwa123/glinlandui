@@ -114,7 +114,7 @@ uint32_t glin_web_surface_height(void);
  * (a blank canvas still paints every pixel, so "it ran" proves nothing) and a
  * non-zero `frame_hash` (which a flat frame cannot fake). */
 uint32_t glin_web_painted_pixels(void);
-uint64_t glin_web_frame_hash(void);
+uint32_t glin_web_frame_hash(void);
 uint32_t glin_web_frames(void);
 
 /* The hover cursor, as the CSS keyword `canvas.style.cursor` takes.
@@ -347,6 +347,82 @@ uint32_t glin_web_store_dirty(void);
 /* The page confirming it has read the bytes and will persist them. A second call
  * is a no-op, so a page may be generous with it. */
 void glin_web_store_clean(void);
+
+/* ---------------------------------------------------------------------------
+ * The network: the request the app staged
+ *
+ * `src/core/net.zig` owns the request as a value and the reply as a value;
+ * `src/web/net.zig` owns the slot the bytes sit in. This header is only the
+ * page's way in and out of that slot.
+ *
+ * The direction is the same as persistence, and here it is forced again:
+ * `fetch` is asynchronous and page-only, while the module imports NOTHING and
+ * every export is synchronous. So the page owns the transport and the module
+ * owns every decision about the exchange:
+ *
+ *   send      the app stages ONE request, and `glin_web_net_request_len` says
+ *             one is owed. The page reads the bytes, calls
+ *             `glin_web_net_request_clean`, and turns them into a `fetch`.
+ *   settle    the page writes the status and the two headers it read into
+ *             `net_meta_scratch`, the body into `net_body_scratch`, and calls
+ *             `glin_web_net_reply`; the app applies them on the next frame
+ *             (which the reply itself requests).
+ *
+ * The staged request is a byte format, and `src/core/net.zig` writes it:
+ *
+ *   <ticket> <METHOD> <url> LF
+ *   <name>: <value> LF        (zero or more, exactly as the app wrote them)
+ *   LF
+ *   <body bytes>              (empty for a GET)
+ *
+ * The page parses that and nothing else — it makes no decision about the
+ * exchange, which is what keeps a retry, a `304` and a `422` in Zig where they
+ * are tested. The reply's meta block is the same idea in the other direction:
+ * `"<status>\n<etag>\n<version>\n"`, parsed by `core/net.zig`'s `parseMeta`.
+ * A status of 0 means the fetch threw and the app may try again.
+ * ------------------------------------------------------------------------ */
+
+/* A block the page writes the API origin into before `glin_web_net_origin`, so
+ * naming one allocates nothing and cannot grow the heap. The app prepends it to
+ * every path; a zero length leaves the app's own default in place. */
+uint32_t glin_web_net_origin_scratch(void);
+uint32_t glin_web_net_origin_scratch_len(void);
+
+/* The page naming the origin (`?api=`), which every request is resolved
+ * against. Requests a frame, because the first frame is the one that asks for
+ * data. */
+void glin_web_net_origin(uint32_t ptr, uint32_t len);
+
+/* The request the page must send, as an OFFSET into wasm memory, and its length
+ * in bytes. 0 / 0 means nothing is owed. Valid until the next
+ * `glin_web_net_request_clean` or the next frame, so read it in the same tick. */
+uint32_t glin_web_net_request_ptr(void);
+uint32_t glin_web_net_request_len(void);
+
+/* The page confirming it read the request, so the app may stage the next one.
+ * A second call is a no-op. */
+void glin_web_net_request_clean(void);
+
+/* A block the page writes `"<status>\n<etag>\n<version>\n"` into: the status it
+ * got, then the `ETag` and `X-Schema-Version` headers verbatim (empty when the
+ * response carried none). `core/net.zig` parses it. */
+uint32_t glin_web_net_meta_scratch(void);
+uint32_t glin_web_net_meta_scratch_len(void);
+
+/* A block the page writes the response BODY into. Longer than the block is
+ * refused, and `glin_web_net_reply` then settles the answer as truncated: a
+ * half-read JSON body is worse than none. */
+uint32_t glin_web_net_body_scratch(void);
+uint32_t glin_web_net_body_scratch_len(void);
+
+/* The page's answer: the ticket the request carried, and the two lengths it
+ * wrote. Returns the revision it produced, which the page records as answered.
+ * Requests a frame, so the answer is applied and drawn. */
+uint32_t glin_web_net_reply(uint32_t ticket, uint32_t meta_len, uint32_t body_len);
+
+/* Moves on every answer, so the page can tell an unanswered request from one it
+ * has already settled without comparing bytes. */
+uint32_t glin_web_net_revision(void);
 
 /* ---------------------------------------------------------------------------
  * Memory handed IN (the font)
