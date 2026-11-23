@@ -155,6 +155,43 @@ Zooming also changes `devicePixelRatio` **without** necessarily resizing the CSS
 `matchMedia("(resolution: Ndppx)")` and re-arms it on every change: `resize` alone
 misses a zoom on a fixed-size canvas.
 
+## The hover cursor
+
+A native backend answers the OS with a cursor SHAPE — `glin_cocoa_set_cursor`,
+`glin_win_set_cursor`, and `wp_cursor_shape_manager_v1` on Wayland — and macOS and
+Windows have done it since the first component registered one. A browser has no
+such call: the pointer over a `<canvas>` is a stylesheet question, so the same
+shape has to arrive as a CSS `cursor` keyword. It did not, for a long time, and
+the symptom was that every click, toggle and slider worked while the pointer
+stayed an arrow — a page that is interactive read as a picture.
+
+The choice is still made in Zig. What is under the pointer comes from
+`core/frame.zig`'s `hoverCursorShape` — the same function the native backends
+answer their OS with, resolving the same click registry — and
+`src/web/adapter.zig`'s `cursorCss` maps the shape to its keyword (`pointer`,
+`text`, `ew-resize`, `ns-resize`, `default`). `src/web/window.zig` adopts it after
+every frame through `adapter.CursorState`, which moves a version only when the
+shape actually changed, and three exports carry it out:
+
+- `glin_web_cursor_ptr` / `_len` — the keyword, as bytes in wasm memory;
+- `glin_web_cursor_version` — bumped only when that keyword changed.
+
+`web/shim.js`'s `applyCursor()` compares the version, decodes the bytes and
+assigns `canvas.style.cursor`, before either renderer path draws. The page
+decides nothing: a `cursor: pointer` rule written in JS would be a second,
+untested opinion about what is clickable, and it would be wrong the first time a
+component registered an I-beam or a resize arrow instead.
+
+The version gate is what keeps it cheap. A pointer resting on a button is 60
+frames of one integer read, not 60 DOM writes, which is why the check belongs in
+the frame path rather than in a `pointermove` handler.
+
+`web/smoke.mjs` pins the chain without a browser: the module publishes `pointer`
+over the demo's button, publishes it ONCE however many frames are drawn on it,
+and puts `default` back when the pointer leaves. Those assertions were red before
+the exports existed — and stay red if the frame stops adopting the shape, which
+is the mutation that proves the gate can fail.
+
 ## The renderer ladder: WebGPU, else WebGL2, else the CPU
 
 The browser target renders with the best backend the page can create:

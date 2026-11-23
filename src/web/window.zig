@@ -73,6 +73,9 @@ pub const Window = struct {
     last_x: f32 = 0,
     last_y: f32 = 0,
 
+    /// The cursor the page has been told about, so a frame that resolves the same shape costs it nothing.
+    cursor: adapter.CursorState = .{},
+
     /// Frames this backend has drawn.
     frames: u32 = 0,
 
@@ -137,6 +140,8 @@ pub const Window = struct {
         const w = self.state.win_w;
         const h = self.state.win_h;
         d.on_frame(d.ptr, w, h);
+        // The frame resolved the hover cursor from the registries it just declared — the same call macOS and Windows answer their OS with — so adopt it before the page presents, on the GPU path as well as the CPU one.
+        _ = self.cursor.update(frame_mod.currentShape());
         // The dirty flag is consumed here, not in the delegate: a new input event sets it again.
         self.state.needs_draw = false;
         self.frames += 1;
@@ -155,6 +160,16 @@ pub const Window = struct {
             .width = surface.width,
             .height = surface.height,
         };
+    }
+
+    /// The CSS `cursor` keyword the last frame resolved, for the page to assign verbatim.
+    pub fn cursorCss(self: Window) []const u8 {
+        return self.cursor.css;
+    }
+
+    /// Bumped only when that keyword changed, so the page can skip the DOM write on an unchanged frame.
+    pub fn cursorVersion(self: Window) u32 {
+        return self.cursor.version;
     }
 
     /// Measure the current surface lazily, once per frame, on demand.

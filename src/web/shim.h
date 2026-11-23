@@ -20,10 +20,11 @@
  *
  * The page makes NONE. Every translation — `KeyboardEvent.code` to evdev,
  * `MouseEvent.button` to evdev, CSS pixels to backing-store pixels, `deltaMode` to
- * a pixel delta, the resize coalescing — is pure Zig in `src/web/{keymap,input,
- * adapter,present}.zig`, and all of it is in the cross-platform parity suite. A
- * page that reimplements any of it would move untested logic into the one place
- * that cannot be tested, which is exactly the mistake `mac/shim.h` warns about.
+ * a pixel delta, the resize coalescing, and the hover cursor's CSS keyword — is
+ * pure Zig in `src/web/{keymap,input,adapter,present}.zig`, and all of it is in the
+ * cross-platform parity suite. A page that reimplements any of it would move
+ * untested logic into the one place that cannot be tested, which is exactly the
+ * mistake `mac/shim.h` warns about.
  *
  * ## Threading
  *
@@ -115,6 +116,33 @@ uint32_t glin_web_surface_height(void);
 uint32_t glin_web_painted_pixels(void);
 uint64_t glin_web_frame_hash(void);
 uint32_t glin_web_frames(void);
+
+/* The hover cursor, as the CSS keyword `canvas.style.cursor` takes.
+ *
+ * Native backends answer the OS with a cursor SHAPE (`glin_cocoa_set_cursor`,
+ * `glin_win_set_cursor`); a browser has no such call, only a stylesheet, so the
+ * same shape has to arrive as a keyword instead. Which keyword is NOT the page's
+ * decision: `web/adapter.zig`'s `cursorCss` maps it, and the identity of the
+ * target under the pointer comes from `core/frame.zig`'s `hoverCursorShape` —
+ * the same function macOS and Windows call, fed by the same click registry.
+ *
+ *   glin_web_cursor_ptr()      bytes in wasm memory (an OFFSET, never a pointer)
+ *   glin_web_cursor_len()      their length; the bytes are NOT NUL-terminated
+ *   glin_web_cursor_version()  bumps only when the keyword changed
+ *
+ * Assign the decoded bytes to `canvas.style.cursor` verbatim, and only when the
+ * version differs from the one applied last: a hover over one target is 60
+ * frames of the same keyword, and each frame is otherwise a DOM write. Decode on
+ * demand rather than caching the bytes — a frame can grow the heap (see the
+ * memory rule above), and the string lives in the data section.
+ *
+ * These describe the LAST DRAWN frame, so read them after `glin_web_frame`, which
+ * is where the shape is resolved. They answer 0 only before `glin_web_init`, or
+ * on a shut-down window; a page that ignores that and writes the empty string
+ * clears its own `cursor`, which is a visible bug rather than a silent one. */
+uint32_t glin_web_cursor_ptr(void);
+uint32_t glin_web_cursor_len(void);
+uint32_t glin_web_cursor_version(void);
 
 /* ---------------------------------------------------------------------------
  * Input

@@ -1418,7 +1418,11 @@ Honest list; each is a reasonable next task.
   `xsel`) until the Wayland data-device protocol is implemented in the backend
   itself; without one, copy and paste are a no-op there and nowhere else.
 - **`core/frame.zig` owns the cursor-shape mapping**, which is a Wayland
-  `cursor-shape-v1` concern living in the platform-agnostic layer.
+  `cursor-shape-v1` concern living in the platform-agnostic layer. Each backend
+  turns that shape into its own vocabulary: `glin_cocoa_set_cursor` and
+  `glin_win_set_cursor` take the shape directly, and a browser — which has no
+  cursor call, only a stylesheet — receives it as a CSS keyword through
+  `glin_web_cursor_ptr/_len/_version`.
 - **The file dialog's error set is per backend**, so the `switch (err)` that
   `core/file_dialog_contract.zig` documents does not compile. Only the
   portable stub declares `contract.Error`; the three desktop backends return

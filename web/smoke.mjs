@@ -27,7 +27,8 @@
 //      needed after a frame, a frame needed after an event.
 //   5. input reaches the toolkit and CHANGES THE OUTPUT: a synthesised click on
 //      the demo's button must alter the rendered frame, because the demo renders
-//      its own click count.
+//      its own click count — and a pointer over that button publishes the CSS
+//      `cursor` keyword the page assigns, then the arrow again when it leaves.
 //
 // Run with `node web/smoke.mjs` after `zig build web`.
 //
@@ -304,6 +305,51 @@ async function main() {
   // than `> 0`, because "the counter increments once per frame" is the property
   // that makes `glin_web_frames` usable as a diagnostic at all.
   eq(ex.glin_web_frames(), 4, "frames are counted across input-driven draws");
+
+  // ---- 7b. the hover cursor reaches the page as a CSS keyword ----
+  //
+  // A native backend answers the OS with a cursor SHAPE (`glin_cocoa_set_cursor`,
+  // `glin_win_set_cursor`). A browser has no such call, only a stylesheet, so the
+  // same resolved shape has to arrive as a `canvas.style.cursor` keyword — and
+  // this is where the browser was silent for a long time: every click, toggle and
+  // slider worked, and the pointer never became a hand. The choice is NOT the
+  // page's (`web/shim.js` only assigns the bytes decoded here), so what this pins
+  // is the keyword the toolkit publishes.
+  const decoder = new TextDecoder();
+  const cursorKeyword = () => {
+    const ptr = ex.glin_web_cursor_ptr();
+    const len = ex.glin_web_cursor_len();
+    return ptr && len ? decoder.decode(new Uint8Array(ex.memory.buffer, ptr, len)) : "";
+  };
+  check(cursorKeyword().length > 0, "the module publishes a CSS cursor keyword", cursorKeyword());
+  // The pointer was last moved to (240, 300), where the demo has nothing clickable.
+  eq(cursorKeyword(), "default", "a pointer over empty space leaves the arrow in place");
+
+  // Onto the demo's button — the coordinate the click above landed on.
+  ex.glin_web_pointer(0, 0, button_x, button_y);
+  ex.glin_web_frame();
+  eq(cursorKeyword(), "pointer", "hovering the button publishes the hand");
+
+  // The change-only gate. Without it, a hover would be one DOM write per frame —
+  // 60 a second for a pointer that has not moved off the button.
+  const hoverVersion = ex.glin_web_cursor_version();
+  ex.glin_web_pointer(0, 0, button_x + 2, button_y + 2);
+  ex.glin_web_frame();
+  eq(cursorKeyword(), "pointer", "moving around ON the button keeps the hand");
+  eq(
+    ex.glin_web_cursor_version(),
+    hoverVersion,
+    "a hover that resolves the same shape does not re-publish the keyword",
+  );
+
+  // And away again: an arrow that never comes back reads as a stuck cursor.
+  ex.glin_web_pointer(0, 0, 460, 340);
+  ex.glin_web_frame();
+  eq(cursorKeyword(), "default", "leaving the button puts the arrow back");
+  check(
+    ex.glin_web_cursor_version() !== hoverVersion,
+    "leaving the button bumped the version, so the page is told",
+  );
 
   // Keyboard: a mapped code is recognised, an unknown one is silence.
   const scratch = ex.glin_web_key_scratch();
