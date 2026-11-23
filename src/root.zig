@@ -31,6 +31,9 @@ pub const testing = @import("core/testing/root.zig");
 // Per-frame semantics model: the queryable node tree behind `testing.Driver.onNode*`, and the intended home for accessibility and the debug inspector.
 pub const semantics = @import("core/semantics.zig");
 
+// The frame's findable text, mirrored by a backend whose page has no DOM text of its own.
+pub const text_index = @import("core/text_index.zig");
+
 // The devtool: the component tree as a printable value, the in-app inspector that draws it, the headless CLI, and the service a running app hosts.
 pub const devtools = @import("core/devtools/root.zig");
 
@@ -124,6 +127,7 @@ test {
     _ = @import("core/testing/root.zig");
     // The semantics model and the E2E test surface built on it.
     _ = @import("core/semantics.zig");
+    _ = @import("core/text_index.zig");
     // The devtool's tree snapshot, its in-app inspector, its headless CLI and the two calls that wire them into an app.
     _ = @import("core/devtools/snapshot.zig");
     _ = @import("core/devtools/inspector.zig");
