@@ -1,6 +1,7 @@
 //! Browser event adapter: the pure translation layer between DOM event properties and the toolkit's Delegate contract.
 const std = @import("std");
 const contract = @import("../core/window_contract.zig");
+const frame_mod = @import("../core/frame.zig");
 
 // ============================== coordinates ==============================
 
@@ -76,6 +77,36 @@ pub fn scrollDelta(raw_dx: f32, raw_dy: f32, mode: WheelDeltaMode, viewport_h: u
 pub fn wheelIsNoop(dx: f32, dy: f32) bool {
     return dx == 0 and dy == 0;
 }
+
+// ============================== cursor ==============================
+
+/// The CSS `cursor` keyword for a cursor shape the frame resolved (the `cursor-shape-v1` codes in `core/frame.zig`), so the page assigns a keyword and never picks one.
+pub fn cursorCss(shape: u32) []const u8 {
+    return switch (shape) {
+        frame_mod.shape_pointer => "pointer",
+        frame_mod.shape_text => "text",
+        frame_mod.shape_ew_resize => "ew-resize",
+        frame_mod.shape_ns_resize => "ns-resize",
+        else => "default",
+    };
+}
+
+/// What the page has been told about the cursor: the shape that keyword came from, the keyword, and a version that moves only when the shape did.
+pub const CursorState = struct {
+    /// `shape_sentinel`, not `shape_default`: the first frame must reach the page even when it resolves the arrow, or the canvas keeps whatever `cursor` the page's own stylesheet gave it.
+    last: u32 = frame_mod.shape_sentinel,
+    version: u32 = 0,
+    css: []const u8 = cursorCss(frame_mod.shape_default),
+
+    /// Adopt the shape the frame resolved. True when the page has to be told, which is what makes a frame over the same target cost one integer read.
+    pub fn update(self: *CursorState, shape: u32) bool {
+        if (!frame_mod.shouldApplyShape(self.last, shape)) return false;
+        self.last = shape;
+        self.css = cursorCss(shape);
+        self.version +%= 1;
+        return true;
+    }
+};
 
 // ============================== resizing ==============================
 
@@ -214,6 +245,55 @@ test "a zero-delta wheel event is recognised as a no-op" {
     try std.testing.expect(wheelIsNoop(0, 0));
     try std.testing.expect(!wheelIsNoop(0, 1));
     try std.testing.expect(!wheelIsNoop(-1, 0));
+}
+
+test "every cursor shape becomes a CSS keyword, and the hand is pointer" {
+    // The keyword is the browser's whole vocabulary for this: 4 earns the hand, 1 the arrow, 26/27 the resize arrows, 9 the I-beam.
+    try std.testing.expectEqualStrings("pointer", cursorCss(frame_mod.shape_pointer));
+    try std.testing.expectEqualStrings("default", cursorCss(frame_mod.shape_default));
+    try std.testing.expectEqualStrings("text", cursorCss(frame_mod.shape_text));
+    try std.testing.expectEqualStrings("ew-resize", cursorCss(frame_mod.shape_ew_resize));
+    try std.testing.expectEqualStrings("ns-resize", cursorCss(frame_mod.shape_ns_resize));
+    // No two shapes may share a keyword, or moving between them leaves the pointer unchanged and the hand never appears.
+    const shapes = [_]u32{ frame_mod.shape_default, frame_mod.shape_pointer, frame_mod.shape_text, frame_mod.shape_ew_resize, frame_mod.shape_ns_resize };
+    for (shapes, 0..) |a, i| {
+        for (shapes[i + 1 ..]) |b| {
+            try std.testing.expect(!std.mem.eql(u8, cursorCss(a), cursorCss(b)));
+        }
+    }
+}
+
+test "an unrecognised cursor shape publishes the arrow rather than a stale keyword" {
+    // The DOM has no "unknown": anything the toolkit cannot name has to read as the ordinary pointer, or the hand sticks.
+    try std.testing.expectEqualStrings("default", cursorCss(frame_mod.shape_sentinel));
+    try std.testing.expectEqualStrings("default", cursorCss(2));
+    try std.testing.expectEqualStrings("default", cursorCss(999));
+}
+
+test "the first frame tells the page the cursor even when the pointer is over nothing" {
+    // `last` starts at the sentinel, so a canvas whose stylesheet said `cursor: grab` is corrected on frame one.
+    var c = CursorState{};
+    try std.testing.expect(c.update(frame_mod.shape_default));
+    try std.testing.expectEqual(@as(u32, 1), c.version);
+    try std.testing.expectEqualStrings("default", c.css);
+}
+
+test "a hover that comes and goes publishes the hand once per change" {
+    // The gate the page's cheapness rests on: 60 frames of hovering must not be 60 string decodes.
+    var c = CursorState{};
+    _ = c.update(frame_mod.shape_default);
+    const before = c.version;
+
+    try std.testing.expect(c.update(frame_mod.shape_pointer));
+    try std.testing.expectEqualStrings("pointer", c.css);
+
+    try std.testing.expect(!c.update(frame_mod.shape_pointer));
+    try std.testing.expect(!c.update(frame_mod.shape_pointer));
+    try std.testing.expectEqual(before + 1, c.version);
+
+    try std.testing.expect(c.update(frame_mod.shape_default));
+    try std.testing.expectEqualStrings("default", c.css);
+    try std.testing.expectEqual(before + 2, c.version);
 }
 
 test "applyPendingResize does nothing when nothing is pending" {

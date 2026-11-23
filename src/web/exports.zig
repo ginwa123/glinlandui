@@ -185,6 +185,24 @@ pub fn ExportsWithAssets(
             return w.frames;
         }
 
+        /// The CSS `cursor` keyword the last frame resolved, as an OFFSET into wasm memory — the page decodes those bytes and assigns them to `canvas.style.cursor` verbatim, which is what keeps the choice in Zig.
+        export fn glin_web_cursor_ptr() u32 {
+            const w = window() orelse return 0;
+            return offsetOf(w.cursorCss());
+        }
+
+        /// Its length in bytes, so the page never assumes a terminating NUL.
+        export fn glin_web_cursor_len() u32 {
+            const w = window() orelse return 0;
+            return @intCast(w.cursorCss().len);
+        }
+
+        /// Moves only when that keyword changed, so a hover over one target costs the page one integer read per frame instead of a DOM write.
+        export fn glin_web_cursor_version() u32 {
+            const w = window() orelse return 0;
+            return w.cursorVersion();
+        }
+
         // GPU
 
         /// The page tells the toolkit which backend it created: 0 = none (the CPU rasterizer), 1 = WebGPU, 2 = WebGL2.

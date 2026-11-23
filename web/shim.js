@@ -380,7 +380,37 @@ async function main() {
     };
   }
 
+  // ---- the cursor ----
+  //
+  // The toolkit resolves the hover cursor itself (`core/frame.zig`'s
+  // `hoverCursorShape`, fed by the click registry — the same function macOS and
+  // Windows answer their OS with), so this half makes NO choice: it decodes the
+  // CSS keyword the module published and assigns it. Writing `cursor: pointer`
+  // from a guess here would be a second, untested opinion about what is
+  // clickable, and it would be wrong the moment a component registers a resize
+  // or I-beam cursor instead.
+  //
+  // The version is what makes it cheap. It moves only when the keyword changed,
+  // so hovering one button is 60 frames of one integer read and exactly one DOM
+  // write. The bytes are decoded per change and never cached: a frame can grow
+  // the heap, and `memory.grow()` detaches every view over it — the rule at the
+  // top of this file.
+  let cursorVersion = -1;
+  const cursorDecoder = new TextDecoder();
+
+  function applyCursor() {
+    const version = exports.glin_web_cursor_version() >>> 0;
+    if (version === cursorVersion) return;
+    cursorVersion = version;
+    const ptr = exports.glin_web_cursor_ptr();
+    const len = exports.glin_web_cursor_len();
+    canvas.style.cursor =
+      ptr && len ? cursorDecoder.decode(new Uint8Array(memory.buffer, ptr, len)) : "default";
+  }
+
   function present() {
+    // Before either path draws: the GPU's early return must not skip the hand over a button.
+    applyCursor();
     if (backend) {
       try {
         if (backend.draw(gpuFrame())) return;
