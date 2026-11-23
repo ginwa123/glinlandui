@@ -4,6 +4,7 @@ const glinlandui = @import("glinlandui");
 
 const view = @import("view.zig");
 const view_model = @import("view_model.zig");
+const state_mod = @import("state.zig");
 
 pub const App = struct {
     // `ViewModelStoreOwner`: one screen, one store, one ViewModel for the life of the window.
@@ -40,6 +41,8 @@ pub const App = struct {
         glinlandui.theme.setCurrent(theme_now);
         // The toolkit forgets focus when a host starts, so the screen claims the keyboard on the frame that draws it.
         model.claimFocus();
+        // The address is the page's: a deep link, a nav click and the browser's back button all arrive here.
+        model.syncRoute();
         var scope = view.Scope{
             .theme = theme_now,
             .vm = model,
@@ -58,6 +61,14 @@ pub const App = struct {
 
 const testing = std.testing;
 const Driver = glinlandui.testing.Driver;
+
+// Where a section sits in the page, by its element id: the docs shell makes the order the data's, not the test's.
+fn sectionIndex(id: []const u8) usize {
+    for (state_mod.sections, 0..) |s, i| {
+        if (std.mem.eql(u8, s.id, id)) return i;
+    }
+    return 0;
+}
 
 fn boot(app: *App) !Driver {
     app.start();
@@ -84,6 +95,9 @@ test "every section is declared and drawn" {
     }
     try testing.expect(driver.hasText("glinlandui · catalog"));
     try testing.expect(driver.hasText("Colour roles"));
+    // The nav is the page's table of contents: a click lands the reader on the section, which is where its text is drawn.
+    app.vm().gotoSection(sectionIndex("catalog.buttons.section"));
+    driver.frame();
     try testing.expect(driver.hasText("one primary per view, everything else quiet"));
 }
 
@@ -93,6 +107,9 @@ test "a click reaches the widget and the frame shows the result" {
     defer driver.deinit();
 
     try testing.expect(app.vm().uiState().checked);
+    // The selection section is past the fold, so the reader is taken to it before the click.
+    app.vm().gotoSection(sectionIndex("catalog.selection.section"));
+    driver.frame();
     try driver.click("catalog.check");
     try testing.expect(!app.vm().uiState().checked);
     try testing.expect(driver.hasText("last intent: unchecked"));
@@ -159,6 +176,29 @@ test "a section's own scroll box fits inside the card that holds it" {
     // The card is as tall as its contents: the box it holds may not reach past the card's own edge.
     try testing.expect(box.y + box.height <= card.y + card.height);
     try testing.expectApproxEqAbs(@as(f32, 130), box.height, 0.51);
+}
+
+test "an address, not a click, is what moves the page — and Back walks it" {
+    var app = App{};
+    var driver = try boot(&app);
+    defer driver.deinit();
+
+    // A deep link: the backend adopting an address is enough to move the page, with no click anywhere.
+    const route = glinlandui.route;
+    route.adopt("buttons");
+    driver.frame();
+    try testing.expect(driver.hasText("one primary per view, everything else quiet"));
+
+    // The nav is an intent, so the same call a click makes works from anywhere — a keyboard shortcut, a menu.
+    route.navigate("tree");
+    driver.frame();
+    try testing.expect(driver.hasText("26px rows, a 17px indent, selection is a fill and a bar"));
+
+    // And Back walks the router's OWN history, which is what a desktop window has instead of a URL.
+    try testing.expect(route.back());
+    driver.frame();
+    try testing.expect(driver.hasText("one primary per view, everything else quiet"));
+    try testing.expect(route.forward());
 }
 
 test "the palette is the kit's, role by role" {

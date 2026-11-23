@@ -122,32 +122,295 @@ pub const CatalogUiState = struct {
 // Which demo a section draws. A tag, not a function pointer: the data stays a value and the view owns the drawing.
 pub const Body = enum { buttons, text_field, selection, roles, type_scale, spacing, badges, tabs, list, tree, dropdown, scroll, split, sidebar_panel, modal, images };
 
-// One card on the page: its element id, its heading, and the note that says what to look at.
+// The nav's sections, in the order the docs page draws them: a group is a heading in the contents.
+pub const Group = enum {
+    foundations,
+    inputs,
+    data,
+    layout,
+    overlays,
+
+    // The nav's heading for this group, as the page spells it.
+    pub fn title(self: Group) []const u8 {
+        return switch (self) {
+            .foundations => "Foundations",
+            .inputs => "Inputs",
+            .data => "Data display",
+            .layout => "Layout",
+            .overlays => "Overlays",
+        };
+    }
+
+    // The same heading as the sidebar draws it: the small caps a docs nav uses for its categories.
+    pub fn label(self: Group) []const u8 {
+        return switch (self) {
+            .foundations => "FOUNDATIONS",
+            .inputs => "INPUTS",
+            .data => "DATA DISPLAY",
+            .layout => "LAYOUT",
+            .overlays => "OVERLAYS",
+        };
+    }
+};
+
+// One section of the page: its element id, its address, its heading, the lead line, the demo, and the call that produces it.
 pub const Section = struct {
     id: []const u8,
+    // The route segment this section answers to: `#text-field` addresses the text-field section.
+    slug: []const u8,
     title: []const u8,
+    group: Group,
     note: []const u8,
+    snippet: []const u8,
     body: Body,
 };
 
 // The page, in the order it draws: the executable form of the UI kit document.
 pub const sections = [_]Section{
-    .{ .id = "catalog.buttons.section", .title = "Buttons", .note = "one primary per view, everything else quiet", .body = .buttons },
-    .{ .id = "catalog.field.section", .title = "Text field", .note = "value in, on_change out; Cmd/Ctrl+Z takes an edit back, and a right click offers Undo and Redo", .body = .text_field },
-    .{ .id = "catalog.selection.section", .title = "Selection controls", .note = "a checked box is primary, and never colour alone", .body = .selection },
-    .{ .id = "catalog.roles.section", .title = "Colour roles", .note = "theme.dragon.colors — eleven roles, no hex", .body = .roles },
-    .{ .id = "catalog.type.section", .title = "Type scale", .note = "title 18 / body 14 / label 13 / caption 12", .body = .type_scale },
-    .{ .id = "catalog.badges.section", .title = "Badges & icons", .note = "state is a word first, a tint second", .body = .badges },
-    .{ .id = "catalog.tabs.section", .title = "Tabs", .note = "34px, a 2px underline on the active one", .body = .tabs },
-    .{ .id = "catalog.list.section", .title = "List", .note = "rows with ids, hover and a click each", .body = .list },
-    .{ .id = "catalog.tree.section", .title = "Tree", .note = "26px rows, a 17px indent, selection is a fill and a bar", .body = .tree },
-    .{ .id = "catalog.dropdown.section", .title = "Dropdown", .note = "a field and its rows, owned by the caller", .body = .dropdown },
-    .{ .id = "catalog.spacing.section", .title = "Theme metrics", .note = "padding, gaps and corners: a prop left unset takes the theme's", .body = .spacing },
-    .{ .id = "catalog.scroll.section", .title = "Scroll", .note = "a clip, a thumb, and a wheel that reaches the deepest box that can move", .body = .scroll },
-    .{ .id = "catalog.split.section", .title = "Split", .note = "two panes and a line the pointer drags; the app owns the size", .body = .split },
-    .{ .id = "catalog.sidebar.section", .title = "Sidebar", .note = "a panel whose width the pointer owns, collapsible past its floor", .body = .sidebar_panel },
-    .{ .id = "catalog.modal.section", .title = "Modal", .note = "a scrim over the window and a card that centres itself", .body = .modal },
-    .{ .id = "catalog.images.section", .title = "Images", .note = "cover, contain and stretch — decoded once, drawn on the GPU", .body = .images },
+    .{
+        .id = "catalog.roles.section",
+        .title = "Colour roles",
+        .slug = "colour-roles",
+        .group = .foundations,
+        .note = "theme.dragon.colors — eleven roles, no hex",
+        .snippet =
+        \\const c = glinlandui.theme.dragon.colors;
+        \\
+        \\text_mod.label(.{ .label = .{
+        \\    .text = "Schema · main.db",
+        \\    .size = t.type_scale.title,
+        \\    .color = c.text,
+        \\} });
+        ,
+        .body = .roles,
+    },
+    .{
+        .id = "catalog.type.section",
+        .title = "Type scale",
+        .slug = "type-scale",
+        .group = .foundations,
+        .note = "title 18 / body 14 / label 13 / caption 12",
+        .snippet =
+        \\text_mod.label(.{ .label = .{
+        \\    .text = "Table name, column type, row count",
+        \\    .size = t.type_scale.label,
+        \\    .color = c.text_dim,
+        \\} });
+        ,
+        .body = .type_scale,
+    },
+    .{
+        .id = "catalog.spacing.section",
+        .title = "Theme metrics",
+        .slug = "theme-metrics",
+        .group = .foundations,
+        .note = "padding, gaps and corners: a prop left unset takes the theme's",
+        .snippet =
+        \\// an unset padding is the theme's, so one switch retunes every control
+        \\button.button(.{
+        \\    .id = .{ .text = "save" },
+        \\    .label = .{ .text = "Save" },
+        \\    .on_click = .{ .f = onSave, .ctx = vm },
+        \\});
+        ,
+        .body = .spacing,
+    },
+    .{
+        .id = "catalog.buttons.section",
+        .title = "Buttons",
+        .slug = "buttons",
+        .group = .inputs,
+        .note = "one primary per view, everything else quiet",
+        .snippet =
+        \\button.button(.{
+        \\    .id = .{ .text = "run" },
+        \\    .label = .{ .text = "Run query", .color = c.on_primary },
+        \\    .bg = c.primary,
+        \\    .hover_bg = c.primary_hover,
+        \\    .on_click = .{ .f = onRun, .ctx = vm },
+        \\});
+        ,
+        .body = .buttons,
+    },
+    .{
+        .id = "catalog.field.section",
+        .title = "Text field",
+        .slug = "text-field",
+        .group = .inputs,
+        .note = "value in, on_change out; Cmd/Ctrl+Z takes an edit back, and a right click offers Undo and Redo",
+        .snippet =
+        \\field.value = state.draftText();
+        \\input_mod.textField(&vm.field);
+        ,
+        .body = .text_field,
+    },
+    .{
+        .id = "catalog.selection.section",
+        .title = "Selection controls",
+        .slug = "selection-controls",
+        .group = .inputs,
+        .note = "a checked box is primary, and never colour alone",
+        .snippet =
+        \\checkbox_mod.checkbox(.{
+        \\    .id = .{ .text = "include" },
+        \\    .checked = state.checked,
+        \\    .on_click = .{ .f = onCheck, .ctx = vm },
+        \\});
+        ,
+        .body = .selection,
+    },
+    .{
+        .id = "catalog.dropdown.section",
+        .title = "Dropdown",
+        .slug = "dropdown",
+        .group = .inputs,
+        .note = "a field and its rows, owned by the caller",
+        .snippet =
+        \\dropdown_mod.dropdown(.{
+        \\    .field_id = "catalog.dd.field",
+        \\    .list_id = "catalog.dd.list",
+        \\    .field = &vm.dd_field,
+        \\    .on_select = .{ .f = onOption, .ctx = vm },
+        \\}, shown[0..n], scope, optionRow);
+        ,
+        .body = .dropdown,
+    },
+    .{
+        .id = "catalog.badges.section",
+        .title = "Badges & icons",
+        .slug = "badges",
+        .group = .data,
+        .note = "state is a word first, a tint second",
+        .snippet =
+        \\badge_mod.badge(.{
+        \\    .id = .{ .text = "state" },
+        \\    .label = .{ .text = "connected", .color = c.primary },
+        \\    .bg = c.surface_variant,
+        \\});
+        ,
+        .body = .badges,
+    },
+    .{
+        .id = "catalog.tabs.section",
+        .title = "Tabs",
+        .slug = "tabs",
+        .group = .data,
+        .note = "34px, a 2px underline on the active one",
+        .snippet =
+        \\tabs_mod.tabs(.{
+        \\    .id = .{ .text = "tabs" },
+        \\    .tabs = demo_tabs[0..],
+        \\    .on_select = .{ .f = onTab, .ctx = vm },
+        \\});
+        ,
+        .body = .tabs,
+    },
+    .{
+        .id = "catalog.list.section",
+        .title = "List",
+        .slug = "list",
+        .group = .data,
+        .note = "rows with ids, hover and a click each",
+        .snippet =
+        \\list_mod.list(.{
+        \\    .id = .{ .text = "tables" },
+        \\    .selected = state.row,
+        \\    .on_select = .{ .f = onRow, .ctx = vm },
+        \\}, table_row_slice, scope, listRow);
+        ,
+        .body = .list,
+    },
+    .{
+        .id = "catalog.tree.section",
+        .title = "Tree",
+        .slug = "tree",
+        .group = .data,
+        .note = "26px rows, a 17px indent, selection is a fill and a bar",
+        .snippet =
+        \\tree_mod.tree(.{
+        \\    .id = .{ .text = "tree" },
+        \\    .rows = rows[0..],
+        \\    .on_select = .{ .f = onTree, .ctx = vm },
+        \\});
+        ,
+        .body = .tree,
+    },
+    .{
+        .id = "catalog.images.section",
+        .title = "Images",
+        .slug = "images",
+        .group = .data,
+        .note = "cover, contain and stretch — decoded once, drawn on the GPU",
+        .snippet =
+        \\image_mod.image(.{
+        \\    .id = .{ .text = "cover" },
+        \\    .path = "assets/gradient.png",
+        \\    .w = props.Size.px(220),
+        \\    .h = props.Size.px(130),
+        \\    .fit = .cover,
+        \\});
+        ,
+        .body = .images,
+    },
+    .{
+        .id = "catalog.scroll.section",
+        .title = "Scroll",
+        .slug = "scroll",
+        .group = .layout,
+        .note = "a clip, a thumb, and a wheel that reaches the deepest box that can move",
+        .snippet =
+        \\scroll_mod.scroll(.{
+        \\    .id = .{ .text = "rows" },
+        \\    .direction = .vertical,
+        \\    .h = .{ .fixed = 130 },
+        \\}, scope, scrollRows);
+        ,
+        .body = .scroll,
+    },
+    .{
+        .id = "catalog.split.section",
+        .title = "Split",
+        .slug = "split",
+        .group = .layout,
+        .note = "two panes and a line the pointer drags; the app owns the size",
+        .snippet =
+        \\split_mod.grip(vm.splitProps(t));
+        \\
+        \\box_mod.box(.{
+        \\    .id = .{ .text = "pane" },
+        \\    .h = .{ .fixed = split_mod.size(vm.splitProps(t)) },
+        \\}, scope, paneChildren);
+        ,
+        .body = .split,
+    },
+    .{
+        .id = "catalog.sidebar.section",
+        .title = "Sidebar",
+        .slug = "sidebar",
+        .group = .layout,
+        .note = "a panel whose width the pointer owns, collapsible past its floor",
+        .snippet =
+        \\sidebar_mod.sidebar(vm.sidebarProps(t), scope, panelChildren);
+        ,
+        .body = .sidebar_panel,
+    },
+    .{
+        .id = "catalog.modal.section",
+        .title = "Modal",
+        .slug = "modal",
+        .group = .overlays,
+        .note = "a scrim over the window and a card that centres itself",
+        .snippet =
+        \\modal_mod.modal(.{
+        \\    .id = .{ .text = "confirm" },
+        \\    .title = "Unsaved changes",
+        \\    .message = "This query has edits that were never saved.",
+        \\    .actions = &answers,
+        \\    .on_action = .{ .f = onAnswer, .ctx = vm },
+        \\});
+        ,
+        .body = .modal,
+    },
 };
 
 // One colour role as a value the view can paint.

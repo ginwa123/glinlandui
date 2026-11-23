@@ -452,6 +452,7 @@ async function main() {
     const t0 = performance.now();
     exports.glin_web_frame();
     present();
+    syncRoute();
     const t1 = performance.now();
     // Latency instrumentation, off unless the page asks for it. `?perf` in the
     // URL turns it on, so a developer can see the real cost of a click without
@@ -602,12 +603,77 @@ async function main() {
     }
   }
 
+  // ---- routing ----
+  //
+  // The app's own address is `location.hash`; the page owns `?app=` (which module
+  // to load) and the app owns the fragment (which screen). The toolkit keeps the
+  // route, so this block makes no decisions: it copies the router's address into
+  // the URL, and the URL's address back into the router. That is the whole of the
+  // browser's half — the same navigation code runs on the desktop, where there is
+  // no URL to mirror and `route.back()` is the history instead.
+  //
+  // `?app=catalog#buttons` is therefore a deep link, the browser's Back button
+  // walks the app's own history, and an app that never navigates never touches
+  // `history` at all.
+  const routeScratch = exports.glin_web_route_scratch();
+  const routeScratchLen = exports.glin_web_route_scratch_len();
+  const routeDecoder = new TextDecoder();
+  // The generation whose address the URL already shows: an address the page just
+  // adopted is not pushed straight back into the history, which is what keeps Back
+  // from skipping two entries at a time.
+  let mirroredRoute = -1;
+
+  /** Take the URL's address into the router (`popstate`, `hashchange`, deep link). */
+  function adoptLocation() {
+    const path = location.hash.replace(/^#/, "");
+    const bytes = encoder.encode(path);
+    if (bytes.length === 0) {
+      mirroredRoute = exports.glin_web_location(0, 0);
+      return;
+    }
+    if (routeScratch === 0 || routeScratchLen === 0 || bytes.length > routeScratchLen) {
+      mirroredRoute = exports.glin_web_location(0, 0);
+      return;
+    }
+    // The wasm-owned scratch block, exactly as a keystroke uses the key scratch:
+    // no allocation, so no heap growth and no detached view.
+    new Uint8Array(memory.buffer, routeScratch, routeScratchLen).set(bytes, 0);
+    mirroredRoute = exports.glin_web_location(routeScratch, bytes.length);
+  }
+
+  /** Write the router's address into the URL, once per generation it has not seen. */
+  function syncRoute() {
+    const generation = exports.glin_web_route_generation();
+    if (generation === mirroredRoute) return;
+    mirroredRoute = generation;
+    const len = exports.glin_web_route_len();
+    const ptr = exports.glin_web_route_ptr();
+    const path = len === 0 ? "" : routeDecoder.decode(new Uint8Array(memory.buffer, ptr, len));
+    // A hash-only URL keeps `?app=`, so switching app and going back both keep working.
+    const url = path === "" ? `${location.pathname}${location.search}` : `#${path}`;
+    history.pushState({ route: path }, "", url);
+  }
+
+  addEventListener("popstate", () => {
+    adoptLocation();
+    drawNow();
+  });
+  addEventListener("hashchange", () => {
+    adoptLocation();
+    drawNow();
+  });
+
+  // The boot deep link, before the first frame: an app that declares from the
+  // route must see the address the URL carried.
+  adoptLocation();
+
   // ---- the loop ----
   let reported = false;
   function loop() {
     if (exports.glin_web_needs_frame() === 1) {
       exports.glin_web_frame();
       present();
+      syncRoute();
       reportOnce();
     }
     requestAnimationFrame(loop);

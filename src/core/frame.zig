@@ -891,6 +891,78 @@ fn scaleRadius(r: *cl.CornerRadius, z: f32) void {
     r.bottom_right *= z;
 }
 
+// The wheel moves the deepest scroll container under the pointer, and once that one is at its end the same gesture keeps moving the page behind it.
+fn applyWheel(dx: f32, dy: f32) void {
+    var ids: [8]cl.ElementId = undefined;
+    var before: [8]cl.Vector2 = undefined;
+    var n: usize = 0;
+    if (dx != 0 or dy != 0) {
+        for (cl.getPointerOverIds()) |id| {
+            if (n >= ids.len) break;
+            const data = cl.getScrollContainerData(id);
+            if (!data.found) continue;
+            ids[n] = id;
+            before[n] = data.scroll_position.*;
+            n += 1;
+        }
+    }
+    // Clay's built-in drag stays OFF (touch-style, inverted for a slider), and its wheel delta is divided by its own 10x factor: 1 point of gesture, 1 point of content.
+    cl.updateScrollContainers(false, .{ .x = -dx / wheel_factor, .y = -dy / wheel_factor }, 1.0 / 60.0);
+    if (n == 0) return;
+    // A container that moved is this gesture's answer, and nothing chains off it.
+    for (ids[0..n], 0..) |id, i| {
+        const data = cl.getScrollContainerData(id);
+        if (!data.found) continue;
+        if (data.scroll_position.x != before[i].x or data.scroll_position.y != before[i].y) return;
+    }
+    // Nothing moved: the container the gesture reached is at its end, so the outermost one under the pointer takes the rest.
+    var page: ?cl.ScrollContainerData = null;
+    var page_area: f32 = 0;
+    for (ids[0..n]) |id| {
+        const data = cl.getScrollContainerData(id);
+        if (!data.found or !wheelRoom(data, dx, dy)) continue;
+        const area = data.scroll_container_dimensions.w * data.scroll_container_dimensions.h;
+        if (area <= page_area) continue;
+        page_area = area;
+        page = data;
+    }
+    if (page) |data| wheelNudge(data, dx, dy);
+}
+
+// Whether a container still has room in the direction the gesture is going.
+fn wheelRoom(data: cl.ScrollContainerData, dx: f32, dy: f32) bool {
+    const max_x = @max(0, data.content_dimensions.w - data.scroll_container_dimensions.w);
+    const max_y = @max(0, data.content_dimensions.h - data.scroll_container_dimensions.h);
+    if (dy > 0 and data.scroll_position.y > -max_y) return true;
+    if (dy < 0 and data.scroll_position.y < 0) return true;
+    if (dx > 0 and data.scroll_position.x > -max_x) return true;
+    if (dx < 0 and data.scroll_position.x < 0) return true;
+    return false;
+}
+
+// The one point of gesture, applied to a container Clay did not pick: positive dy is content up, as the backends report it.
+fn wheelNudge(data: cl.ScrollContainerData, dx: f32, dy: f32) void {
+    const max_x = @max(0, data.content_dimensions.w - data.scroll_container_dimensions.w);
+    const max_y = @max(0, data.content_dimensions.h - data.scroll_container_dimensions.h);
+    data.scroll_position.x = std.math.clamp(data.scroll_position.x - dx, -max_x, 0);
+    data.scroll_position.y = std.math.clamp(data.scroll_position.y - dy, -max_y, 0);
+}
+
+// A frame a screen asked for outside an input event — a route change, a timer, a finished job.
+var repaint_requested: bool = false;
+
+/// Ask the backend for one more frame: a screen that changed with no event to carry it must not wait for the next click.
+pub fn requestFrame() void {
+    repaint_requested = true;
+}
+
+/// One-shot, drained by a backend loop before it decides to idle.
+pub fn takeRepaintRequest() bool {
+    const pending = repaint_requested;
+    repaint_requested = false;
+    return pending;
+}
+
 // Frame variant with injectable measurement and a synchronous command probe.
 pub fn clayFrameWithOptions(
     alloc: std.mem.Allocator,
@@ -911,8 +983,7 @@ pub fn clayFrameWithOptions(
     // The delta stays readable for the whole declare: a component that scrolls on its own axis cannot get it from Clay.
     scroll_dx = wheel_dx;
     scroll_dy = wheel_dy;
-    // Clay's built-in drag stays OFF (touch-style, inverted for a slider), and its wheel delta is divided by its own 10x factor: 1 point of gesture, 1 point of content.
-    cl.updateScrollContainers(false, .{ .x = -wheel_dx / wheel_factor, .y = -wheel_dy / wheel_factor }, 1.0 / 60.0);
+    applyWheel(wheel_dx, wheel_dy);
     // A zoomed window shows fewer content points: the layout is computed for the smaller box the app declares in.
     const lw = contentWidth(w);
     const lh = contentHeight(h);
@@ -1022,6 +1093,19 @@ test "a zoomed window holds fewer content points, and the ladder clamps" {
     try std.testing.expectEqual(@as(f32, 3.0), zoom());
     setZoom(0);
     try std.testing.expectEqual(@as(f32, 1.0), zoom());
+}
+
+test "a repaint request is answered once, so a loop that idles stays idle" {
+    _ = takeRepaintRequest();
+    try std.testing.expect(!takeRepaintRequest());
+    requestFrame();
+    try std.testing.expect(takeRepaintRequest());
+    try std.testing.expect(!takeRepaintRequest());
+    // Two changes before the loop wakes are still one frame: the second request is the same request.
+    requestFrame();
+    requestFrame();
+    try std.testing.expect(takeRepaintRequest());
+    try std.testing.expect(!takeRepaintRequest());
 }
 
 test "the viewport a frame reports is the box it was last given, and zero before any frame" {

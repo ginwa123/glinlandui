@@ -1,4 +1,5 @@
-// The View: declaration only — the page, its sections, the rows and the widget demos read the state and raise intents.
+// The View: declaration only — the docs shell (nav, page, contents), the sections, and the widget demos.
+const std = @import("std");
 const glinlandui = @import("glinlandui");
 const props = glinlandui.props;
 const components = glinlandui.components;
@@ -33,6 +34,17 @@ const Theme = glinlandui.theme.Theme;
 // No metrics here on purpose: every widget below is drawn with its own defaults, which are the kit's.
 const r_card: u16 = 8;
 
+// The shell's own numbers, in points: a nav wide enough for a component name, and a page column narrow enough to read.
+const nav_w: f32 = 236;
+const toc_w: f32 = 196;
+const page_max: f32 = 760;
+const nav_from: f32 = 720;
+const toc_from: f32 = 1120;
+
+// Two heading sizes the four-step scale does not cover: a docs page ranks its title above a section's.
+const h1_size: f32 = 26;
+const h2_size: f32 = 20;
+
 // What a composable reads: the theme, the model, and this frame's snapshot of its state. The fields and the click contexts are the model's.
 pub const Scope = struct {
     theme: Theme,
@@ -41,64 +53,196 @@ pub const Scope = struct {
     state: CatalogUiState,
 };
 
-// `@Composable fun CatalogScreen(vm: CatalogViewModel = viewModel())`: one scroll container over a column of sections.
+// `@Composable fun CatalogScreen(vm: CatalogViewModel = viewModel())`: the docs shell, and nothing above it.
 pub fn CatalogScreen(scope: *Scope) void {
     box_mod.box(.{
         .id = .{ .text = "catalog.root" },
         .w = .grow,
         .h = .grow,
-        .direction = .column,
+        .direction = .row,
         .bg = scope.theme.colors.background,
-    }, scope, rootChildren);
+    }, scope, shell);
 }
 
-fn rootChildren(scope: *Scope) void {
+// A one-pixel rule: the shell's dividers are boxes, because a border here draws on all four sides.
+fn rule(scope: *Scope, id: []const u8) void {
+    box_mod.box(.{
+        .id = .{ .text = id },
+        .w = .{ .fixed = 1 },
+        .h = .grow,
+        .bg = scope.theme.colors.divider,
+    }, {}, noChildren);
+}
+
+fn shell(scope: *Scope) void {
+    const w = frame.viewport().w;
+    if (w >= nav_from) {
+        navPane(scope);
+        rule(scope, "catalog.rule.nav");
+    }
+    mainPane(scope);
+    if (w >= toc_from) {
+        rule(scope, "catalog.rule.toc");
+        tocPane(scope);
+    }
+}
+
+// ---- the nav: every section, grouped, and a click takes the page to it ----
+
+fn navPane(scope: *Scope) void {
+    box_mod.box(.{
+        .id = .{ .text = "catalog.nav" },
+        .w = .{ .fixed = nav_w },
+        .h = .grow,
+        .direction = .column,
+        .bg = scope.theme.colors.surface,
+    }, scope, navPaneChildren);
+}
+
+fn navPaneChildren(scope: *Scope) void {
     const c = scope.theme.colors;
+    box_mod.box(.{
+        .id = .{ .text = "catalog.brand" },
+        .w = .grow,
+        .direction = .column,
+        .gap = .{ .px = 3 },
+        .pad = props.Pad.sides(18, 16, 14, 16),
+    }, scope, brandChildren);
+    box_mod.box(.{ .id = .{ .text = "catalog.rule.brand" }, .w = .grow, .h = .{ .fixed = 1 }, .bg = c.divider }, {}, noChildren);
     scroll_mod.scroll(.{
-        .id = .{ .text = "catalog.scroll" },
+        .id = .{ .text = "catalog.nav.scroll" },
         .direction = .vertical,
         .w = .grow,
         .h = .grow,
-        .bg = c.background,
+        .pad = .{ .px = 10 },
+        .gap = .{ .px = 1 },
         .thumb_bg = c.divider,
         .thumb_hover_bg = c.text_done,
-    }, scope, page);
+    }, scope, navBody);
 }
 
-fn page(scope: *Scope) void {
+fn brandChildren(scope: *Scope) void {
+    const t = scope.theme;
+    text_mod.label(.{ .label = .{ .text = "glinlandui · catalog", .size = t.type_scale.body, .color = t.colors.text } });
+    text_mod.label(.{ .label = .{
+        .text = "a reference for every component the kit ships",
+        .size = t.type_scale.caption,
+        .color = t.colors.text_done,
+    }, .wrap = true });
+}
+
+fn navBody(scope: *Scope) void {
+    var group: ?state_mod.Group = null;
+    for (&state_mod.sections, 0..) |*s, i| {
+        if (group == null or group.? != s.group) groupHead(scope, s.group);
+        group = s.group;
+        navRow(scope, i, false);
+    }
+}
+
+const GroupCtx = struct { theme: Theme, group: state_mod.Group };
+
+fn groupHead(scope: *Scope, group: state_mod.Group) void {
     box_mod.box(.{
-        .id = .{ .text = "catalog.page" },
+        .id = .{ .text = frame.formatText("catalog.nav.group.{s}", .{@tagName(group)}) },
         .w = .grow,
-        .direction = .column,
-        .pad = props.Pad.all(24),
-        .gap = .{ .px = 16 },
-    }, scope, pageChildren);
+        .pad = props.Pad.sides(14, 8, 4, 8),
+    }, GroupCtx{ .theme = scope.theme, .group = group }, groupHeadChildren);
 }
 
-fn pageChildren(scope: *Scope) void {
-    header(scope);
-    for (&state_mod.sections) |*s| section(scope, s);
+fn groupHeadChildren(ctx: GroupCtx) void {
+    text_mod.label(.{ .label = .{ .text = ctx.group.label(), .size = ctx.theme.type_scale.caption, .color = ctx.theme.colors.text_done } });
 }
 
-fn header(scope: *Scope) void {
+// One entry of the nav, or of the contents column: the same row, sized for the column that holds it.
+const LinkCtx = struct { scope: *Scope, index: usize, compact: bool };
+
+fn navRow(scope: *Scope, index: usize, compact: bool) void {
+    const c = scope.theme.colors;
     box_mod.box(.{
-        .id = .{ .text = "catalog.header" },
+        .id = .{ .text = if (compact) frame.formatText("catalog.toc.{d}", .{index}) else frame.formatText("catalog.nav.{d}", .{index}) },
         .w = .grow,
         .direction = .row,
-        .gap = .{ .px = 12 },
-        .child_align = .{ .y = .top },
-    }, scope, headerChildren);
+        .gap = .{ .px = 8 },
+        .child_align = .{ .y = .center },
+        .pad = if (compact) props.Pad.sides(3, 0, 3, 0) else props.Pad.axes(5, 8),
+        .radius = props.Radius.all(4),
+        .hover_bg = c.hover,
+        .on_click = .{ .f = onGoto, .ctx = &scope.vm.goto_ctxs[index] },
+    }, LinkCtx{ .scope = scope, .index = index, .compact = compact }, linkChildren);
 }
 
-fn headerChildren(scope: *Scope) void {
-    const t = scope.theme;
+fn linkChildren(ctx: LinkCtx) void {
+    const t = ctx.scope.theme;
+    const c = t.colors;
+    const active = ctx.scope.vm.isActive(ctx.index);
+    if (!ctx.compact) {
+        box_mod.box(.{
+            .id = .{ .text = frame.formatText("catalog.nav.bar.{d}", .{ctx.index}) },
+            .w = .{ .fixed = 2 },
+            .h = .{ .fixed = 14 },
+            .bg = if (active) c.primary else null,
+        }, {}, noChildren);
+    }
+    text_mod.label(.{ .label = .{
+        .text = state_mod.sections[ctx.index].title,
+        .size = if (ctx.compact) t.type_scale.caption else t.type_scale.label,
+        .color = if (active) c.text else c.text_dim,
+    } });
+}
+
+// ---- the page: a bar above it, the sections inside a scroll container ----
+
+fn mainPane(scope: *Scope) void {
     box_mod.box(.{
-        .id = .{ .text = "catalog.header.text" },
+        .id = .{ .text = "catalog.main" },
         .w = .grow,
+        .h = .grow,
         .direction = .column,
-        .gap = .{ .px = 6 },
-    }, scope, headerText);
-    // The one switch: the same palette and type, the kit's denser spacing. Nothing else in this file changes.
+        .bg = scope.theme.colors.background,
+    }, scope, mainPaneChildren);
+}
+
+fn mainPaneChildren(scope: *Scope) void {
+    const c = scope.theme.colors;
+    topbar(scope);
+    box_mod.box(.{ .id = .{ .text = "catalog.rule.topbar" }, .w = .grow, .h = .{ .fixed = 1 }, .bg = c.divider }, {}, noChildren);
+    page(scope);
+}
+
+fn topbar(scope: *Scope) void {
+    box_mod.box(.{
+        .id = .{ .text = "catalog.topbar" },
+        .w = .grow,
+        .h = .{ .fixed = 52 },
+        .direction = .row,
+        .gap = .{ .px = 10 },
+        .child_align = .{ .y = .center },
+        .pad = props.Pad.axes(0, 24),
+        .bg = scope.theme.colors.background,
+    }, scope, topbarChildren);
+}
+
+fn topbarChildren(scope: *Scope) void {
+    const t = scope.theme;
+    text_mod.label(.{ .label = .{ .text = "Components", .size = t.type_scale.caption, .color = t.colors.text_done } });
+    text_mod.label(.{ .label = .{ .text = "/", .size = t.type_scale.caption, .color = t.colors.text_done } });
+    text_mod.label(.{ .label = .{ .text = scope.vm.activeTitle(), .size = t.type_scale.caption, .color = t.colors.text } });
+    box_mod.spacer(.{ .text = "catalog.topbar.gap" });
+    lastIntent(scope);
+    denseSwitch(scope);
+}
+
+// What the widgets last reported, so a click is visible and not only felt.
+fn lastIntent(scope: *Scope) void {
+    const t = scope.theme;
+    const said = if (scope.state.lastText().len == 0) "nothing yet" else scope.state.lastText();
+    text_mod.label(.{ .label = .{ .text = frame.formatText("last intent: {s}", .{said}), .size = t.type_scale.caption, .color = t.colors.text_done } });
+}
+
+// The one switch: the same palette and type, the kit's denser spacing. Nothing else in this file changes.
+fn denseSwitch(scope: *Scope) void {
+    const t = scope.theme;
     button.button(.{
         .id = .{ .text = "catalog.dense" },
         .label = .{ .text = if (scope.vm.dense) "Spacing: compact" else "Spacing: roomy", .size = t.type_scale.caption, .color = t.colors.text },
@@ -110,58 +254,215 @@ fn headerChildren(scope: *Scope) void {
     });
 }
 
-fn headerText(scope: *Scope) void {
-    const t = scope.theme;
-    text_mod.label(.{ .label = .{ .text = "glinlandui · catalog", .size = t.type_scale.title, .color = t.colors.text } });
-    text_mod.label(.{
-        .label = .{ .text = "every component the toolkit ships, drawn with the kit's eleven roles", .size = t.type_scale.caption, .color = t.colors.text_dim },
-    });
-    // What the widgets last reported, so a click is visible and not only felt.
-    const said = if (scope.state.lastText().len == 0) "nothing yet" else scope.state.lastText();
-    const shown = frame.formatText("last intent: {s}", .{said});
-    text_mod.label(.{ .label = .{ .text = shown, .size = t.type_scale.caption, .color = t.colors.text_done } });
+fn page(scope: *Scope) void {
+    const c = scope.theme.colors;
+    scroll_mod.scroll(.{
+        .id = .{ .text = view_model.page_id },
+        .direction = .vertical,
+        .w = .grow,
+        .h = .grow,
+        .bg = c.background,
+        .thumb_bg = c.divider,
+        .thumb_hover_bg = c.text_done,
+    }, scope, pageContent);
 }
 
-// A card's context may live on the frame: a box fills its children inside the same call, and no click keeps it.
+fn pageContent(scope: *Scope) void {
+    box_mod.box(.{
+        .id = .{ .text = "catalog.page" },
+        .w = .grow,
+        .direction = .column,
+        .child_align = .{ .x = .center },
+    }, scope, pageColumn);
+}
+
+fn pageColumn(scope: *Scope) void {
+    box_mod.box(.{
+        .id = .{ .text = "catalog.page.column" },
+        .w = .{ .clamp = .{ .max = page_max, .grow = true } },
+        .direction = .column,
+        .gap = .{ .px = 44 },
+        .pad = props.Pad.sides(36, 32, 120, 32),
+    }, scope, pageColumnChildren);
+}
+
+fn pageColumnChildren(scope: *Scope) void {
+    docHead(scope);
+    for (&state_mod.sections, 0..) |*s, i| section(scope, s, i);
+}
+
+fn docHead(scope: *Scope) void {
+    box_mod.box(.{
+        .id = .{ .text = "catalog.doc.head" },
+        .w = .grow,
+        .direction = .column,
+        .gap = .{ .px = 12 },
+    }, scope, docHeadChildren);
+}
+
+fn docHeadChildren(scope: *Scope) void {
+    const t = scope.theme;
+    const c = t.colors;
+    text_mod.label(.{ .label = .{ .text = "REFERENCE", .size = t.type_scale.caption, .color = c.text_done } });
+    text_mod.label(.{ .label = .{ .text = "glinlandui components", .size = .{ .px = h1_size }, .color = c.text } });
+    text_mod.label(.{ .label = .{
+        .text = "Sixteen components drawn with the kit's eleven colour roles, every one of them live: click a control and the page reports what it said. The card under each heading is the component itself, and the block beneath it is the call that produced it.",
+        .size = t.type_scale.body,
+        .color = c.text_dim,
+    }, .wrap = true });
+    box_mod.box(.{ .id = .{ .text = "catalog.doc.head.rule" }, .w = .grow, .h = .{ .fixed = 1 }, .bg = c.divider }, {}, noChildren);
+}
+
+// A section's context may live on the frame: a box fills its children inside the same call, and no click keeps it.
 const SectionCtx = struct {
     scope: *Scope,
     section: *const state_mod.Section,
+    index: usize,
 };
 
-fn section(scope: *Scope, s: *const state_mod.Section) void {
-    const c = scope.theme.colors;
+fn section(scope: *Scope, s: *const state_mod.Section, index: usize) void {
     box_mod.box(.{
         .id = .{ .text = s.id },
-        // The inspector's "declared" line: Zig has no caller location, so the app says where it built this card.
+        // The inspector's "declared" line: Zig has no caller location, so the app says where it built this section.
         .src = @src(),
         .w = .grow,
         .direction = .column,
-        .bg = c.surface,
-        .pad = props.Pad.all(16),
         .gap = .{ .px = 12 },
-        .radius = props.Radius.all(r_card),
-        .border = .{ .width = .{ .px = 1 }, .color = c.divider },
-    }, SectionCtx{ .scope = scope, .section = s }, sectionChildren);
+    }, SectionCtx{ .scope = scope, .section = s, .index = index }, sectionChildren);
 }
 
 fn sectionChildren(ctx: SectionCtx) void {
+    const t = ctx.scope.theme;
+    const c = t.colors;
+    text_mod.label(.{ .label = .{ .text = ctx.section.group.label(), .size = t.type_scale.caption, .color = c.text_done } });
+    text_mod.label(.{ .label = .{ .text = ctx.section.title, .size = .{ .px = h2_size }, .color = c.text } });
+    text_mod.label(.{ .label = .{ .text = ctx.section.note, .size = t.type_scale.body, .color = c.text_dim }, .wrap = true });
+    previewCard(ctx);
+    usageCard(ctx);
+}
+
+// The live half of a section: the component, drawn inside a card the way a docs site frames its demo.
+fn previewCard(ctx: SectionCtx) void {
+    const c = ctx.scope.theme.colors;
     box_mod.box(.{
-        .id = .{ .text = frame.formatText("{s}.head", .{ctx.section.id}) },
-        .src = @src(),
+        .id = .{ .text = frame.formatText("{s}.preview", .{ctx.section.id}) },
         .w = .grow,
         .direction = .column,
-        .gap = .{ .px = 2 },
-    }, ctx, sectionHeadChildren);
+        .gap = .{ .px = 16 },
+        .pad = props.Pad.all(18),
+        .bg = c.surface,
+        .radius = props.Radius.all(r_card),
+        .border = .{ .width = .{ .px = 1 }, .color = c.divider },
+    }, ctx, previewChildren);
+}
+
+fn previewChildren(ctx: SectionCtx) void {
+    const t = ctx.scope.theme;
+    text_mod.label(.{ .label = .{ .text = "PREVIEW", .size = t.type_scale.caption, .color = t.colors.text_done } });
     sectionBody(ctx);
 }
 
-fn sectionHeadChildren(ctx: SectionCtx) void {
-    const t = ctx.scope.theme;
-    text_mod.label(.{ .label = .{ .text = ctx.section.title, .size = t.type_scale.body, .color = t.colors.text } });
-    text_mod.label(.{ .label = .{ .text = ctx.section.note, .size = t.type_scale.caption, .color = t.colors.text_dim } });
+// The other half: the call that made the card above it, and a copy of it.
+fn usageCard(ctx: SectionCtx) void {
+    const c = ctx.scope.theme.colors;
+    box_mod.box(.{
+        .id = .{ .text = frame.formatText("{s}.usage", .{ctx.section.id}) },
+        .w = .grow,
+        .direction = .column,
+        .bg = c.surface_variant,
+        .radius = props.Radius.all(6),
+        .border = .{ .width = .{ .px = 1 }, .color = c.divider },
+    }, ctx, usageChildren);
 }
 
-// Which demo the section's card holds is the data's to say; how it is drawn is this file's.
+fn usageChildren(ctx: SectionCtx) void {
+    box_mod.box(.{
+        .id = .{ .text = frame.formatText("{s}.usage.head", .{ctx.section.id}) },
+        .w = .grow,
+        .direction = .row,
+        .gap = .{ .px = 8 },
+        .child_align = .{ .y = .center },
+        .pad = props.Pad.sides(6, 6, 4, 12),
+    }, ctx, usageHeadChildren);
+    box_mod.box(.{
+        .id = .{ .text = frame.formatText("{s}.code", .{ctx.section.id}) },
+        .w = .grow,
+        .direction = .column,
+        .gap = .{ .px = 2 },
+        .pad = props.Pad.sides(0, 12, 12, 12),
+    }, ctx, codeLines);
+}
+
+fn usageHeadChildren(ctx: SectionCtx) void {
+    const t = ctx.scope.theme;
+    text_mod.label(.{ .label = .{ .text = "ZIG", .size = t.type_scale.caption, .color = t.colors.text_done } });
+    box_mod.spacer(.{ .text = frame.formatText("{s}.usage.gap", .{ctx.section.id}) });
+    button.button(.{
+        .id = .{ .text = frame.formatText("{s}.copy", .{ctx.section.id}) },
+        .label = .{ .text = "Copy", .size = t.type_scale.caption, .color = t.colors.text_dim },
+        .bg = t.colors.surface,
+        .fg = t.colors.text_dim,
+        .hover_bg = t.colors.hover,
+        .border = .{ .width = .{ .px = 1 }, .color = t.colors.divider },
+        .pad = props.Pad.axes(3, 8),
+        .h = .{ .fixed = 22 },
+        .on_click = .{ .f = onCopy, .ctx = &ctx.scope.vm.goto_ctxs[ctx.index] },
+    });
+}
+
+fn codeLines(ctx: SectionCtx) void {
+    const t = ctx.scope.theme;
+    var lines = std.mem.splitScalar(u8, ctx.section.snippet, '\n');
+    while (lines.next()) |line| {
+        text_mod.label(.{ .label = .{
+            .text = if (line.len == 0) " " else line,
+            .size = t.type_scale.caption,
+            .color = t.colors.text_dim,
+        } });
+    }
+}
+
+// ---- the contents column: the same sections, in the order the page draws them ----
+
+fn tocPane(scope: *Scope) void {
+    const c = scope.theme.colors;
+    box_mod.box(.{
+        .id = .{ .text = "catalog.toc" },
+        .w = .{ .fixed = toc_w },
+        .h = .grow,
+        .direction = .column,
+        .bg = c.background,
+    }, scope, tocPaneChildren);
+}
+
+fn tocPaneChildren(scope: *Scope) void {
+    const c = scope.theme.colors;
+    box_mod.box(.{
+        .id = .{ .text = "catalog.toc.head" },
+        .w = .grow,
+        .pad = props.Pad.sides(28, 20, 10, 20),
+    }, scope.theme, tocHeadChildren);
+    scroll_mod.scroll(.{
+        .id = .{ .text = "catalog.toc.scroll" },
+        .direction = .vertical,
+        .w = .grow,
+        .h = .grow,
+        .pad = .{ .px = 4 },
+        .thumb_bg = c.divider,
+        .thumb_hover_bg = c.text_done,
+    }, scope, tocBody);
+}
+
+fn tocHeadChildren(t: Theme) void {
+    text_mod.label(.{ .label = .{ .text = "ON THIS PAGE", .size = t.type_scale.caption, .color = t.colors.text_done } });
+}
+
+fn tocBody(scope: *Scope) void {
+    for (&state_mod.sections, 0..) |_, i| navRow(scope, i, true);
+}
+
+// ---- section bodies: which demo a section holds is the data's to say; how it is drawn is this file's ----
+
 fn sectionBody(ctx: SectionCtx) void {
     switch (ctx.section.body) {
         .buttons => buttonsBody(ctx.scope),
@@ -230,7 +531,7 @@ fn imageCardChildren(ctx: ImageCardCtx) void {
         .text = ctx.caption,
         .size = ctx.scope.theme.type_scale.caption,
         .color = ctx.scope.theme.colors.text_dim,
-    } });
+    }, .wrap = true });
 }
 
 // ---- buttons -------------------------------------------------------------------------------------------------
@@ -440,24 +741,42 @@ fn selectionRow(scope: *Scope) void {
 
 fn rolesBody(scope: *Scope) void {
     box_mod.box(.{
-        .id = .{ .text = "catalog.roles.row" },
+        .id = .{ .text = "catalog.roles.grid" },
         .w = .grow,
-        .direction = .row,
-        .gap = .{ .px = 4 },
-    }, scope.theme, rolesRowChildren);
+        .direction = .column,
+        .gap = .{ .px = 8 },
+    }, scope, rolesRows);
 }
 
-fn rolesRowChildren(t: Theme) void {
-    for (state_mod.swatches) |s| {
+// Six roles to a row: a docs card is narrower than a screen, and a cell that cannot hold its own name is not a swatch.
+fn rolesRows(scope: *Scope) void {
+    var start: usize = 0;
+    var index: usize = 0;
+    while (start < state_mod.swatches.len) : (index += 1) {
+        const end = @min(start + 6, state_mod.swatches.len);
+        box_mod.box(.{
+            .id = .{ .text = if (index == 0) "catalog.roles.row" else frame.formatText("catalog.roles.row.{d}", .{index}) },
+            .w = .grow,
+            .direction = .row,
+            .gap = .{ .px = 6 },
+        }, RolesRowCtx{ .theme = scope.theme, .items = state_mod.swatches[start..end] }, rolesRowChildren);
+        start = end;
+    }
+}
+
+const RolesRowCtx = struct { theme: Theme, items: []const state_mod.Swatch };
+
+fn rolesRowChildren(ctx: RolesRowCtx) void {
+    for (ctx.items) |s| {
         box_mod.box(.{
             .id = .{ .text = s.name },
-            // As wide as its own name, and never wider than the column it shares: eleven roles fit one row.
-            .w = .{ .clamp = .{ .min = 64, .max = 92 } },
+            // As wide as its own name, and never wider than the column it shares.
+            .w = .{ .clamp = .{ .min = 72, .max = 104 } },
             .direction = .column,
             .gap = .{ .px = 4 },
             // A role name is longer than a swatch: the cell cuts it and wraps it, instead of painting over the next one.
             .clip = .{ .horizontal = true },
-        }, SwatchCtx{ .swatch = s, .theme = t }, swatchChildren);
+        }, SwatchCtx{ .swatch = s, .theme = ctx.theme }, swatchChildren);
     }
 }
 
@@ -954,4 +1273,14 @@ fn onModalAnswer(raw: ?*anyopaque, index: usize) void {
 fn onDense(raw: ?*anyopaque) void {
     const vm: *CatalogViewModel = @ptrCast(@alignCast(raw.?));
     vm.toggleDense();
+}
+
+fn onGoto(raw: ?*anyopaque) void {
+    const g: *CatalogViewModel.GotoCtx = @ptrCast(@alignCast(raw.?));
+    g.vm.gotoSection(g.index);
+}
+
+fn onCopy(raw: ?*anyopaque) void {
+    const g: *CatalogViewModel.GotoCtx = @ptrCast(@alignCast(raw.?));
+    g.vm.copyUsage(g.index);
 }

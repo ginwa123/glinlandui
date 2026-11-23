@@ -117,7 +117,9 @@ pub const Window = struct {
     pub fn needsFrame(self: *const Window) bool {
         if (!self.live) return false;
         if (self.state.quit) return false;
-        if (self.state.needs_draw) return true;
+        // Drained whether or not a frame is already pending, so a request cannot outlive the frame that satisfied it.
+        const requested = frame_mod.takeRepaintRequest();
+        if (self.state.needs_draw or requested) return true;
         // A coalesced resize is work even if no event marked the frame dirty.
         if (adapter.sizeChanged(&self.state)) return true;
         return false;

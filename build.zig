@@ -237,7 +237,9 @@ pub fn build(b: *std.Build) void {
         // `zig build run`, or `zig build -Dweb run`: the second builds every browser module, serves the page and prints the URL instead of opening a window.
         const run_step = b.step("run", "Run the app (-Dweb to build and serve the browser version)");
         if (web_flag) {
-            run_step.dependOn(web_step);
+            // `-Dweb` builds THIS app's module and the page, never the other examples.
+            run_step.dependOn(&install_web.step);
+            run_step.dependOn(&install_assets.step);
             run_step.dependOn(&serve_and_print(b, "demo").step);
         } else {
             const run_cmd = b.addRunArtifact(exe);
@@ -285,8 +287,9 @@ pub fn build(b: *std.Build) void {
 
         const run_calc_step = b.step("run-calculator", "Run the calculator (-Dweb to build and serve the browser version)");
         if (web_flag) {
-            // `-Dweb`: every browser module and the page, served, with the URL printed.
-            run_calc_step.dependOn(web_step);
+            // `-Dweb`: this app's own module and the page, served, with the URL printed.
+            run_calc_step.dependOn(&install_web_calc.step);
+            run_calc_step.dependOn(&install_assets.step);
             run_calc_step.dependOn(&serve_and_print(b, "calculator").step);
         } else {
             const run_calc = b.addRunArtifact(calc);
@@ -317,9 +320,20 @@ pub fn build(b: *std.Build) void {
         const build_lazy_step = b.step("build-lazy-scroll", "Compile the lazy-scroll example (no window)");
         build_lazy_step.dependOn(&lazy.step);
 
+        // ---- the same example, for the browser ---- One wasm artifact from `examples/lazy_scroll/web.zig`, sharing this library and the page.
+        const lazyscroll_web = exampleWebExe(b, "lazy_scroll", web_target, lazy_optimize, web_lib, exampleModule(b, "lazy_scroll", web_target, lazy_optimize, web_lib));
+        const install_lazyscroll_web = b.addInstallArtifact(lazyscroll_web, .{ .dest_dir = .{ .override = .{ .custom = "web" } } });
+        const step_lazy_scroll_web = b.step("web-lazy-scroll", "Build the lazy_scroll example for the browser");
+        step_lazy_scroll_web.dependOn(&install_lazyscroll_web.step);
+        step_lazy_scroll_web.dependOn(&install_assets.step);
+        // `zig build web` builds the whole set, so one command produces every app the page can show.
+        web_step.dependOn(&install_lazyscroll_web.step);
+
         const run_lazy_step = b.step("run-lazy-scroll", "Run the 10,000-row lazy-scroll example (-Dweb to build and serve the browser version)");
         if (web_flag) {
-            run_lazy_step.dependOn(web_step);
+            // `-Dweb`: this app's own module and the page, never the other examples.
+            run_lazy_step.dependOn(&install_lazyscroll_web.step);
+            run_lazy_step.dependOn(&install_assets.step);
             run_lazy_step.dependOn(&serve_and_print(b, "lazy_scroll").step);
         } else {
             const run_lazy = b.addRunArtifact(lazy);
@@ -335,15 +349,6 @@ pub fn build(b: *std.Build) void {
         const bench_lazy = b.addRunArtifact(lazy);
         bench_lazy.addArgs(&.{ "--bench", "600" });
         bench_lazy_step.dependOn(&bench_lazy.step);
-
-        // ---- the same example, for the browser ---- One wasm artifact from `examples/lazy_scroll/web.zig`, sharing this library and the page.
-        const lazyscroll_web = exampleWebExe(b, "lazy_scroll", web_target, lazy_optimize, web_lib, exampleModule(b, "lazy_scroll", web_target, lazy_optimize, web_lib));
-        const install_lazyscroll_web = b.addInstallArtifact(lazyscroll_web, .{ .dest_dir = .{ .override = .{ .custom = "web" } } });
-        const step_lazy_scroll_web = b.step("web-lazy-scroll", "Build the lazy_scroll example for the browser");
-        step_lazy_scroll_web.dependOn(&install_lazyscroll_web.step);
-        step_lazy_scroll_web.dependOn(&install_assets.step);
-        // `zig build web` builds the whole set, so one command produces every app the page can show.
-        web_step.dependOn(&install_lazyscroll_web.step);
 
         lazy_test = exampleTest(b, lazy_mod);
 
@@ -361,9 +366,20 @@ pub fn build(b: *std.Build) void {
         const build_dlg_step = b.step("build-file-dialog", "Compile the file-dialog example (no window)");
         build_dlg_step.dependOn(&dlg.step);
 
+        // ---- the same example, for the browser ---- One wasm artifact from `examples/file_dialog/web.zig`, sharing this library and the page.
+        const filedialog_web = exampleWebExe(b, "file_dialog", web_target, optimize, web_lib, exampleModule(b, "file_dialog", web_target, optimize, web_lib));
+        const install_filedialog_web = b.addInstallArtifact(filedialog_web, .{ .dest_dir = .{ .override = .{ .custom = "web" } } });
+        const step_file_dialog_web = b.step("web-file-dialog", "Build the file_dialog example for the browser");
+        step_file_dialog_web.dependOn(&install_filedialog_web.step);
+        step_file_dialog_web.dependOn(&install_assets.step);
+        // `zig build web` builds the whole set, so one command produces every app the page can show.
+        web_step.dependOn(&install_filedialog_web.step);
+
         const run_dlg_step = b.step("run-file-dialog", "Run the file-dialog example (-Dweb to build and serve the browser version)");
         if (web_flag) {
-            run_dlg_step.dependOn(web_step);
+            // `-Dweb`: this app's own module and the page, never the other examples.
+            run_dlg_step.dependOn(&install_filedialog_web.step);
+            run_dlg_step.dependOn(&install_assets.step);
             run_dlg_step.dependOn(&serve_and_print(b, "file_dialog").step);
         } else {
             const run_dlg = b.addRunArtifact(dlg);
@@ -373,15 +389,6 @@ pub fn build(b: *std.Build) void {
                 run_dlg.addArgs(args);
             }
         }
-
-        // ---- the same example, for the browser ---- One wasm artifact from `examples/file_dialog/web.zig`, sharing this library and the page.
-        const filedialog_web = exampleWebExe(b, "file_dialog", web_target, optimize, web_lib, exampleModule(b, "file_dialog", web_target, optimize, web_lib));
-        const install_filedialog_web = b.addInstallArtifact(filedialog_web, .{ .dest_dir = .{ .override = .{ .custom = "web" } } });
-        const step_file_dialog_web = b.step("web-file-dialog", "Build the file_dialog example for the browser");
-        step_file_dialog_web.dependOn(&install_filedialog_web.step);
-        step_file_dialog_web.dependOn(&install_assets.step);
-        // `zig build web` builds the whole set, so one command produces every app the page can show.
-        web_step.dependOn(&install_filedialog_web.step);
 
         dlg_test = exampleTest(b, dlg_mod);
 
@@ -399,10 +406,20 @@ pub fn build(b: *std.Build) void {
         const build_todo_step = b.step("build-todo", "Compile the todo example (no window)");
         build_todo_step.dependOn(&todo.step);
 
+        // ---- the same example, for the browser ---- One wasm artifact from `examples/todo/web.zig`, sharing this library and the page.
+        const todo_web = exampleWebExe(b, "todo", web_target, optimize, web_lib, exampleModule(b, "todo", web_target, optimize, web_lib));
+        const install_todo_web = b.addInstallArtifact(todo_web, .{ .dest_dir = .{ .override = .{ .custom = "web" } } });
+        const step_todo_web = b.step("web-todo", "Build the todo example for the browser");
+        step_todo_web.dependOn(&install_todo_web.step);
+        step_todo_web.dependOn(&install_assets.step);
+        // `zig build web` builds the whole set, so one command produces every app the page can show.
+        web_step.dependOn(&install_todo_web.step);
+
         const run_todo_step = b.step("run-todo", "Run the MVVM todo example (-Dweb to build and serve the browser version)");
         if (web_flag) {
-            // `-Dweb`: build EVERY browser module and the page, then serve, so the app switcher works too.
-            run_todo_step.dependOn(web_step);
+            // `-Dweb`: this app's own module and the page, never the other examples.
+            run_todo_step.dependOn(&install_todo_web.step);
+            run_todo_step.dependOn(&install_assets.step);
             run_todo_step.dependOn(&serve_and_print(b, "todo").step);
         } else {
             const run_todo = b.addRunArtifact(todo);
@@ -412,15 +429,6 @@ pub fn build(b: *std.Build) void {
                 run_todo.addArgs(args);
             }
         }
-
-        // ---- the same example, for the browser ---- One wasm artifact from `examples/todo/web.zig`, sharing this library and the page.
-        const todo_web = exampleWebExe(b, "todo", web_target, optimize, web_lib, exampleModule(b, "todo", web_target, optimize, web_lib));
-        const install_todo_web = b.addInstallArtifact(todo_web, .{ .dest_dir = .{ .override = .{ .custom = "web" } } });
-        const step_todo_web = b.step("web-todo", "Build the todo example for the browser");
-        step_todo_web.dependOn(&install_todo_web.step);
-        step_todo_web.dependOn(&install_assets.step);
-        // `zig build web` builds the whole set, so one command produces every app the page can show.
-        web_step.dependOn(&install_todo_web.step);
 
         todo_test = exampleTest(b, todo_mod);
         // The E2E suite: the real App, driven by the headless driver.
@@ -441,19 +449,6 @@ pub fn build(b: *std.Build) void {
         const build_catalog_step = b.step("build-catalog", "Compile the catalog example (no window)");
         build_catalog_step.dependOn(&catalog.step);
 
-        const run_catalog_step = b.step("run-catalog", "Run the component catalog example (-Dweb to build and serve the browser version)");
-        if (web_flag) {
-            run_catalog_step.dependOn(web_step);
-            run_catalog_step.dependOn(&serve_and_print(b, "catalog").step);
-        } else {
-            const run_catalog = b.addRunArtifact(catalog);
-            run_catalog_step.dependOn(&run_catalog.step);
-            run_catalog.step.dependOn(b.getInstallStep());
-            if (b.args) |args| {
-                run_catalog.addArgs(args);
-            }
-        }
-
         // ---- the same example, for the browser ---- One wasm artifact from `examples/catalog/web.zig`, sharing this library and the page.
         const catalog_web = exampleWebExe(b, "catalog", web_target, optimize, web_lib, exampleModule(b, "catalog", web_target, optimize, web_lib));
         // The catalog is the one example that draws images, so it is the one whose browser build carries them: `examples/catalog/web.zig` imports the generated module by this name.
@@ -464,6 +459,21 @@ pub fn build(b: *std.Build) void {
         step_catalog_web.dependOn(&install_assets.step);
         // `zig build web` builds the whole set, so one command produces every app the page can show.
         web_step.dependOn(&install_catalog_web.step);
+
+        const run_catalog_step = b.step("run-catalog", "Run the component catalog example (-Dweb to build and serve the browser version)");
+        if (web_flag) {
+            // `-Dweb`: this app's own module and the page, never the other examples.
+            run_catalog_step.dependOn(&install_catalog_web.step);
+            run_catalog_step.dependOn(&install_assets.step);
+            run_catalog_step.dependOn(&serve_and_print(b, "catalog").step);
+        } else {
+            const run_catalog = b.addRunArtifact(catalog);
+            run_catalog_step.dependOn(&run_catalog.step);
+            run_catalog.step.dependOn(b.getInstallStep());
+            if (b.args) |args| {
+                run_catalog.addArgs(args);
+            }
+        }
 
         catalog_test = exampleTest(b, catalog_mod);
 

@@ -2,6 +2,7 @@
 const std = @import("std");
 const host_mod = @import("../host.zig");
 const frame_mod = @import("../frame.zig");
+const route_mod = @import("../route.zig");
 const dispatch = @import("../component.zig").dispatch;
 const scroll_mod = @import("../component.zig").scroll;
 const semantics = @import("../semantics.zig");
@@ -114,6 +115,8 @@ pub const Driver = struct {
 
     /// Run the initial frame at a deterministic viewport.
     pub fn start(self: *Driver, viewport: Viewport) !void {
+        // A driver is a window, and a window starts with an empty address: no test inherits the previous one's route.
+        route_mod.reset();
         try self.resize(viewport.width, viewport.height);
     }
 

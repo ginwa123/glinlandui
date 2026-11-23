@@ -1,6 +1,7 @@
 //! The terminal window: alternate screen, raw mode, resize polling and the frame loop, shared by every console.
 const std = @import("std");
 const contract = @import("../core/window_contract.zig");
+const frame_mod = @import("../core/frame.zig");
 const text_face = @import("../core/text_face.zig");
 const soft = @import("../core/render_software.zig");
 const term = @import("term.zig");
@@ -194,6 +195,8 @@ pub fn Window(comptime console: type) type {
                 if (max_frames) |n| {
                     if (frames >= n) break;
                 }
+                // A screen that changed with no event to carry it (a route, a load that finished) asked for this frame.
+                if (frame_mod.takeRepaintRequest()) self.state.needs_draw = true;
                 if (self.state.needs_draw) {
                     self.state.needs_draw = false;
                     const started = if (stats) con.nowUs() else 0;

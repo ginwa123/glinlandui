@@ -907,6 +907,8 @@ pub const Window = struct {
             if (c.wl_display_dispatch_pending(display) < 0) break;
             // Test harness: every iteration is dirty (continuous drawing).
             if (max_frames != null) self.needs_draw = true;
+            // A screen that changed with no event to carry it (a route, a load that finished) asked for this frame.
+            if (frame.takeRepaintRequest()) self.needs_draw = true;
             // Delegate-driven quit (e.g.
             if (self.delegate) |d| {
                 if (d.is_quit(d.ptr)) self.quit = true;
