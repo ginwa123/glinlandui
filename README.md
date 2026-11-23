@@ -1089,7 +1089,9 @@ These are the things that will surprise you if you come from Compose:
    documented one-frame lags: scrollbar thumbs read previous-frame scroll data;
    hover chrome is driven by the previous frame's pointer-over ids; and
    `getScrollContainerData().found` is false until one layout has run. A pending
-   wheel delta also counts as not-idle, because the next frame will consume it.
+   wheel delta also counts as not-idle, because the next frame will consume it —
+   and so does the coast a flick leaves behind (`core/momentum.zig`), which keeps
+   the UI moving for up to a second after the last event.
 4. **A click is a release, at the press origin, against the previous frame.**
    `performClick` idles *before* clicking for that reason, and a gesture that
    travels more than 6px is a **drag** and fires nothing — which is what
@@ -1097,6 +1099,8 @@ These are the things that will surprise you if you come from Compose:
 5. **Wheel scroll is routed to the hovered container.** So `performScrollTo()`
    uses the deterministic `scroll.scrollBy()` (1:1, clamped, no ×10 wheel factor)
    instead. Use `Driver.scroll()` when the *point* of the test is wheel routing.
+   The coast a flick leaves behind is routed the same way, frame by frame, so a
+   pointer that leaves the pane mid-coast hands the rest of it to what it is over.
 6. **Only clipping ancestors narrow visibility.** Floating overlays legitimately
    paint outside their parent, so a non-clipping ancestor contributes nothing to
    `clip`. Otherwise `assertIsDisplayed` would fail for perfectly visible overlays.

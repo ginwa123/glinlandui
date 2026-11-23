@@ -30,6 +30,7 @@ const inspector_mod = @import("devtools/inspector.zig");
 const glyphs = @import("glyphs.zig");
 const text_face = @import("text_face.zig");
 const clock_mod = @import("clock.zig");
+const momentum = @import("momentum.zig");
 
 /// App declare callback: builds the Clay tree for a w x h window.
 pub const RootFn = *const fn (?*anyopaque, u32, u32) void;
@@ -75,6 +76,13 @@ pub const Host = struct {
     /// Pending wheel scroll delta (px, accumulated by onScrollEvent, consumed once per frame by frame() into Clay's scroll containers).
     scroll_dx: f32 = 0,
     scroll_dy: f32 = 0,
+    /// The same wheel delta again, kept for the glide's measurement: the pending scroll is spent in whole pixels, this one stays whole.
+    gesture_dx: f32 = 0,
+    gesture_dy: f32 = 0,
+    /// A wheel event arrived since the last frame, so the glide measures this frame's gesture instead of taking over.
+    gesture_open: bool = false,
+    /// The glide a flick leaves behind, so a trackpad that reports no momentum of its own still coasts to a stop.
+    glide: momentum.Glide = .{},
     quit_requested: bool = false,
     /// An app that must ask before the window closes (unsaved work): return true to HANDLE the close yourself.
     close_hook: ?*const fn (?*anyopaque) bool = null,
@@ -177,6 +185,18 @@ pub const Host = struct {
         self.last_clock_ms = now_ms;
         self.clock_s += delta;
         frame_mod.setTime(self.clock_s, delta);
+        // The wheel's own motion is the gesture's; a flick that stopped arriving is the glide's to finish, so the two are stepped in order and never at once.
+        if (self.gesture_open) {
+            self.glide.feed(self.gesture_dx, self.gesture_dy, delta);
+            self.gesture_dx = 0;
+            self.gesture_dy = 0;
+            self.gesture_open = false;
+        }
+        const glided = if (self.glide.advance(delta)) |d| blk: {
+            self.scroll_dx += d.dx;
+            self.scroll_dy += d.dy;
+            break :blk true;
+        } else false;
         // Consume the wheel delta once per frame, in WHOLE pixels with the remainder carried: a sub-pixel offset re-rasterises every glyph.
         const dx = @trunc(self.scroll_dx);
         const dy = @trunc(self.scroll_dy);
@@ -203,6 +223,13 @@ pub const Host = struct {
             self,
             &effective,
         );
+        // A glide whose whole pixels moved nothing — the list is at its end, or no list is under the pointer — ends here rather than asking for a second of frames that draw the same pixels; a glide that did move asks for the next frame itself, the way an animation does.
+        if (glided) {
+            if (dx == 0 and dy == 0) frame_mod.requestFrame() else if (frame_mod.wheelMoved()) frame_mod.requestFrame() else self.glide.end();
+        } else if (self.glide.pending()) {
+            // The quiet gap before a takeover is measured in frames, and no event will arrive to supply them.
+            frame_mod.requestFrame();
+        }
         // Every box is real now, so a component that asked to stay in view is scrolled before the next frame draws.
         scroll_mod.applyReveals();
         // The tree is resolved now, so a waiting client can be answered from this frame rather than the last one.
@@ -263,8 +290,13 @@ pub const Host = struct {
         // A delta this small moves nothing on screen, so it must not make the next frame count as dirty.
         if (@abs(dx) < 0.01 and @abs(dy) < 0.01) return;
         // Window points to content points: a wheel notch moves the same amount of layout at any zoom.
-        self.scroll_dx += dx / frame_mod.zoom();
-        self.scroll_dy += dy / frame_mod.zoom();
+        const content_dx = dx / frame_mod.zoom();
+        const content_dy = dy / frame_mod.zoom();
+        self.scroll_dx += content_dx;
+        self.scroll_dy += content_dy;
+        self.gesture_dx += content_dx;
+        self.gesture_dy += content_dy;
+        self.gesture_open = true;
     }
 
     /// The return value is CLOSE INTENT, which the window acts on: a key the focused field typed is never one.
@@ -690,6 +722,65 @@ test "host: wheel-down (Wayland positive dy) scrolls content down" {
     const y1 = cl.getElementData(cl.getElementId("host-scroll-probe")).bounding_box.y;
     // +5 Wayland dy is 5 px of content: one point of gesture, one point of movement.
     try std.testing.expectApproxEqAbs(y0 - 5, y1, 0.5);
+}
+
+test "host: a flick keeps the list scrolling after the wheel events stop" {
+    var h: Host = undefined;
+    try testHost(&h, null, hostScrollProbeRoot);
+    // A fixed frame step: the glide is counted in frames, so where it ends does not depend on how fast this machine ran the test.
+    h.clock = null;
+    h.frame(720, 480);
+    const box = cl.getElementData(cl.getElementId("host-scroll")).bounding_box;
+    h.onPointerEvent(box.x + box.width * 0.5, box.y + box.height * 0.5, false, 0);
+    // One frame of a flick, then silence — the moment the fingers leave the trackpad.
+    h.onScrollEvent(0, 40);
+    h.frame(720, 480);
+    const released = scroll_mod.view("host-scroll").y;
+    try std.testing.expectApproxEqAbs(@as(f32, 40), released, 0.5);
+    // No event arrives, and the list goes on moving: this is the whole defect the glide exists for.
+    var previous = released;
+    var frames: usize = 0;
+    var coasted: usize = 0;
+    while (frames < 200) : (frames += 1) {
+        h.frame(720, 480);
+        const y = scroll_mod.view("host-scroll").y;
+        if (y > previous) coasted += 1;
+        // The quiet gap before the glide starts is not the end of it: the coast is over when it has begun and then stopped.
+        if (coasted > 0 and y <= previous) break;
+        previous = y;
+    }
+    try std.testing.expect(coasted > 1);
+    try std.testing.expect(previous > released + 20);
+    // 400 points of content in a 100-point viewport: a flick can only ever reach the end, never run past it.
+    try std.testing.expect(previous <= 300.5);
+}
+
+test "host: a coasting list asks for the frames it needs, and stops asking once it has no room left" {
+    var h: Host = undefined;
+    try testHost(&h, null, hostScrollProbeRoot);
+    h.clock = null;
+    h.frame(720, 480);
+    const box = cl.getElementData(cl.getElementId("host-scroll")).bounding_box;
+    h.onPointerEvent(box.x + box.width * 0.5, box.y + box.height * 0.5, false, 0);
+    h.onScrollEvent(0, 40);
+    h.frame(720, 480);
+    _ = frame_mod.takeRepaintRequest();
+    // No event will carry the next frame of a coast, so the coast asks for it, exactly as an animation does.
+    var asked: usize = 0;
+    var i: usize = 0;
+    while (i < 12) : (i += 1) {
+        h.frame(720, 480);
+        if (frame_mod.takeRepaintRequest()) asked += 1;
+    }
+    try std.testing.expect(asked >= 3);
+    // The list reaches its end, and the frames end with it: a coast that moves nothing must not draw a second of the same pixels.
+    i = 0;
+    while (i < 60) : (i += 1) {
+        h.frame(720, 480);
+        _ = frame_mod.takeRepaintRequest();
+    }
+    h.frame(720, 480);
+    try std.testing.expect(!frame_mod.takeRepaintRequest());
 }
 
 test "host: press-drag down scrolls down slider-style (no click)" {

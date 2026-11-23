@@ -198,6 +198,17 @@ report. The toolkit accumulates the burst and the frame spends it once; `mac/win
 invalidate-only draws at the next display refresh. `web/smoke.mjs` pins the invariant that makes coalescing safe: the same total travel
 lands at the same pixel whether it arrives as one event or six.
 
+A trackpad on Linux sends axis events only while the fingers move — libinput has no kinetic scroll, and the browser exposes no gesture
+phase — so a flick used to stop dead the moment the fingers left the pad. The ENGINE now supplies the coast, in `core/momentum.zig`: it
+measures the gesture's speed from the delta a frame actually carried (bounded to 3000 pt/s, so a burst of events cannot become a lurch, and
+a frame that reverses direction is a new measurement rather than an average), waits out a 64 ms silence, then spends a velocity decaying at
+`e^-3.6t` until it falls under 90 pt/s. That silence is the whole reason an OS animating the flick itself is never doubled: macOS and
+Windows deliver their momentum as more wheel events, one per refresh, so the gap never opens; a hand that came to rest before lifting
+leaves a speed too low to glide. The gap is measured in frames, so `Glide.pending()` keeps the backend drawing through it — otherwise
+nothing would ever wake the coast — and a coast that moves nothing (the list is at its end, or no list is under the pointer) ends at once
+rather than drawing a second of identical frames. `ci/check_test_parity.sh` counts the behaviour in `core/momentum.zig` and two `host.zig`
+tests, and `web/smoke.mjs` asserts the coast in the wasm module itself.
+
 ## Dependencies
 
 None. The package is std-only apart from the vendored Clay bindings and stb headers under

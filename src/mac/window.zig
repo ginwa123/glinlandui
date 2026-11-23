@@ -199,6 +199,10 @@ pub const Window = struct {
         if (text_editor.blinkPendingMs()) |ms| {
             if (self.handle) |handle| c.glin_cocoa_invalidate_after(handle, @intCast(ms));
         }
+        // A screen that changed with no event to carry it — a coasting list, a route change — asks for the next refresh itself.
+        if (frame_mod.takeRepaintRequest()) {
+            if (self.handle) |handle| c.glin_cocoa_invalidate(handle);
+        }
     }
 
     // Start or stop the frame pump. An app with its own animation calls this with `true` while it is running and `false` when it stops; the pump redraws at
