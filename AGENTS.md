@@ -190,6 +190,14 @@ the window through which any glitch in the blit or the composite reaches the eye
 changed frame with the colour it flipped between (a state flip, usually hover). Whole-area changes are scrolling and are
 suppressed — they are not a bug.
 
+A backend draws when the display wants a frame, not when an event arrives. On the browser that is `requestAnimationFrame`, and the
+wheel handler is the one exception to "an input event is a reason to draw": a trackpad delivers several wheel events per refresh and a
+non-passive listener is not coalesced, so drawing inside it rasterizes and presents three surfaces for one displayed frame, off vsync.
+Measured at 2880x1800: 90 events cost 90 frames where 30 were shown, and 93% of the main thread — which is the "scroll is not smooth"
+report. The toolkit accumulates the burst and the frame spends it once; `mac/window.zig` already worked that way, because AppKit
+invalidate-only draws at the next display refresh. `web/smoke.mjs` pins the invariant that makes coalescing safe: the same total travel
+lands at the same pixel whether it arrives as one event or six.
+
 ## Dependencies
 
 None. The package is std-only apart from the vendored Clay bindings and stb headers under

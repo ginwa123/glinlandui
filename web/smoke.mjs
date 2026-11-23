@@ -536,6 +536,32 @@ async function main() {
     ex.glin_web_frame();
     check(ex.glin_web_surface_ptr() !== 0, `${app.id}: and falls back to the CPU surface`);
 
+    if (app.id === "catalog") {
+      ex.glin_web_pointer(0, 0, app.w >> 1, app.h >> 1);
+      const atTop = () => {
+        for (let i = 0; i < 200; i++) ex.glin_web_wheel(0, -200, 0);
+        ex.glin_web_frame();
+        return ex.glin_web_frame_hash() >>> 0;
+      };
+      const top = atTop();
+
+      ex.glin_web_wheel(0, 60, 0);
+      eq(ex.glin_web_needs_frame(), 1, "catalog: a wheel delta wants a frame");
+      ex.glin_web_frame();
+      const oneEvent = ex.glin_web_frame_hash() >>> 0;
+      check(oneEvent !== top, "catalog: and the content moved", `0x${top.toString(16)} -> 0x${oneEvent.toString(16)}`);
+      eq(atTop(), top, "catalog: wheeled back up it is exactly where it started");
+
+      for (let i = 0; i < 6; i++) ex.glin_web_wheel(0, 10, 0);
+      eq(ex.glin_web_needs_frame(), 1, "catalog: six wheel events between two frames still want ONE frame");
+      ex.glin_web_frame();
+      const burst = ex.glin_web_frame_hash() >>> 0;
+      eq(burst, oneEvent, "catalog: the same total travel lands in the same place as one event of it");
+      eq(ex.glin_web_needs_frame(), 0, "catalog: and the burst is spent, so no further frame is owed");
+      ex.glin_web_frame();
+      eq(ex.glin_web_frame_hash() >>> 0, burst, "catalog: a frame with no new input does not scroll again");
+    }
+
     if (app.id !== "calculator") continue;
 
     // The calculator's keyboard path, end to end: `src/web/keymap.zig` translates
