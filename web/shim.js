@@ -68,9 +68,11 @@ import { createStore } from "./store.js";
  * same app type to the same ABI, so the page needs no per-app code at all.
  *
  * Keep this list in step with `zig build web`: `web/smoke.mjs` boots every module
- * named here, and a name with no file is a page that 404s.
+ * named here, and a name with no file is a page that 404s. An app that lives in
+ * its OWN repository is not in this list — it ships an `apps.json` beside its
+ * module instead, and `loadApps` below merges the two.
  */
-const APPS = {
+const BUILT_IN_APPS = {
   demo: { file: "glinlandui.wasm", label: "demo" },
   calculator: { file: "glinlandui-calculator.wasm", label: "calculator" },
   todo: { file: "glinlandui-todo.wasm", label: "todo (MVVM)" },
@@ -78,6 +80,37 @@ const APPS = {
   "file-dialog": { file: "glinlandui-file-dialog.wasm", label: "file dialog" },
   "lazy-scroll": { file: "glinlandui-lazy-scroll.wasm", label: "10,000 rows" },
 };
+
+/**
+ * The apps this PAGE serves: the built-ins, plus whatever `apps.json` beside the
+ * module adds.
+ *
+ * A toolkit that can only run the modules compiled inside its own repository is a
+ * toolkit you cannot ship with: an app in its own repo builds its own wasm module
+ * and needs only a name, a file and a label to appear in `?app=`. The file is
+ * optional and its absence is normal — the built-in list is what `zig build web`
+ * installs, and a page without `apps.json` behaves exactly as before. A malformed
+ * entry is skipped for the same reason: a page that cannot read one line of its
+ * menu should still boot the apps it carries.
+ */
+async function loadApps() {
+  let extra = null;
+  try {
+    const response = await fetch("apps.json", { cache: "no-cache" });
+    if (response.ok) extra = await response.json();
+  } catch {
+    extra = null;
+  }
+  if (extra === null || typeof extra !== "object") return BUILT_IN_APPS;
+  const merged = { ...BUILT_IN_APPS };
+  for (const [id, entry] of Object.entries(extra)) {
+    if (!entry || typeof entry.file !== "string" || entry.file.length === 0) continue;
+    merged[id] = { file: entry.file, label: typeof entry.label === "string" ? entry.label : id };
+  }
+  return merged;
+}
+
+const APPS = await loadApps();
 
 /**
  * Which application to load.
@@ -206,13 +239,30 @@ async function main() {
   let module;
   try {
     const response = await fetch(WASM_FILE);
-    if (!response.ok) throw new Error(`GET ${WASM_FILE} -> ${response.status} ${response.statusText}`);
+    if (!response.ok) {
+      const error = new Error(`GET ${WASM_FILE} -> ${response.status} ${response.statusText}`);
+      error.status = response.status;
+      throw error;
+    }
     module = await WebAssembly.compile(await response.arrayBuffer());
   } catch (err) {
-    fail(
-      `Could not load ${WASM_FILE}. It must be served over http(s) — a file:// page cannot fetch a module.`,
-      err,
-    );
+    // Three failures that used to share one sentence, and it blamed the wrong one:
+    // a page opened from disk, a module this page does not host, and a real load
+    // failure. The second is what an external app hits when its `apps.json` is
+    // missing or names a file it did not install, so it must say which name and
+    // which file — the fix is a file, not a server.
+    if (location.protocol === "file:") {
+      fail("This page must be served over http(s): a file:// page cannot fetch a module.", err);
+    } else if (err?.status === 404) {
+      const named = Object.hasOwn(APPS, APP);
+      fail(
+        `The page does not host "${APP}": ${WASM_FILE} is not next to it` +
+          (named ? "." : `, and no apps.json or built-in entry names "${APP}".`),
+        err,
+      );
+    } else {
+      fail(`Could not load ${WASM_FILE}.`, err);
+    }
     return;
   }
 
@@ -997,11 +1047,16 @@ async function main() {
       exports.glin_web_frame();
       present();
       syncRoute();
-      syncStore();
       syncText();
-      syncNet();
       reportOnce();
     }
+    // OUTSIDE the frame guard, both of them: an answer is applied INSIDE a frame,
+    // and the request or the write that answer starts has to leave on this tick.
+    // Waiting for the next frame looks harmless and is not — a load that drew what
+    // it already had marks nothing dirty, so the request would sit staged forever
+    // while the app waited for an answer it never asked for.
+    syncStore();
+    syncNet();
     requestAnimationFrame(loop);
   }
 
