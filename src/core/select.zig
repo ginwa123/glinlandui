@@ -14,6 +14,9 @@ pub const TextBackend = platform.text_impl;
 /// The system clipboard's text: the pasteboard on macOS, a no-op stub on a host with no backend and in every test build.
 pub const Clipboard = platform.clipboard;
 
+/// The persistence backend: the bytes an app keeps across a reload, in whatever store this host has.
+pub const Storage = platform.storage;
+
 /// The monotonic millisecond clock: a real one on every native backend, none in a test build (which keeps a frame's delta deterministic).
 pub const Clock = platform.clock;
 

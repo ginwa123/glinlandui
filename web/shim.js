@@ -55,6 +55,8 @@
 // bundler and no build step. `shim.js` keeps the decisions; `gpu.js` makes the
 // API calls a page cannot delegate to Zig.
 import { createBackend } from "./gpu.js";
+// The page's IndexedDB half of the persistence ABI: one string in, one string out.
+import { createStore } from "./store.js";
 
 /**
  * Every application `zig build web` installs, and the module each one runs.
@@ -498,6 +500,7 @@ async function main() {
     exports.glin_web_frame();
     present();
     syncRoute();
+    syncStore();
     const t1 = performance.now();
     // Latency instrumentation, off unless the page asks for it. `?perf` in the
     // URL turns it on, so a developer can see the real cost of a click without
@@ -576,6 +579,72 @@ async function main() {
   const scratchLen = exports.glin_web_key_scratch_len();
   const encoder = new TextEncoder();
 
+  // ---- persistence ----
+  //
+  // The app keeps a document of its own settings (`src/core/storage.zig`); the
+  // page keeps the bytes of it in IndexedDB. Three calls, and the app owns every
+  // decision behind them:
+  //
+  //   boot    read the stored string, hand it to `glin_web_store_adopt`, and the
+  //           app applies it on the frame that adopt requests.
+  //   change  the app marks its document dirty and stages it, so
+  //           `glin_web_store_dirty()` says a write is owed.
+  //   write   read the staged bytes, `glin_web_store_clean()`, and persist them
+  //           DEBOUNCED — a slider drag is one write, not one per pixel.
+  //
+  // The whole block is declared before the first `await` below, so an event that
+  // arrives while the store is opening cannot reach an uninitialised `syncStore`.
+  const store = createStore({ name: "glinlandui", storeName: "state" });
+  const storeScratch = exports.glin_web_store_scratch();
+  const storeScratchLen = exports.glin_web_store_scratch_len();
+  const storeDecoder = new TextDecoder();
+  let storeTimer = 0;
+  // The write the page still owes. It is kept until a save COMMITS, so a reload
+  // inside the debounce window, or a write that failed on a quota, is retried
+  // rather than lost — the module has already stopped owing it.
+  let storePending = null;
+
+  /** Write the pending document now: the debounce expiring, or the page going away. */
+  function flushStore() {
+    clearTimeout(storeTimer);
+    storeTimer = 0;
+    if (storePending === null) return;
+    const text = storePending;
+    storePending = null;
+    void store.save(APP, text).then((ok) => {
+      if (!ok && storePending === null) storePending = text;
+    });
+  }
+
+  /** The stored document, handed to the module. Absent is normal, not an error. */
+  async function adoptStored() {
+    if (!store.available || storeScratch === 0 || storeScratchLen === 0) return;
+    const text = await store.load(APP);
+    if (typeof text !== "string" || text.length === 0) return;
+    const bytes = encoder.encode(text);
+    // A document larger than the module's slot is refused rather than truncated:
+    // the module answers a half-read document by ignoring it anyway.
+    if (bytes.length > storeScratchLen) return;
+    new Uint8Array(memory.buffer, storeScratch, storeScratchLen).set(bytes, 0);
+    exports.glin_web_store_adopt(storeScratch, bytes.length);
+    drawNow();
+  }
+
+  /** Take the document the app staged, and write it once the reader stops moving. */
+  function syncStore() {
+    if (exports.glin_web_store_dirty() !== 1) return;
+    const len = exports.glin_web_store_len();
+    const ptr = exports.glin_web_store_ptr();
+    // Decoded into a JS string BEFORE `clean`, because the module is free to
+    // overwrite the block the moment it stops owing a write.
+    const text = len === 0 ? "" : storeDecoder.decode(new Uint8Array(memory.buffer, ptr, len));
+    exports.glin_web_store_clean();
+    if (!store.available) return;
+    storePending = text;
+    clearTimeout(storeTimer);
+    storeTimer = setTimeout(flushStore, 250);
+  }
+
   addEventListener("keydown", (event) => {
     const consumed = sendKey(event.code, 1);
     // Draw before deciding on `preventDefault`: the key has already been applied
@@ -611,7 +680,12 @@ async function main() {
     exports.glin_web_blur();
     drawNow();
   });
-  addEventListener("pagehide", () => exports.glin_web_shutdown());
+  // A write still inside the debounce window is flushed on the way out: the timer
+  // dies with the page, and the module has already stopped owing the document.
+  addEventListener("pagehide", () => {
+    flushStore();
+    exports.glin_web_shutdown();
+  });
 
   // ---- the font ----
   //
@@ -711,6 +785,10 @@ async function main() {
   // route must see the address the URL carried.
   adoptLocation();
 
+  // Then the app's own document, also before the first frame, so a reload draws
+  // the restored screen once instead of drawing the default one and flipping.
+  await adoptStored();
+
   // ---- the loop ----
   let reported = false;
   function loop() {
@@ -718,6 +796,7 @@ async function main() {
       exports.glin_web_frame();
       present();
       syncRoute();
+      syncStore();
       reportOnce();
     }
     requestAnimationFrame(loop);

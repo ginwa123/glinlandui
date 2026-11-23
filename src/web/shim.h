@@ -249,6 +249,64 @@ uint32_t glin_web_route_scratch_len(void);
 uint32_t glin_web_location(const uint8_t *path, uint32_t path_len);
 
 /* ---------------------------------------------------------------------------
+ * Persistence: the document the app keeps
+ *
+ * `src/core/storage.zig` owns the format — a bounded key/value document with a
+ * version and a migration — and `src/web/storage.zig` owns the slot the bytes
+ * sit in. This header is only the page's way in and out of that slot.
+ *
+ * The direction is the same as everywhere else, and here it is forced: IndexedDB
+ * is asynchronous and page-only, while the module imports NOTHING and every
+ * export is synchronous. So the page owns the database and the module owns the
+ * document:
+ *
+ *   boot      the page reads IndexedDB, writes the bytes into `store_scratch`,
+ *             and calls `glin_web_store_adopt`; the app applies them on the next
+ *             frame (which the adopt itself requests, because a load lands
+ *             between frames and the loop is idle by default).
+ *   change    an intent marks the app's document dirty; the app re-encodes and
+ *             stages it, and `glin_web_store_dirty` says a write is owed.
+ *   write     the page reads `store_ptr`/`store_len`, calls `glin_web_store_clean`,
+ *             then persists the bytes — debounced, so a slider drag is one write
+ *             and not one per pixel.
+ *
+ * The REVISION is the mirror of the router's generation: it moves on every
+ * document the page hands back, so the page can record "I have already answered
+ * this one" without comparing bytes.
+ * ------------------------------------------------------------------------ */
+
+/* A block the page writes a stored document into before `glin_web_store_adopt`,
+ * so adopting one allocates nothing and cannot grow the heap (see the memory
+ * rule at the top of this header). Its length is `storage.max_document_bytes`
+ * (4096); a longer document is refused rather than truncated, because a
+ * half-read document is worse than a default one. */
+uint32_t glin_web_store_scratch(void);
+uint32_t glin_web_store_scratch_len(void);
+
+/* The document the app wants stored, as an OFFSET into wasm memory, and its
+ * length in bytes. 0 / 0 means nothing is owed. Valid until the next
+ * `glin_web_store_clean` or the next frame, so read it in the same tick. */
+uint32_t glin_web_store_ptr(void);
+uint32_t glin_web_store_len(void);
+
+/* Moves on every document the page hands back. The page keeps the last value it
+ * answered; anything else is a new document to apply. */
+uint32_t glin_web_store_revision(void);
+
+/* The page handing back what it stored, or a zero length when the app has never
+ * stored anything. Returns the revision it produced, which the page records as
+ * answered. Requests a frame, so the restored document is drawn. */
+uint32_t glin_web_store_adopt(uint32_t ptr, uint32_t len);
+
+/* 1 while a write is owed, 0 otherwise — one integer read per frame in the
+ * common case, which is what keeps an idle tab idle. */
+uint32_t glin_web_store_dirty(void);
+
+/* The page confirming it has read the bytes and will persist them. A second call
+ * is a no-op, so a page may be generous with it. */
+void glin_web_store_clean(void);
+
+/* ---------------------------------------------------------------------------
  * Memory handed IN (the font)
  * ------------------------------------------------------------------------ */
 

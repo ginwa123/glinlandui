@@ -8,6 +8,8 @@ pub const max_filter: usize = 64;
 pub const max_note: usize = 64;
 // The row that draws a pick state: three radios, so three click contexts.
 pub const radio_count: usize = 3;
+// How many sections the nav's "recently viewed" list keeps, most recent first.
+pub const max_recent: usize = 5;
 
 pub const Text = [max_text:0]u8;
 pub const Filter = [max_filter:0]u8;
@@ -34,6 +36,17 @@ pub const CatalogUiState = struct {
     draft: Text = .{0} ** max_text,
     filter: Filter = .{0} ** max_filter,
     last: Note = .{0} ** max_note,
+    // The sections the reader has looked at, most recent first, as indices into `sections`: what the document stores as slugs.
+    recent: [max_recent]usize = .{0} ** max_recent,
+    recent_len: usize = 0,
+
+    // The sections the reader has been to, most recent first, with no duplicates and no more than `max_recent` of them.
+    pub fn withRecent(self: CatalogUiState, indices: []const usize) CatalogUiState {
+        var next = self;
+        next.recent_len = @min(indices.len, max_recent);
+        for (0..next.recent_len) |i| next.recent[i] = indices[i];
+        return next;
+    }
 
     // `val text by state.draft.collectAsState()`: the field's value prop, and what the field reports back.
     pub fn draftText(self: *const CatalogUiState) []const u8 {

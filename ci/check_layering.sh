@@ -164,7 +164,7 @@ for f in src/mac/present.zig src/mac/keymap.zig src/mac/adapter.zig src/mac/inpu
          src/windows/present.zig src/windows/renderer.zig src/windows/text.zig \
          src/windows/file_dialog_model.zig \
          src/web/present.zig src/web/keymap.zig src/web/adapter.zig src/web/input.zig \
-         src/web/renderer.zig src/web/text.zig src/web/compat_heap.zig \
+         src/web/renderer.zig src/web/text.zig src/web/compat_heap.zig src/web/storage.zig \
          src/core/file_dialog_contract.zig src/core/file_dialog_portable.zig; do
   # Match the CALL, not a mention: these files legitimately discuss @cImport in
   # their doc comments ("this module needs no @cImport"), and a rule that cannot

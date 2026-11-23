@@ -138,6 +138,38 @@ fn navBody(scope: *Scope) void {
         group = s.group;
         navRow(scope, i, false);
     }
+    // Where the reader has been, restored from the host's document: the list is empty until they have opened something.
+    if (scope.state.recent_len == 0) return;
+    recentHead(scope);
+    for (0..scope.state.recent_len) |slot| recentRow(scope, slot, scope.state.recent[slot]);
+}
+
+fn recentHead(scope: *Scope) void {
+    box_mod.box(.{
+        .id = .{ .text = "catalog.nav.recent" },
+        .w = .grow,
+        .pad = props.Pad.sides(14, 8, 4, 8),
+    }, scope.theme, recentHeadChildren);
+}
+
+fn recentHeadChildren(theme: Theme) void {
+    text_mod.label(.{ .label = .{ .text = "RECENT", .size = theme.type_scale.caption, .color = theme.colors.text_done } });
+}
+
+// A recent entry is the same row as the nav's own, with an id of its own: two declarations of one section cannot share one.
+fn recentRow(scope: *Scope, slot: usize, index: usize) void {
+    const c = scope.theme.colors;
+    box_mod.box(.{
+        .id = .{ .text = frame.formatText("catalog.recent.{d}", .{slot}) },
+        .w = .grow,
+        .direction = .row,
+        .gap = .{ .px = 8 },
+        .child_align = .{ .y = .center },
+        .pad = props.Pad.axes(5, 8),
+        .radius = props.Radius.all(4),
+        .hover_bg = c.hover,
+        .on_click = .{ .f = onGoto, .ctx = &scope.vm.goto_ctxs[index] },
+    }, LinkCtx{ .scope = scope, .index = index, .compact = true }, linkChildren);
 }
 
 const GroupCtx = struct { theme: Theme, group: state_mod.Group };

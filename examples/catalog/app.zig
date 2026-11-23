@@ -36,6 +36,8 @@ pub const App = struct {
         _ = h;
         const self: *App = @ptrCast(@alignCast(ctx.?));
         const model = self.vm();
+        // The host's document first: it decides the theme this very frame is drawn with, so a reload does not flash the default one.
+        model.syncStorage();
         const theme_now = self.currentTheme();
         // One line, and every widget under it that left a spacing prop to the theme follows: the parent owns the theme.
         glinlandui.theme.setCurrent(theme_now);
@@ -70,7 +72,7 @@ fn sectionIndex(id: []const u8) usize {
     return 0;
 }
 
-fn boot(app: *App) !Driver {
+fn bootPrepared(app: *App) !Driver {
     app.start();
     var driver = try Driver.initOwned(std.heap.page_allocator, app, App.content);
     errdefer driver.deinit();
@@ -78,6 +80,18 @@ fn boot(app: *App) !Driver {
     // The first frame has no layout yet, so a scroll container's clip is 0x0 until it has painted once.
     driver.frame();
     return driver;
+}
+
+fn boot(app: *App) !Driver {
+    // Every test starts from a host that stored nothing: the backend is process-global, so the fixture is explicit.
+    glinlandui.storage_backend.reset();
+    return bootPrepared(app);
+}
+
+fn bootAdopting(app: *App, document: []const u8) !Driver {
+    glinlandui.storage_backend.reset();
+    try testing.expect(glinlandui.storage_backend.adopt(document));
+    return bootPrepared(app);
 }
 
 test "every section is declared and drawn" {
@@ -210,4 +224,82 @@ test "the palette is the kit's, role by role" {
     inline for (std.meta.fields(glinlandui.theme.Colors)) |f| {
         try testing.expect(driver.exists(f.name));
     }
+}
+
+// ---- persistence ----------------------------------------------------------------------------------------------
+
+test "a stored document comes back on the first frame, and the nav draws what it remembered" {
+    // What a reload sees: the theme the reader chose, the controls they left picked, and where they had been.
+    var app = App{};
+    var driver = try bootAdopting(
+        &app,
+        "{\"v\":2,\"e\":{\"dense\":\"1\",\"tab\":\"2\",\"checked\":\"0\",\"tree\":\"4\",\"slider\":\"30\",\"recent\":\"tabs,colour-roles\"}}",
+    );
+    defer driver.deinit();
+    defer glinlandui.storage_backend.reset();
+
+    try testing.expect(app.vm().dense);
+    try testing.expect(!app.vm().uiState().checked);
+    try testing.expectEqual(@as(usize, 2), app.vm().uiState().tab);
+    try testing.expectEqual(@as(usize, 4), app.vm().uiState().tree_row);
+    try testing.expectApproxEqAbs(@as(f32, 30), app.vm().uiState().slider, 0.01);
+    // Held is not enough: the recently-viewed rows are part of the frame that boot drew.
+    try testing.expect(driver.exists("catalog.recent.0"));
+    try testing.expect(driver.exists("catalog.recent.1"));
+
+    // And the theme followed the document, not the default: the same button is narrower than in a roomy window. The width is
+    // read from THIS driver before a second one is created, because the frame the boxes come from is process-wide.
+    const dense_width = driver.box("catalog.btn.primary").?.width;
+    var plain = App{};
+    var roomy = try boot(&plain);
+    defer roomy.deinit();
+    try testing.expect(dense_width < roomy.box("catalog.btn.primary").?.width);
+}
+
+test "an intent stages the document the host stores, and nothing is owed before one" {
+    var app = App{};
+    var driver = try boot(&app);
+    defer driver.deinit();
+    defer glinlandui.storage_backend.reset();
+
+    // A page the reader never touched writes nothing: boot drew frames, and not one of them staged a document.
+    try testing.expect(glinlandui.storage_backend.staged() == null);
+
+    try driver.click("catalog.dense");
+    driver.frame();
+    const staged = glinlandui.storage_backend.staged();
+    try testing.expect(staged != null);
+    const doc = glinlandui.storage.Document.decode(staged.?);
+    try testing.expect(doc != null);
+    try testing.expectEqual(@as(?bool, true), doc.?.getBool("dense"));
+
+    // Opening a section is what the recent list records, so the next document names it.
+    app.vm().gotoSection(sectionIndex("catalog.tree.section"));
+    driver.frame();
+    const next = glinlandui.storage.Document.decode(glinlandui.storage_backend.staged().?);
+    try testing.expect(next != null);
+    try testing.expectEqualStrings("tree", next.?.get("recent").?);
+    try testing.expectEqualStrings("tree", next.?.get("route").?);
+}
+
+test "the document's address is adopted only when the reader did not ask for one" {
+    defer glinlandui.storage_backend.reset();
+
+    // Nothing typed, so the remembered screen is where the app opens.
+    var app = App{};
+    var driver = try bootAdopting(&app, "{\"v\":2,\"e\":{\"route\":\"tabs\"}}");
+    defer driver.deinit();
+    try testing.expect(glinlandui.route.current().is("tabs"));
+
+    // A deep link arrives after the window exists and before its first frame — exactly the order `shim.js` uses — and outranks it.
+    var linked = App{};
+    glinlandui.storage_backend.reset();
+    try testing.expect(glinlandui.storage_backend.adopt("{\"v\":2,\"e\":{\"route\":\"tabs\"}}"));
+    linked.start();
+    var second = try Driver.initOwned(std.heap.page_allocator, &linked, App.content);
+    defer second.deinit();
+    try second.start(.{ .width = 960, .height = 760 });
+    glinlandui.route.adopt("buttons");
+    second.frame();
+    try testing.expect(glinlandui.route.current().is("buttons"));
 }
