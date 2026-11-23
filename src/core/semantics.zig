@@ -7,8 +7,8 @@ const registry = @import("component.zig").click_registry;
 /// Node capacity. Containers register a node too (a component tree without them is a flat list), so the cap covers a whole screen's worth.
 pub const cap: usize = 512;
 
-/// Ancestor chain depth kept per node.
-pub const ancestor_cap: usize = 8;
+/// Ancestor chain depth kept per node: a docs page nests a widget eight containers deep before the card it sits in is counted.
+pub const ancestor_cap: usize = 16;
 
 pub const Role = enum {
     unknown,
@@ -134,7 +134,9 @@ pub fn isPaused() bool {
 
 /// Containers call these for the span of their children's declaration.
 pub fn pushAncestor(id: cl.ElementId, clips: bool) void {
-    if (stack_len < stack.len) stack[stack_len] = .{ .id = id, .clips = clips };
+    // The array holds the INNERMOST `ancestor_cap` containers: a chain deeper than that drops its outermost link, never the nearest clip.
+    if (stack_len >= stack.len) std.mem.copyForwards(Ancestor, stack[0 .. stack.len - 1], stack[1..stack.len]);
+    stack[@min(stack_len, stack.len - 1)] = .{ .id = id, .clips = clips };
     stack_len += 1;
 }
 
@@ -160,9 +162,9 @@ pub fn register(node: Node) void {
     if (paused > 0) return;
     if (count >= cap) return;
     var n = node;
-    const depth = @min(stack_len, ancestor_cap);
-    const off = stack_len - depth; // keep the INNERMOST ancestors
-    for (0..depth) |i| n.ancestors[i] = stack[off + i];
+    // The stack already holds the innermost `ancestor_cap` links, oldest first, so the snapshot is its own prefix.
+    const depth = @min(stack_len, stack.len);
+    for (0..depth) |i| n.ancestors[i] = stack[i];
     n.ancestor_len = @intCast(depth);
     nodes[count] = n;
     count += 1;

@@ -173,6 +173,28 @@ async function main() {
   eq(ex.glin_web_run(), 1, "glin_web_run arms the loop");
   check(ex.glin_web_key_scratch() !== 0, "a key scratch block was allocated");
 
+  // ---- routing ----
+  //
+  // The app owns its address and the page mirrors it into `location.hash`; what the
+  // MODULE must provide is the address itself, a generation that moves only when it
+  // moves, and the page's way in (`glin_web_location`). This is the ABI half of the
+  // router — the desktop half is the same code, driven by `core/route.zig`'s tests.
+  eq(ex.glin_web_route_len(), 0, `a fresh window has no address of its own`);
+  const routeScratch = ex.glin_web_route_scratch();
+  const routeScratchLen = ex.glin_web_route_scratch_len();
+  check(routeScratch !== 0 && routeScratchLen >= 32, `there is a scratch block for an address`, `${routeScratchLen} bytes`);
+  const genBefore = ex.glin_web_route_generation();
+  new Uint8Array(ex.memory.buffer, routeScratch, routeScratchLen).set(new TextEncoder().encode("buttons"), 0);
+  const genAfter = ex.glin_web_location(routeScratch, 7);
+  check(genAfter !== genBefore, `adopting the page's address moves the generation`);
+  eq(ex.glin_web_route_len(), 7, `and the address is what the page said`);
+  eq(
+    new TextDecoder().decode(new Uint8Array(ex.memory.buffer, ex.glin_web_route_ptr(), 7)),
+    "buttons",
+    `and it reads back byte for byte`,
+  );
+  eq(ex.glin_web_location(routeScratch, 7), genAfter, `the same address again is not a change`);
+
   // ---- 4. the dirty-flag contract (the idle-CPU guarantee) ----
   eq(ex.glin_web_needs_frame(), 1, "a frame is wanted before the first one is drawn");
   ex.glin_web_frame();
@@ -436,15 +458,19 @@ async function main() {
     eq(ex.glin_web_log_errors(), 0, `${app.id}: the GPU frame logged no errors`);
 
     // Images: `build.zig` embeds an app's `assets/` directory and the ENGINE decodes it, so a page draws
-    // what a desktop window draws. The catalog is the app that has them, and its three live at the BOTTOM
-    // of a scroll container — so at this size they are culled (a texture nobody can see is not decoded),
-    // and a window tall enough to show them is what proves the pipeline.
+    // what a desktop window draws. The catalog is the app that has them, and its three live near the BOTTOM
+    // of the docs page — so at this size they are culled (a texture nobody can see is not decoded), and
+    // scrolling them into view is what proves the pipeline.
     if (app.id === "catalog") {
       eq(ex.glin_web_gpu_image_count(), 0, "catalog: images below the fold are culled, not decoded");
-      ex.glin_web_resize(1000, 4000);
-      ex.glin_web_gpu_ready(2);
-      ex.glin_web_frame();
-      eq(ex.glin_web_gpu_image_count(), 3, "catalog: a window tall enough decodes its three assets");
+      // The pointer sits in the middle of the page, and the wheel walks down it until the images arrive.
+      ex.glin_web_pointer(0, 0, app.w >> 1, app.h >> 1);
+      for (let i = 0; i < 800 && ex.glin_web_gpu_image_count() === 0; i++) {
+        ex.glin_web_wheel(0, 60, 0);
+        ex.glin_web_gpu_ready(2);
+        ex.glin_web_frame();
+      }
+      eq(ex.glin_web_gpu_image_count(), 3, "catalog: scrolled into view, it decodes its three assets");
       const imgW = ex.glin_web_gpu_image_width(0);
       const imgH = ex.glin_web_gpu_image_height(0);
       check(imgW > 0 && imgH > 0, "catalog: the first image has a size", `${imgW}x${imgH}`);

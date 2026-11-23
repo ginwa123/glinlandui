@@ -8,6 +8,7 @@ const glyphs = @import("../core/glyphs.zig");
 const gpu = @import("gpu.zig");
 const image_store = @import("../core/image_store.zig");
 const renderer = @import("renderer.zig");
+const route = @import("../core/route.zig");
 
 /// The face the page draws with, compiled in by `build.zig`'s `-Dfont` option. It lives in the LIBRARY, not in an application: a browser has no font paths, and a toolkit that made every app carry a typeface would be making every app know how it is being hosted.
 const embedded_font: []const u8 = @import("font_data").bytes;
@@ -36,6 +37,7 @@ pub fn ExportsWithAssets(
         var g_host: ?@import("../core/host.zig").Host = null;
         var g_window: ?window_mod.Window = null;
         var g_key_scratch: []u8 = &.{};
+        var g_route_scratch: []u8 = &.{};
 
         /// Log counters.
         pub var log_errors: u32 = 0;
@@ -71,6 +73,9 @@ pub fn ExportsWithAssets(
             if (g_window != null) return 0;
             const alloc = std.heap.wasm_allocator;
 
+            // A window starts with an empty address; the page then says where the app really is (`glin_web_location`).
+            route.reset();
+
             // The app is allocated here rather than declared as a global because its type is only known at comptime.
             const app_ptr = alloc.create(App) catch return 0;
             app_ptr.* = .{};
@@ -101,6 +106,10 @@ pub fn ExportsWithAssets(
             const scratch = alloc.alloc(u8, key_scratch_len) catch return 0;
             scratch[0] = 0;
             g_key_scratch = scratch;
+
+            const route_scratch = alloc.alloc(u8, route.max_path) catch return 0;
+            route_scratch[0] = 0;
+            g_route_scratch = route_scratch;
 
             // The images this build carries, registered before the first frame: the renderer looks them up by the same path the app declared.
             image_store.register(assets);
@@ -417,6 +426,39 @@ pub fn ExportsWithAssets(
 
         export fn glin_web_key_scratch_len() u32 {
             return @intCast(g_key_scratch.len);
+        }
+
+        // Routing: the address the app is showing, and the page's way of saying where it really is.
+
+        /// The route's bytes, as an offset into wasm memory (0 when the app has no address yet).
+        export fn glin_web_route_ptr() u32 {
+            return offsetOf(route.address());
+        }
+
+        export fn glin_web_route_len() u32 {
+            return @intCast(route.address().len);
+        }
+
+        /// Changes on every navigation, so a page can tell an address it has already mirrored from a new one.
+        export fn glin_web_route_generation() u32 {
+            return route.generation();
+        }
+
+        /// A block the page may write an address into, so adopting one costs no allocation and cannot grow the heap.
+        export fn glin_web_route_scratch() u32 {
+            if (g_route_scratch.len == 0) return 0;
+            return @intCast(@intFromPtr(g_route_scratch.ptr));
+        }
+
+        export fn glin_web_route_scratch_len() u32 {
+            return @intCast(g_route_scratch.len);
+        }
+
+        /// The page's address (a deep link, Back, an edited URL), returning the generation the page records as mirrored.
+        export fn glin_web_location(path: [*]const u8, path_len: u32) u32 {
+            // A zero length is an ADDRESS — the root — not "nothing to say": Back to the bare URL has to arrive here too.
+            route.adopt(if (path_len == 0) "" else path[0..path_len]);
+            return route.generation();
         }
     };
 }

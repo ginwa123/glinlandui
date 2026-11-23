@@ -179,6 +179,48 @@ void glin_web_scale(float scale);
 void glin_web_blur(void);
 
 /* ---------------------------------------------------------------------------
+ * Routing: the address the app is showing
+ *
+ * The app owns its address; the page owns the URL. `src/core/route.zig` is the
+ * whole mechanism — the app navigates by intent and reads the current route while
+ * it declares — and the browser is one backend that mirrors it: `#buttons` in
+ * `location.hash`, and the browser's own Back button adopted back in. The same
+ * code runs on the desktop, where there is no URL to mirror.
+ *
+ * `?app=catalog` is the PAGE's business (which module to load) and the fragment is
+ * the APP's (which screen), so two apps can both have an `#overview` and the app
+ * switcher never has to know what a screen is.
+ *
+ * The page makes no decisions here either: it copies the router's address into the
+ * URL, and the URL's address back into the router. The GENERATION is what makes
+ * that loop safe — an address the page has already mirrored is not pushed again,
+ * which is what keeps a Back button from skipping two entries at a time.
+ * ------------------------------------------------------------------------ */
+
+/* The route's bytes as an OFFSET into wasm memory, and their length. 0 length means
+ * the app has no address yet (it has not navigated and the page supplied none). */
+uint32_t glin_web_route_ptr(void);
+uint32_t glin_web_route_len(void);
+
+/* Changes on every navigation, and only then. The page keeps the last value it
+ * mirrored; anything else is a new address to write into the URL. */
+uint32_t glin_web_route_generation(void);
+
+/* A block the page writes an address into before `glin_web_location`, so adopting
+ * one allocates nothing and cannot grow the heap (see the memory rule above). Its
+ * length is `route.max_path`; a longer address is truncated, not rejected. */
+uint32_t glin_web_route_scratch(void);
+uint32_t glin_web_route_scratch_len(void);
+
+/* The page telling the toolkit where the app really is: the boot deep link
+ * (`#buttons`), a `popstate` from the browser's Back/Forward, or an edited URL.
+ *
+ * This REPLACES the current entry instead of pushing one, because the environment
+ * has already moved. Returns the generation it produced, which the page records as
+ * mirrored so it does not push the address it just adopted. */
+uint32_t glin_web_location(const uint8_t *path, uint32_t path_len);
+
+/* ---------------------------------------------------------------------------
  * Memory handed IN (the font)
  * ------------------------------------------------------------------------ */
 

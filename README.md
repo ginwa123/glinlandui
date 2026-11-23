@@ -32,6 +32,7 @@ versa.
 - [Quick start](#quick-start)
 - [Using it as a dependency](#using-it-as-a-dependency)
 - [Hello world](#hello-world)
+- [Routing: an address on every backend](#routing-an-address-on-every-backend)
 - [Colors](#colors)
 - [File and folder dialogs](#file-and-folder-dialogs)
 - [Architecture](#architecture)
@@ -66,10 +67,10 @@ zig build run               # the demo app  (needs a Wayland display)
 zig build run-calculator    # the calculator example (needs a Wayland display)
 zig build run-todo          # the MVVM todo example — state, ViewModel, view, setContent
 zig build run-lazy-scroll   # 10,000 virtualised rows, with a live frame-rate meter
-zig build run-catalog       # every component on one screen, in the kit's palette
+zig build run-catalog       # the component reference: nav, live previews, usage per section
 
-# Every one of those runs in a BROWSER too: `-Dweb` builds every app for wasm,
-# serves the page and prints the URL. `?app=<name>` picks one.
+# Every one of those runs in a BROWSER too: `-Dweb` builds THAT app for wasm
+# (and nothing else), serves the page and prints the URL. `?app=<name>` picks it.
 zig build -Dweb run-catalog   # -> http://localhost:8080/?app=catalog
 zig build -Dweb run-todo      # -> http://localhost:8080/?app=todo
 zig build -Dweb run           # -> http://localhost:8080/?app=demo
@@ -280,6 +281,48 @@ wants a box, a label or a field uses `components.*`. What an app may need from t
 (`elementId`, `clayId`, `bounds`) and `scroll` (`view`).
 
 `examples/todo/` is the worked example, and its README is the full Compose-to-glinlandui mapping table.
+
+---
+
+## Routing: an address on every backend
+
+`glinlandui.route` is the screen's address, as a value. An app **navigates by
+intent** and **reads the route while it declares**, so the same code runs in a
+browser and in a desktop window — the browser merely has somewhere to put it.
+
+```zig
+const route = glinlandui.route;
+
+// An intent: from a click, a shortcut, a job that finished.
+route.navigate("text-field");
+route.back();
+route.forward();
+
+// During declare: the address, and the pieces of it.
+const here = route.current();
+if (here.is("text-field")) drawTheField();
+const shape = here.segment(1);          // "text-field/4" -> "4"
+const child = here.child("4");          // a new Route: "text-field/4"
+```
+
+The **browser** mirrors the address into `location.hash`, so
+`http://localhost:8080/?app=catalog#text-field` is a deep link, the Back button
+walks the app's own history, and a page that never navigates never touches
+`history` at all: `web/shim.js` copies the router's address into the URL and the
+URL's address back into the router, and decides nothing else. `?app=` stays the
+page's business (which module to load) and the fragment is the app's (which
+screen), so two apps can both have an `#overview`.
+
+On the **desktop** there is no URL: the same value carries the address, the
+history is the router's own (16 entries), and `route.back()` is what a window has
+instead of a Back button. `examples/catalog` is the worked example — a nav click,
+a deep link and Back all arrive through `route`, and the page scrolls from the
+address rather than from the click, so a browser Back moves the page exactly as a
+click does.
+
+A route change asks the engine for a frame (`frame.requestFrame()`), which every
+backend loop drains before it idles: a screen that changed with no input event to
+carry it still repaints.
 
 ---
 

@@ -3,6 +3,9 @@ const std = @import("std");
 const glinlandui = @import("glinlandui");
 const frame = glinlandui.frame;
 const input = glinlandui.components.input;
+const scroll_mod = glinlandui.components.scroll;
+const clipboard = glinlandui.clipboard;
+const route = glinlandui.route;
 const split_mod = glinlandui.components.split;
 const sidebar_mod = glinlandui.components.sidebar;
 const state_mod = @import("state.zig");
@@ -10,10 +13,47 @@ const state_mod = @import("state.zig");
 const CatalogUiState = state_mod.CatalogUiState;
 const Theme = glinlandui.theme.Theme;
 
-// The ids the model itself needs: the field that takes the keyboard, and the slider track an intent measures.
+// The ids the model itself needs: the field that takes the keyboard, the slider track an intent measures, and the page an anchor scrolls.
 pub const field_id = "catalog.field";
 pub const dd_field_id = "catalog.dd.field";
 pub const slider_id = "catalog.slider";
+pub const page_id = "catalog.scroll";
+
+// Whether the page has been laid out yet: a box belongs to a frame that has already happened.
+fn layoutKnown() bool {
+    return frame.bounds(frame.clayId(page_id)) != null;
+}
+
+// The section lands at the top of the page: the boxes are the previous frame's, which is what the reader sees.
+pub fn scrollToSection(index: usize) void {
+    if (index >= state_mod.sections.len) return;
+    const target = frame.bounds(frame.clayId(state_mod.sections[index].id)) orelse return;
+    const pane = frame.bounds(frame.clayId(page_id)) orelse return;
+    scroll_mod.scrollBy(page_id, 0, target.y - pane.y - 16);
+}
+
+// The whole page moves: an empty address is the top of the reference, which is where the reader starts.
+fn scrollToTop() void {
+    scroll_mod.scrollBy(page_id, 0, -1_000_000);
+}
+
+// Put the page where an address says. False when there is no layout yet, so the caller keeps the address pending.
+fn applyRoute(here: route.Route) bool {
+    if (!layoutKnown()) return false;
+    if (here.isEmpty()) {
+        scrollToTop();
+        return true;
+    }
+    for (state_mod.sections, 0..) |s, i| {
+        if (here.is(s.slug)) {
+            scrollToSection(i);
+            return true;
+        }
+    }
+    // An address this page has no section for: the top is the only honest answer.
+    scrollToTop();
+    return true;
+}
 
 pub const CatalogViewModel = struct {
     // The state, as a plain value: an intent replaces it, and the next frame reads whatever it says.
@@ -26,6 +66,12 @@ pub const CatalogViewModel = struct {
     // A radio's click carries only a context, so each one gets a context the model owns.
     radio_ctxs: [state_mod.radio_count]RadioCtx = undefined,
 
+    // The route generation this screen last acted on, the address it still has to move to, and the context each nav
+    // row clicks with.
+    seen_route: u32 = 0,
+    pending: ?route.Route = null,
+    goto_ctxs: [state_mod.sections.len]GotoCtx = undefined,
+
     // The two surfaces whose size the pointer owns: the widget keeps the gesture, the model keeps the number.
     split_state: split_mod.State = .{ .size = 150 },
     sidebar_state: sidebar_mod.State = .{ .width = 240, .expanded_width = 240 },
@@ -37,6 +83,11 @@ pub const CatalogViewModel = struct {
     dense: bool = false,
 
     pub const RadioCtx = struct {
+        vm: *CatalogViewModel,
+        index: usize,
+    };
+
+    pub const GotoCtx = struct {
         vm: *CatalogViewModel,
         index: usize,
     };
@@ -70,6 +121,57 @@ pub const CatalogViewModel = struct {
         self.dd_field.bind();
 
         for (&self.radio_ctxs, 0..) |*rc, i| rc.* = .{ .vm = self, .index = i };
+        for (&self.goto_ctxs, 0..) |*g, i| g.* = .{ .vm = self, .index = i };
+    }
+
+    // `val active by route`: the nav's star and the top bar's breadcrumb both read the address, so a back button moves them.
+    pub fn isActive(self: *const CatalogViewModel, index: usize) bool {
+        _ = self;
+        if (index >= state_mod.sections.len) return false;
+        return route.current().is(state_mod.sections[index].slug);
+    }
+
+    pub fn activeTitle(self: *const CatalogViewModel) []const u8 {
+        _ = self;
+        const here = route.current();
+        for (state_mod.sections) |s| {
+            if (here.is(s.slug)) return s.title;
+        }
+        return "overview";
+    }
+
+    // A click is an INTENT, not a scroll: it changes the address, and `syncRoute` is what moves the page — the same
+    // path a deep link and the browser's back button take.
+    pub fn gotoSection(self: *CatalogViewModel, index: usize) void {
+        if (index >= state_mod.sections.len) return;
+        const slug = state_mod.sections[index].slug;
+        route.navigate(slug);
+        // The address was already this one (a second click on the row the reader is on), so the intent still has to move.
+        if (self.seen_route == route.generation()) scrollToSection(index);
+    }
+
+    // The address changed under the app — a deep link, Back, or the app's own intent: put the page where it says. A
+    // window's first frame has no boxes yet, so an address that arrives before layout is held until the next frame.
+    pub fn syncRoute(self: *CatalogViewModel) void {
+        const generation = route.generation();
+        if (generation != self.seen_route) {
+            self.seen_route = generation;
+            self.pending = route.current();
+        }
+        const here = self.pending orelse return;
+        if (applyRoute(here)) {
+            self.pending = null;
+            return;
+        }
+        // There is no layout yet: ask for the frame that will have one, which is where a boot deep link lands.
+        frame.requestFrame();
+    }
+
+    // A snippet is worth reading and worth keeping: the system clipboard takes the text, the page says so.
+    pub fn copyUsage(self: *CatalogViewModel, index: usize) void {
+        if (index >= state_mod.sections.len) return;
+        clipboard.write(state_mod.sections[index].snippet);
+        self.state = self.state.withLast("usage copied");
     }
 
     // `val state by vm.state`: the value the view draws.

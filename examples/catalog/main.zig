@@ -7,8 +7,9 @@ const catalog = @import("catalog");
 const Opts = struct {
     bench: bool = false,
     frames: usize = 300,
-    width: u32 = 960,
-    height: u32 = 760,
+    // A docs page is three columns: the nav, the sections and the contents. A 960-wide window fits two of them.
+    width: u32 = 1280,
+    height: u32 = 820,
     scale: f32 = 2,
 };
 
@@ -52,7 +53,7 @@ pub fn main(init: std.process.Init) !void {
         .title = "glinlandui · catalog",
         .width = opts.width,
         .height = opts.height,
-        .min_width = 520,
+        .min_width = 480,
         .min_height = 400,
     });
 

@@ -49,6 +49,9 @@ pub const view_model = @import("core/view_model.zig");
 // A theme as a value: colour roles and a type scale, with neutral dark/light defaults.
 pub const theme = @import("core/theme.zig");
 
+// The address the window is showing: navigated by intent, read while declaring, and the same on every backend.
+pub const route = @import("core/route.zig");
+
 // Pure utils (geometry / input / EGL / test-frames + legacy helpers).
 pub const Placement = platform.Placement;
 pub const computePlacement = platform.computePlacement;
@@ -129,9 +132,10 @@ test {
     _ = @import("core/table.zig");
     // Every component, once, through the façade: each one's own tests run exactly once and nothing is bypassed.
     _ = @import("core/component.zig");
-    // The MVVM runtime: the ViewModel store and the theme value.
+    // The MVVM runtime: the ViewModel store, the theme value and the router.
     _ = @import("core/view_model.zig");
     _ = @import("core/theme.zig");
+    _ = @import("core/route.zig");
     _ = @import("core/testing/finders.zig");
     _ = @import("core/testing/assertions.zig");
     _ = @import("core/testing/actions.zig");

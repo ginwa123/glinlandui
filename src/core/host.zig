@@ -626,6 +626,53 @@ fn hostScrollProbeChildren(_: void) void {
     }
 }
 
+fn hostNestedProbeChildren(_: void) void {
+    cl.UI()(.{
+        .id = .ID("host-outer-probe"),
+        .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(40) } },
+    })({});
+    scroll_mod.scroll(.{ .id = .{ .text = "host-inner" }, .w = .{ .fixed = 100 }, .h = .{ .fixed = 50 } }, {}, hostNestedInnerChildren);
+    var i: usize = 0;
+    while (i < 2) : (i += 1) {
+        cl.UI()(.{ .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(40) } } })({});
+    }
+}
+
+fn hostNestedInnerChildren(_: void) void {
+    var i: usize = 0;
+    while (i < 6) : (i += 1) {
+        cl.UI()(.{ .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(40) } } })({});
+    }
+}
+
+fn hostNestedRoot(_: ?*anyopaque, _: u32, _: u32) void {
+    scroll_mod.scroll(.{ .id = .{ .text = "host-outer" }, .w = .{ .fixed = 200 }, .h = .{ .fixed = 100 } }, {}, hostNestedProbeChildren);
+}
+
+test "host: a nested scroll at its end hands the wheel to the page behind it" {
+    var h: Host = undefined;
+    try testHost(&h, null, hostNestedRoot);
+    h.frame(720, 480);
+    const outer_probe = cl.getElementId("host-outer-probe");
+    const y0 = cl.getElementData(outer_probe).bounding_box.y;
+    // Hover the inner container: 50 of 240 points are showing, so 19 notches of 10 exhaust it.
+    const inner = cl.getElementData(cl.getElementId("host-inner")).bounding_box;
+    h.onPointerEvent(inner.x + inner.width * 0.5, inner.y + inner.height * 0.5, false, 0);
+    var i: usize = 0;
+    while (i < 19) : (i += 1) {
+        h.onScrollEvent(0, 10);
+        h.frame(720, 480);
+    }
+    // Every notch goes to the inner list first, and the first notch it cannot use goes to the page behind it.
+    var notches: usize = 0;
+    while (notches < 80 and cl.getElementData(outer_probe).bounding_box.y >= y0) : (notches += 1) {
+        h.onScrollEvent(0, 10);
+        h.frame(720, 480);
+    }
+    try std.testing.expect(cl.getElementData(outer_probe).bounding_box.y < y0);
+    try std.testing.expectApproxEqAbs(@as(f32, 190), scroll_mod.view("host-inner").y, 0.5);
+}
+
 fn hostScrollProbeRoot(_: ?*anyopaque, _: u32, _: u32) void {
     scroll_mod.scroll(.{ .id = .{ .text = "host-scroll" }, .h = .{ .fixed = 100 }, .w = .{ .fixed = 200 } }, {}, hostScrollProbeChildren);
 }
