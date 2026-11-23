@@ -1047,11 +1047,16 @@ async function main() {
       exports.glin_web_frame();
       present();
       syncRoute();
-      syncStore();
       syncText();
-      syncNet();
       reportOnce();
     }
+    // OUTSIDE the frame guard, both of them: an answer is applied INSIDE a frame,
+    // and the request or the write that answer starts has to leave on this tick.
+    // Waiting for the next frame looks harmless and is not — a load that drew what
+    // it already had marks nothing dirty, so the request would sit staged forever
+    // while the app waited for an answer it never asked for.
+    syncStore();
+    syncNet();
     requestAnimationFrame(loop);
   }
 
