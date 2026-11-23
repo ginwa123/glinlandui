@@ -61,6 +61,20 @@ The two things `shim.js` *does* own are the two it cannot delegate:
    one integer read per animation frame: no layout, no rasterization, no pixel
    copy. (This is the atomic "skip the clear, the draw and the present together"
    that `core/frame.zig`'s frame-memo note says the Wayland loop could not do.)
+   Most input handlers also draw immediately, because a click is two events and
+   waiting a refresh for each is 33 ms of nothing. **The wheel is the exception
+   and must stay one:** a trackpad delivers several wheel events per display
+   refresh and a non-passive wheel listener is not coalesced by the browser, so
+   drawing inside that handler rasterizes and presents two or three whole
+   surfaces for one displayed frame, off vsync, of which only the last is ever
+   seen. Measured on a 2880x1800 canvas at three events per refresh: 90 events
+   cost 90 frames and 90 presents where 30 were displayed, and 93% of the main
+   thread. The wheel handler therefore only tells the toolkit, the animation
+   frame draws once with whatever the burst accumulated, and the content lands
+   in exactly the same place (`smoke.mjs` pins that: the same total travel in one
+   event or six ends at the same pixel). A desktop backend already behaves this
+   way — `mac/window.zig` marks the frame dirty and invalidates, and AppKit
+   repaints at the next display refresh.
 2. **Rebuilding its view over wasm memory.** `memory.grow()` detaches every
    `TypedArray` view over the old buffer, and a frame can grow the heap at any
    moment. `blit()` therefore rebuilds when the buffer *identity* or the surface
