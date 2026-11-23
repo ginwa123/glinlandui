@@ -239,13 +239,30 @@ async function main() {
   let module;
   try {
     const response = await fetch(WASM_FILE);
-    if (!response.ok) throw new Error(`GET ${WASM_FILE} -> ${response.status} ${response.statusText}`);
+    if (!response.ok) {
+      const error = new Error(`GET ${WASM_FILE} -> ${response.status} ${response.statusText}`);
+      error.status = response.status;
+      throw error;
+    }
     module = await WebAssembly.compile(await response.arrayBuffer());
   } catch (err) {
-    fail(
-      `Could not load ${WASM_FILE}. It must be served over http(s) — a file:// page cannot fetch a module.`,
-      err,
-    );
+    // Three failures that used to share one sentence, and it blamed the wrong one:
+    // a page opened from disk, a module this page does not host, and a real load
+    // failure. The second is what an external app hits when its `apps.json` is
+    // missing or names a file it did not install, so it must say which name and
+    // which file — the fix is a file, not a server.
+    if (location.protocol === "file:") {
+      fail("This page must be served over http(s): a file:// page cannot fetch a module.", err);
+    } else if (err?.status === 404) {
+      const named = Object.hasOwn(APPS, APP);
+      fail(
+        `The page does not host "${APP}": ${WASM_FILE} is not next to it` +
+          (named ? "." : `, and no apps.json or built-in entry names "${APP}".`),
+        err,
+      );
+    } else {
+      fail(`Could not load ${WASM_FILE}.`, err);
+    }
     return;
   }
 
