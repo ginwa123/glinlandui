@@ -4,7 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 /// How loud a message is.
-pub const Level = enum { warn, err };
+pub const Level = enum { info, warn, err };
 
 /// Where a message goes. The app installs one; the library never assumes a destination.
 pub const Sink = *const fn (level: Level, message: []const u8) void;
@@ -32,6 +32,11 @@ pub fn setSink(s: ?Sink) void {
 /// Put the default back (stderr in production, nothing in a test): what a caller that borrowed the sink restores.
 pub fn resetSink() void {
     sink = &stderrSink;
+}
+
+/// Report something worth seeing that is not a problem: a meter, a one-off diagnostic. Silent in a test, and counted in a browser (which has no stderr).
+pub fn info(comptime fmt: []const u8, args: anytype) void {
+    emit(.info, fmt, args);
 }
 
 /// Report a degraded-but-working condition.

@@ -97,6 +97,14 @@ else switch (builtin.os.tag) {
     else => @import("core/devtools_service_portable.zig"),
 };
 
+/// The value of an environment variable, or null. A host with no environment (a browser, a test) answers null rather than guessing, so a debug knob is one line in every app and needs no `isWasm` guard.
+pub fn getenv(comptime name: []const u8) ?[]const u8 {
+    if (comptime builtin.cpu.arch.isWasm()) return null;
+    const key: [:0]const u8 = comptime name ++ "\x00";
+    const raw = std.c.getenv(key) orelse return null;
+    return std.mem.span(raw);
+}
+
 /// Whether this process was started to be inspected: `GLIN_DEVTOOLS=1` costs a null check and nothing else.
 pub fn devtoolsRequested() bool {
     if (builtin.cpu.arch.isWasm()) return false;

@@ -11,6 +11,7 @@ const soft = @import("../core/render_software.zig");
 const scale_mod = @import("../core/scale.zig");
 const glyphs = @import("../core/glyphs.zig");
 const frame_mod = @import("../core/frame.zig");
+const renderer = @import("renderer.zig");
 
 // NOTE: no render/text/frame re-exports here.
 
@@ -142,6 +143,8 @@ pub const Window = struct {
     /// The frame just drawn, for the page to present.
     pub fn surfaceInfo(self: *Window) ?SurfaceInfo {
         _ = self;
+        // A GPU frame has no CPU pixels at all: the page draws the vertex buffer, and a stale surface would blit old pixels over it.
+        if (renderer.gpuActive()) return null;
         const surface = soft.currentSurface() orelse return null;
         if (!present.blitSizeValid(surface.width, surface.height)) return null;
         return .{
@@ -155,6 +158,13 @@ pub const Window = struct {
     /// Measure the current surface lazily, once per frame, on demand.
     fn ensureDiag(self: *Window) void {
         if (self.diag_frame == self.frames) return;
+        // The GPU path writes no CPU pixels, so both diagnostics stay 0 rather than describing a surface from an earlier CPU frame.
+        if (renderer.gpuActive()) {
+            self.painted_pixels = 0;
+            self.frame_hash = 0;
+            self.diag_frame = self.frames;
+            return;
+        }
         const surface = soft.currentSurface() orelse return;
         self.painted_pixels = present.countPainted(surface.pixels, surface.clear_rgb);
         self.frame_hash = present.frameHash(surface.pixels);
@@ -182,8 +192,11 @@ pub const Window = struct {
         const w = self.state.win_w;
         const h = self.state.win_h;
 
+        // The DOM reports a BACKING-STORE point and the layout is in CSS pixels, so the display scale comes back out here — the one conversion the browser owes the toolkit, and the reason a click used to land only at 100% zoom.
+        const scale = scale_mod.clampScale(self.device_scale);
+        const pt = input_web.toLayout(x, y, scale);
         // Translate to the Delegate's contract: evdev button code on a transition, 0 on motion, coordinates clamped into the canvas.
-        const t = input_web.translate(w, h, .{ .kind = kind, .button = button, .x = x, .y = y }, self.left_held);
+        const t = input_web.translate(w, h, .{ .kind = kind, .button = button, .x = pt.x, .y = pt.y }, self.left_held);
         if (t.pressed and kind == input_web.DOWN) self.left_held = true;
         if (!t.pressed and kind == input_web.UP) self.left_held = false;
         // Remember where the pointer is, for a later synthetic release.
@@ -198,7 +211,8 @@ pub const Window = struct {
     pub fn cancelPointer(self: *Window, x: f32, y: f32) void {
         if (!self.live) return;
         const d = self.delegate orelse return;
-        const t = input_web.cancelRelease(self.left_held, self.state.win_w, self.state.win_h, x, y) orelse return;
+        const pt = input_web.toLayout(x, y, scale_mod.clampScale(self.device_scale));
+        const t = input_web.cancelRelease(self.left_held, self.state.win_w, self.state.win_h, pt.x, pt.y) orelse return;
         self.left_held = false;
         self.state.needs_draw = true;
         d.on_pointer(d.ptr, t.x, t.y, t.pressed, t.button);
@@ -236,6 +250,12 @@ pub const Window = struct {
         self.backing_w = backing_w;
         self.backing_h = backing_h;
         self.applySize();
+    }
+
+    /// The page created a GPU backend (1 WebGPU, 2 WebGL2) or none (0, the CPU rasterizer). Marks the frame dirty, so the next frame is built for the new one.
+    pub fn setBackendKind(self: *Window, kind: u32) void {
+        renderer.setBackendKind(kind);
+        self.state.needs_draw = true;
     }
 
     /// The page's `devicePixelRatio` changed (the window moved to a display with a different density, or the user zoomed).

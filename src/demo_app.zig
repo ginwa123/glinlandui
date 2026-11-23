@@ -14,12 +14,6 @@ pub const App = struct {
     /// What the last file dialog returned, or why it did not.
     pick_buf: [192]u8 = [_]u8{0} ** 192,
 
-    /// The webapp's embedded font, read by `web/exports.zig` from `glin_web_init`.
-    pub const embedded_font: []const u8 = if (@import("builtin").cpu.arch.isWasm())
-        @import("font_data").bytes
-    else
-        &.{};
-
     /// The Clay declare callback: everything drawing happens here.
     pub fn root(ctx: ?*anyopaque, _: u32, _: u32) void {
         const self: *App = @ptrCast(@alignCast(ctx.?));

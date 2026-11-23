@@ -1,5 +1,6 @@
-// glinlandui browser shim — the browser-side peer of `mac/shim.m`, and the ONLY
-// JavaScript in this project.
+// glinlandui browser shim — the browser-side peer of `mac/shim.m`: the page's
+// half of the ABI, and one of exactly two JavaScript files in this project (the
+// other is `gpu.js`, which owns the GPU contexts).
 //
 // ## This file makes no decisions
 //
@@ -12,6 +13,8 @@
 //     CSS px              -> backing px   src/web/present.zig
 //     resize storms       -> one resize   src/web/adapter.zig
 //     RGBA8 -> ImageData                  src/web/present.zig  (the identity)
+//     Clay commands -> vertices+segments  src/web/gpu.zig     (the GPU geometry)
+//     which backend, and the CPU fallback src/web/renderer.zig
 //
 // That is the same division of labour `mac/shim.m` has, and it is the whole
 // reason the shim is short: anything that could be got subtly wrong — a swapped
@@ -19,7 +22,7 @@
 // the boundary, where a test can reach it. `src/web/shim.h` is the contract; this
 // file only calls it.
 //
-// ## The two things this file DOES own
+// ## The things this file DOES own
 //
 // 1. **`memory.grow()` detaches views.** A `TypedArray` over wasm memory becomes
 //    unusable (zero-length) after any allocation that grows the heap, and a
@@ -29,33 +32,65 @@
 //    will not. Getting this wrong produces a UI that renders fine and then
 //    presents as blank, intermittently.
 //
-// 2. **`requestAnimationFrame`.** The toolkit cannot own an event loop in a
+// 2. **The GPU context and its draw calls.** `getContext("webgpu")` and
+//    `getContext("webgl2")` are page-only APIs, so `web/gpu.js` owns them — and
+//    owning the context means owning the ORDER (WebGPU, then WebGL2, then the CPU),
+//    because a canvas hands out one kind of context for its lifetime. Everything
+//    that ends up on screen is still decided in Zig: `web/gpu.js` uploads the
+//    vertex buffer `src/web/gpu.zig` built and samples the atlas it packed, and it
+//    makes no choices about what to draw.
+//
+// 3. **`requestAnimationFrame`.** The toolkit cannot own an event loop in a
 //    browser, so this file runs the loop and asks `glin_web_needs_frame()` first.
 //    An idle UI therefore costs one integer read per animation frame: no layout,
 //    no rasterization, no pixel copy.
 //
 // ## Not a module graph, not a bundler
 //
-// Plain ES module, no imports, no build step. `zig build web` produces
-// `zig-out/web/` and that directory is the whole application.
+// Plain ES modules with one relative import (`./gpu.js`), no package manager, no
+// build step. `zig build web` produces `zig-out/web/` and that directory is the
+// whole application.
 
-const WASM_URL = "glinlandui.wasm";
-const WASM_URL_CALCULATOR = "glinlandui-calculator.wasm";
+// The GPU backends live in their own module: plain ESM, relative path, still no
+// bundler and no build step. `shim.js` keeps the decisions; `gpu.js` makes the
+// API calls a page cannot delegate to Zig.
+import { createBackend } from "./gpu.js";
+
+/**
+ * Every application `zig build web` installs, and the module each one runs.
+ *
+ * One library, six wasm modules, one page: `?app=<id>` picks the file, exactly as
+ * the native builds are one library and six executables. The apps are separate
+ * modules rather than one module with a switch because each has its own `pub fn
+ * main` on the desktop; the browser entry (`examples/<name>/web.zig`) binds the
+ * same app type to the same ABI, so the page needs no per-app code at all.
+ *
+ * Keep this list in step with `zig build web`: `web/smoke.mjs` boots every module
+ * named here, and a name with no file is a page that 404s.
+ */
+const APPS = {
+  demo: { file: "glinlandui.wasm", label: "demo" },
+  calculator: { file: "glinlandui-calculator.wasm", label: "calculator" },
+  todo: { file: "glinlandui-todo.wasm", label: "todo (MVVM)" },
+  catalog: { file: "glinlandui-catalog.wasm", label: "component catalog" },
+  "file-dialog": { file: "glinlandui-file-dialog.wasm", label: "file dialog" },
+  "lazy-scroll": { file: "glinlandui-lazy-scroll.wasm", label: "10,000 rows" },
+};
 
 /**
  * Which application to load.
  *
- * `?app=calculator` loads the calculator; anything else loads the demo. Both are
- * separate wasm modules built from separate entry points (`src/web_main.zig` and
- * `src/web_calculator_main.zig`), sharing this page, this shim and the library —
- * which is exactly the relationship the two native executables have.
+ * An unknown `?app=` falls back to the demo rather than failing the page: a typo
+ * in a URL is not an error worth a blank canvas, and this is the one place the
+ * page has to be forgiving.
  *
- * The choice is a URL parameter rather than a second HTML file because the page
- * is identical: one canvas, one status line, one set of event handlers. A second
- * file would be a copy that drifts.
+ * The choice is a URL parameter rather than a second HTML file because the page is
+ * identical: one canvas, one status line, one set of event handlers. A second file
+ * would be a copy that drifts.
  */
-const APP = new URLSearchParams(location.search).get("app") ?? "demo";
-const WASM_FILE = APP === "calculator" ? WASM_URL_CALCULATOR : WASM_URL;
+const APP = (new URLSearchParams(location.search).get("app") ?? "demo").toLowerCase();
+const ENTRY = APPS[APP] ?? APPS.demo;
+const WASM_FILE = ENTRY.file;
 
 // Mirrors `present.max_device_scale`. Clamped here as well as in Zig so the
 // canvas element is never sized absurdly to begin with; the Zig side is the
@@ -70,16 +105,46 @@ function log(message) {
   if (statusEl) statusEl.textContent = message;
 }
 
-/** @param {string} message @param {unknown} [cause] */
+/**
+ * Report a failure the reader can see.
+ *
+ * The page is the window, so the status line is for the accessibility tree and
+ * not for the eye; a failure is the one thing allowed to cover the app. The panel
+ * is created on demand, so a page that works has no overlay at all.
+ *
+ * @param {string} message
+ * @param {unknown} [cause]
+ */
 function fail(message, cause) {
-  if (statusEl) {
-    statusEl.innerHTML = "";
-    const p = document.createElement("p");
-    p.className = "error";
-    p.textContent = message;
-    statusEl.appendChild(p);
-  }
   console.error("glinlandui:", message, cause ?? "");
+  const text = cause && cause.message ? `${message} — ${cause.message}` : message;
+  let panel = document.getElementById("error");
+  if (!panel) {
+    panel = document.createElement("p");
+    panel.id = "error";
+    panel.className = "error-panel";
+    panel.setAttribute("role", "alert");
+    document.body.appendChild(panel);
+  }
+  panel.textContent = text;
+  log(text);
+}
+
+/**
+ * A window size to pin, from `?w=360&h=430`.
+ *
+ * The canvas fills the viewport by default — a maximised window, which is what a
+ * flexible layout wants. A fixed-size screen (the calculator is designed for
+ * 360x430) reads better at its own size, so this pins the canvas to it and the
+ * page centres it, exactly as a desktop window sits on a desktop. Absent or
+ * nonsense values keep the full-bleed default.
+ */
+function pinnedSize() {
+  const params = new URLSearchParams(location.search);
+  const w = Number.parseInt(params.get("w") ?? "", 10);
+  const h = Number.parseInt(params.get("h") ?? "", 10);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
+  return { w: Math.min(w, 4096), h: Math.min(h, 4096) };
 }
 
 /** The DOM's device pixel ratio, clamped to the toolkit's ceiling. */
@@ -87,6 +152,23 @@ function deviceScale() {
   const raw = window.devicePixelRatio || 1;
   if (!Number.isFinite(raw) || raw <= 0) return 1;
   return Math.min(raw, MAX_DEVICE_SCALE);
+}
+
+/**
+ * Which backends the page may try, from `?gpu=`.
+ *
+ * `auto` (the default) is WebGPU, then WebGL2, then the CPU rasterizer. The other
+ * values exist so the three paths can be compared on one machine without touching
+ * the file — the browser's peer of `GLIN_NO_METAL` on macOS, and how the CPU
+ * fallback is proven to still work in a browser that HAS a GPU.
+ */
+function gpuOptions() {
+  const choice = (new URLSearchParams(location.search).get("gpu") ?? "auto").toLowerCase();
+  const off = choice === "off" || choice === "cpu" || choice === "none";
+  return {
+    webgpu: !off && choice !== "webgl" && choice !== "webgl2",
+    webgl2: !off && choice !== "webgpu",
+  };
 }
 
 /**
@@ -108,8 +190,6 @@ function backingSize() {
 
 async function main() {
   if (!canvas) throw new Error("no #canvas element in the page");
-  const ctx = canvas.getContext("2d", { alpha: false });
-  if (!ctx) throw new Error("canvas.getContext('2d') returned null");
 
   // ---- load ----
   //
@@ -162,13 +242,42 @@ async function main() {
   }
 
   // ---- create ----
+  // `?w=&h=` pins the canvas to an app's desktop window size; without it the canvas fills the viewport.
+  const pinned = pinnedSize();
+  if (pinned) {
+    canvas.style.position = "relative";
+    canvas.style.inset = "auto";
+    canvas.style.width = `${pinned.w}px`;
+    canvas.style.height = `${pinned.h}px`;
+    canvas.classList.add("pinned");
+    document.body.style.display = "grid";
+    document.body.style.placeItems = "center";
+  }
   const first = backingSize();
   canvas.width = first.w;
   canvas.height = first.h;
+
+  // ---- the renderer: WebGPU, else WebGL2, else the CPU rasterizer ----
+  //
+  // Order matters, and not only for performance: a canvas hands out ONE kind of
+  // context for its lifetime, so asking for `2d` first would make a WebGL2 or
+  // WebGPU context impossible afterwards. The GPU is tried first, and the `2d`
+  // context — the CPU path, unchanged — is only requested when neither exists.
+  //
+  // `?gpu=off` / `?gpu=webgl` / `?gpu=webgpu` force one backend, which is how the
+  // three paths are compared without editing the file.
+  let backend = await createBackend(canvas, gpuOptions());
+  const ctx = backend ? null : canvas.getContext("2d", { alpha: false });
+  if (!backend && !ctx) throw new Error("this canvas gave neither a GPU context nor a 2d one");
+
   if (exports.glin_web_init(first.w, first.h, 240, 180) !== 1) {
     fail("glin_web_init failed (already initialised, or out of memory)");
     return;
   }
+  // Tell the toolkit which backend will draw. 1 = WebGPU, 2 = WebGL2, 0 = CPU:
+  // for the first two it builds a vertex buffer instead of pixels from now on,
+  // and `glin_web_surface_ptr()` returns 0, which is how `blit()` knows to stop.
+  exports.glin_web_gpu_ready(backend ? backend.kind : 0);
   if (exports.glin_web_run() !== 1) {
     fail("glin_web_run failed (no delegate, or init did not complete)");
     return;
@@ -181,6 +290,7 @@ async function main() {
   let surfaceKey = "";
 
   function blit() {
+    if (!ctx) return;
     const ptr = exports.glin_web_surface_ptr();
     const len = exports.glin_web_surface_len();
     const w = exports.glin_web_surface_width();
@@ -211,6 +321,82 @@ async function main() {
     ctx.putImageData(surfaceImage, 0, 0);
   }
 
+  // ---- present ----
+  //
+  // The frame is already built by the time this runs: `glin_web_frame` laid it out
+  // and either rasterized it (CPU) or filled the vertex buffer (GPU). Both views
+  // are rebuilt per frame, because a frame can grow the heap and `memory.grow()`
+  // detaches every TypedArray over it — the rule at the top of this file.
+  const EMPTY = new Uint8Array(0);
+
+  function gpuValues() {
+    const clear = exports.glin_web_gpu_clear_rgba() >>> 0;
+    return {
+      clear: [
+        (clear & 0xff) / 255,
+        ((clear >>> 8) & 0xff) / 255,
+        ((clear >>> 16) & 0xff) / 255,
+        ((clear >>> 24) & 0xff) / 255,
+      ],
+      vertexStride: exports.glin_web_gpu_vertex_stride(),
+      segmentStride: exports.glin_web_gpu_segment_stride(),
+      width: exports.glin_web_gpu_width(),
+      height: exports.glin_web_gpu_height(),
+      atlasW: exports.glin_web_gpu_atlas_width(),
+      atlasH: exports.glin_web_gpu_atlas_height(),
+      atlasVersion: exports.glin_web_gpu_atlas_version(),
+    };
+  }
+
+  function gpuFrame() {
+    const v = gpuValues();
+    const vptr = exports.glin_web_gpu_verts_ptr();
+    const vlen = exports.glin_web_gpu_verts_len();
+    const sptr = exports.glin_web_gpu_segs_ptr();
+    const segCount = exports.glin_web_gpu_segs_count();
+    const aptr = exports.glin_web_gpu_atlas_ptr();
+    const alen = exports.glin_web_gpu_atlas_len();
+    const buffer = memory.buffer;
+    const segmentBytes = segCount * v.segmentStride;
+    // The image textures this frame names, decoded by the engine from the bytes the build embedded.
+    const images = [];
+    for (let i = 0, n = exports.glin_web_gpu_image_count(); i < n; i++) {
+      const len = exports.glin_web_gpu_image_len(i);
+      images.push({
+        id: exports.glin_web_gpu_image_id(i),
+        version: exports.glin_web_gpu_image_version(i),
+        width: exports.glin_web_gpu_image_width(i),
+        height: exports.glin_web_gpu_image_height(i),
+        bytes: len ? new Uint8Array(buffer, exports.glin_web_gpu_image_ptr(i), len) : EMPTY,
+      });
+    }
+    return {
+      images,
+      verts: vptr && vlen ? new Uint8Array(buffer, vptr, vlen) : EMPTY,
+      segs: sptr && segmentBytes ? new Uint8Array(buffer, sptr, segmentBytes) : EMPTY,
+      segCount: segmentBytes ? segCount : 0,
+      atlas: aptr && alen ? new Uint8Array(buffer, aptr, alen) : null,
+      ...v,
+    };
+  }
+
+  function present() {
+    if (backend) {
+      try {
+        if (backend.draw(gpuFrame())) return;
+      } catch (err) {
+        // A context that dies cannot be replaced on this canvas, so say what
+        // happened once and stop: the last GPU frame stays on screen.
+        fail("the GPU backend failed; reload to fall back to the CPU rasterizer", err);
+        backend.destroy();
+        backend = null;
+        exports.glin_web_gpu_ready(0);
+        return;
+      }
+    }
+    blit();
+  }
+
   // ---- size ----
   function pushSize() {
     const { w, h } = backingSize();
@@ -219,6 +405,21 @@ async function main() {
   }
   new ResizeObserver(pushSize).observe(canvas);
   window.addEventListener("resize", pushSize);
+
+  // Zooming the page changes `devicePixelRatio`. `resize` usually fires with it, but a PINNED canvas
+  // (`?w=&h=`) keeps the same CSS box, so the resize observer stays quiet and the toolkit would keep
+  // hit-testing at the old scale — which is exactly the "clicks only work at 100%" report. A
+  // `matchMedia` on the current resolution fires on every zoom step, so this re-arms itself each time.
+  function watchDevicePixelRatio() {
+    const query = matchMedia(`(resolution: ${devicePixelRatio}dppx)`);
+    const onChange = () => {
+      pushSize();
+      watchDevicePixelRatio();
+    };
+    if (query.addEventListener) query.addEventListener("change", onChange, { once: true });
+    else query.addListener(onChange);
+  }
+  watchDevicePixelRatio();
 
   // ---- input ----
   //
@@ -250,13 +451,16 @@ async function main() {
     if (exports.glin_web_needs_frame() !== 1) return;
     const t0 = performance.now();
     exports.glin_web_frame();
-    blit();
+    present();
     const t1 = performance.now();
     // Latency instrumentation, off unless the page asks for it. `?perf` in the
     // URL turns it on, so a developer can see the real cost of a click without
     // shipping a console spam to every visitor.
     if (perf) {
       const samples = perfSamples;
+      const onGpu = exports.glin_web_gpu_kind() !== 0;
+      const w = onGpu ? exports.glin_web_gpu_width() : exports.glin_web_surface_width();
+      const h = onGpu ? exports.glin_web_gpu_height() : exports.glin_web_surface_height();
       samples.push(t1 - t0);
       if (samples.length >= 20) {
         samples.sort((a, b) => a - b);
@@ -264,7 +468,7 @@ async function main() {
         const worst = samples[samples.length - 1];
         console.log(
           `glinlandui: draw ${median.toFixed(1)}ms median, ${worst.toFixed(1)}ms worst ` +
-            `(${samples.length} samples, ${exports.glin_web_surface_width()}x${exports.glin_web_surface_height()})`,
+            `(${samples.length} samples, ${w}x${h})`,
         );
         samples.length = 0;
       }
@@ -375,12 +579,27 @@ async function main() {
   // face at runtime (see `src/web/shim.h`), but the default path needs no JS at
   // all, which is the point: the fewer decisions here, the better.
 
-  // The link between the two applications. Set from JS rather than hard-coded in
-  // the HTML so it always points at the OTHER one, whichever is loaded.
-  const switchEl = document.getElementById("switch");
-  if (switchEl) {
-    switchEl.href = APP === "calculator" ? "?app=demo" : "?app=calculator";
-    switchEl.textContent = APP === "calculator" ? "← Back to the demo" : "Open the calculator →";
+  // The app switcher, built from `APPS` rather than hard-coded in the HTML, so the
+  // page and the build can never disagree about what exists. It sits at the top
+  // edge and stays hidden until the pointer or the keyboard reaches it, the way a
+  // desktop app's menu bar does — the app itself has the whole window. The current
+  // app is marked and not linked, and `?gpu=` is carried across so an A/B of the
+  // renderer does not reset when you switch app.
+  const nav = document.getElementById("apps");
+  if (nav) {
+    const gpu = new URLSearchParams(location.search).get("gpu");
+    nav.textContent = "";
+    for (const [id, entry] of Object.entries(APPS)) {
+      const link = document.createElement("a");
+      link.href = gpu ? `?app=${id}&gpu=${gpu}` : `?app=${id}`;
+      link.textContent = entry.label;
+      if (id === APP) {
+        link.setAttribute("aria-current", "page");
+        link.href = "#";
+      }
+      nav.appendChild(link);
+      nav.appendChild(document.createTextNode(" "));
+    }
   }
 
   // ---- the loop ----
@@ -388,7 +607,7 @@ async function main() {
   function loop() {
     if (exports.glin_web_needs_frame() === 1) {
       exports.glin_web_frame();
-      blit();
+      present();
       reportOnce();
     }
     requestAnimationFrame(loop);
@@ -397,14 +616,25 @@ async function main() {
   function reportOnce() {
     if (reported) return;
     reported = true;
-    const painted = exports.glin_web_painted_pixels();
-    const hash = exports.glin_web_frame_hash() >>> 0;
     const errors = exports.glin_web_log_errors();
+    const kind = exports.glin_web_gpu_kind();
+    // A GPU frame has no CPU pixels to count or checksum, so it reports the work
+    // it actually did instead: the backend, the frame size and the vertex count.
+    const backendName = kind === 1 ? "WebGPU" : kind === 2 ? "WebGL2" : "CPU rasterizer";
+    const width = kind === 0 ? exports.glin_web_surface_width() : exports.glin_web_gpu_width();
+    const height = kind === 0 ? exports.glin_web_surface_height() : exports.glin_web_gpu_height();
+    let detail;
+    if (kind === 0) {
+      const hash = exports.glin_web_frame_hash() >>> 0;
+      detail = `${exports.glin_web_painted_pixels()} painted pixels, checksum 0x${hash.toString(16)}`;
+    } else {
+      const stride = exports.glin_web_gpu_vertex_stride() || 1;
+      const vertices = Math.round(exports.glin_web_gpu_verts_len() / stride);
+      detail = `${vertices} vertices, ${exports.glin_web_gpu_segs_count()} segment(s)`;
+    }
     log(
-      `running — ${exports.glin_web_frames()} frame(s), ` +
-        `${exports.glin_web_surface_width()}x${exports.glin_web_surface_height()} backing store, ` +
-        `${painted} painted pixels, checksum 0x${hash.toString(16)}, ` +
-        `${errors} log error(s)`,
+      `running — ${exports.glin_web_frames()} frame(s), ${backendName}, ` +
+        `${width}x${height} backing store, ${detail}, ${errors} log error(s)`,
     );
     if (errors > 0) {
       fail(`${errors} message(s) were logged at error level; see the browser console`);

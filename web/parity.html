@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>glinlandui — CPU vs GPU pixels</title>
+    <style>
+      body {
+        font: 12px/1.5 ui-monospace, monospace;
+        margin: 12px;
+        background: #1d1c19;
+        color: #c5c9c5;
+      }
+      canvas {
+        border: 1px solid #282727;
+        display: block;
+        margin: 8px 0;
+      }
+      h1 {
+        font-size: 14px;
+        margin: 0 0 8px;
+      }
+      pre {
+        white-space: pre-wrap;
+        margin: 8px 0 12px;
+      }
+      /* The canvases are for eyeballing; the numbers above them are the test. */
+      #view canvas {
+        max-width: 100%;
+        max-height: 45vh;
+        width: auto;
+        height: auto;
+      }
+      .good {
+        color: #87a987;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>glinlandui — the CPU rasterizer and the GPU, on the same frame</h1>
+    <p>
+      This page is the browser's peer of the native parity gates: it renders one
+      frame with the software rasterizer, renders the same frame with whichever GPU
+      backend this browser gives us, and prints the per-pixel difference. The
+      toolkit's own standard is 1/255 (see <code>docs/linux-vulkan-backend.md</code>),
+      so a mean of 0.0x with a max of 1 is a pass.
+    </p>
+    <!-- The numbers come first: a 4000px-tall comparison would push them off screen. -->
+    <pre id="out">running…</pre>
+    <div id="view"></div>
+    <script>
+      // A module that throws leaves the paragraph above untouched, so report the
+      // error the way the page can read it: in the text.
+      const report = (label, err) => {
+        document.getElementById("out").textContent =
+          label + "\n" + (err && (err.stack || err.message || err));
+      };
+      addEventListener("error", (e) => report("PAGE ERROR: " + e.message, e.error));
+      addEventListener("unhandledrejection", (e) => report("PROMISE REJECTED", e.reason));
+    </script>
+    <script type="module">
+      import { createBackend } from "./gpu.js";
+
+      // Which app and how big: `?app=catalog&w=1000&h=4000` compares whatever the page can show, and a
+      // tall window is how a scrolling screen is checked in one shot.
+      const params = new URLSearchParams(location.search);
+      const APP = (params.get("app") ?? "demo").toLowerCase();
+      const MODULE = APP === "demo" ? "glinlandui.wasm" : `glinlandui-${APP}.wasm`;
+      const W = Number.parseInt(params.get("w") ?? "480", 10) || 480;
+      const H = Number.parseInt(params.get("h") ?? "360", 10) || 360;
+      const out = document.getElementById("out");
+      const lines = [];
+      const say = (s) => {
+        lines.push(s);
+        out.textContent = lines.join("\n");
+      };
+
+      const bytes = await fetch(MODULE).then((r) => r.arrayBuffer());
+      const module = await WebAssembly.compile(bytes);
+
+      // ---- the CPU reference, from its own instance ----
+      const cpu = await WebAssembly.instantiate(module, {}).then((i) => i.exports);
+      cpu.glin_web_init(W, H, 240, 180);
+      cpu.glin_web_run();
+      cpu.glin_web_gpu_ready(0);
+      cpu.glin_web_frame();
+      const cpuPtr = cpu.glin_web_surface_ptr();
+      const cpuLen = cpu.glin_web_surface_len();
+      const cpuPixels = new Uint8Array(cpu.memory.buffer, cpuPtr, cpuLen).slice();
+      say(`APP  ${MODULE} at ${W}x${H}`);
+      say(`CPU  ${cpu.glin_web_surface_width()}x${cpu.glin_web_surface_height()}, ${cpuLen} bytes, ${cpu.glin_web_painted_pixels()} painted, ${cpu.glin_web_log_errors()} error(s)`);
+
+      // ---- the GPU instance: same module, same app ----
+      const gpu = await WebAssembly.instantiate(module, {}).then((i) => i.exports);
+      gpu.glin_web_init(W, H, 240, 180);
+      gpu.glin_web_run();
+      const canvas = document.createElement("canvas");
+      canvas.width = W;
+      canvas.height = H;
+      document.getElementById("view").appendChild(canvas);
+
+      const backend = await createBackend(canvas);
+      if (!backend) {
+        say("no GPU backend in this browser: the toolkit's CPU rasterizer is what it would use");
+        throw new Error("no WebGPU and no WebGL2");
+      }
+      say(`GPU  ${backend.name} (kind ${backend.kind})`);
+
+      gpu.glin_web_gpu_ready(backend.kind);
+      gpu.glin_web_frame();
+
+      const segCount = gpu.glin_web_gpu_segs_count();
+      const segmentStride = gpu.glin_web_gpu_segment_stride();
+      const vertexStride = gpu.glin_web_gpu_vertex_stride();
+      const clear = gpu.glin_web_gpu_clear_rgba() >>> 0;
+      const atlasPtr = gpu.glin_web_gpu_atlas_ptr();
+      const atlasLen = gpu.glin_web_gpu_atlas_len();
+      const frame = {
+        verts: new Uint8Array(gpu.glin_web_gpu_verts_ptr(), 0), // replaced below
+        segs: new Uint8Array(gpu.glin_web_gpu_segs_ptr(), 0),
+        segCount,
+        vertexStride,
+        segmentStride,
+        width: gpu.glin_web_gpu_width(),
+        height: gpu.glin_web_gpu_height(),
+        clear: [
+          (clear & 0xff) / 255,
+          ((clear >>> 8) & 0xff) / 255,
+          ((clear >>> 16) & 0xff) / 255,
+          ((clear >>> 24) & 0xff) / 255,
+        ],
+        atlas: null,
+        atlasVersion: gpu.glin_web_gpu_atlas_version(),
+        atlasW: gpu.glin_web_gpu_atlas_width(),
+        atlasH: gpu.glin_web_gpu_atlas_height(),
+      };
+      frame.verts = new Uint8Array(gpu.memory.buffer, gpu.glin_web_gpu_verts_ptr(), gpu.glin_web_gpu_verts_len());
+      frame.segs = new Uint8Array(gpu.memory.buffer, gpu.glin_web_gpu_segs_ptr(), segCount * segmentStride);
+      if (atlasPtr && atlasLen) frame.atlas = new Uint8Array(gpu.memory.buffer, atlasPtr, atlasLen);
+      frame.images = [];
+      for (let i = 0, n = gpu.glin_web_gpu_image_count(); i < n; i++) {
+        const len = gpu.glin_web_gpu_image_len(i);
+        frame.images.push({
+          id: gpu.glin_web_gpu_image_id(i),
+          version: gpu.glin_web_gpu_image_version(i),
+          width: gpu.glin_web_gpu_image_width(i),
+          height: gpu.glin_web_gpu_image_height(i),
+          bytes: len ? new Uint8Array(gpu.memory.buffer, gpu.glin_web_gpu_image_ptr(i), len) : new Uint8Array(0),
+        });
+      }
+      if (frame.images.length) say(`     ${frame.images.length} image texture(s)`);
+      say(
+        `     ${frame.width}x${frame.height}, ${frame.verts.length / vertexStride} vertices, ` +
+          `${segCount} segment(s), atlas v${frame.atlasVersion} (${atlasLen} bytes)`,
+      );
+
+      canvas.width = frame.width;
+      canvas.height = frame.height;
+      let drawn = false;
+      try {
+        drawn = backend.draw(frame);
+      } catch (err) {
+        say(`draw threw: ${err.message}`);
+      }
+      say(`     draw returned ${drawn}`);
+
+      // ---- read the GPU result back and diff it against the CPU reference ----
+      // The readback has to wait for the compositor: a WebGL or WebGPU canvas is
+      // not readable in the same task that drew it.
+      await new Promise((r) => requestAnimationFrame(r));
+      await new Promise((r) => requestAnimationFrame(r));
+      const snap = document.createElement("canvas");
+      snap.width = frame.width;
+      snap.height = frame.height;
+      const ctx = snap.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(canvas, 0, 0);
+      const gpuPixels = ctx.getImageData(0, 0, frame.width, frame.height).data;
+
+      const n = Math.min(cpuPixels.length, gpuPixels.length);
+      let sum = 0;
+      let max = 0;
+      let over8 = 0;
+      let over32 = 0;
+      const worst = [];
+      for (let i = 0; i + 3 < n; i += 4) {
+        const d =
+          (Math.abs(cpuPixels[i] - gpuPixels[i]) +
+            Math.abs(cpuPixels[i + 1] - gpuPixels[i + 1]) +
+            Math.abs(cpuPixels[i + 2] - gpuPixels[i + 2])) /
+          3;
+        sum += d;
+        if (d > max) max = d;
+        if (d > 8) over8 += 1;
+        if (d > 32) over32 += 1;
+        if (worst.length < 4 && d > 32) {
+          const p = i / 4;
+          worst.push(`(${p % frame.width},${Math.floor(p / frame.width)}) cpu=${cpuPixels[i]},${cpuPixels[i + 1]},${cpuPixels[i + 2]} gpu=${gpuPixels[i]},${gpuPixels[i + 1]},${gpuPixels[i + 2]}`);
+        }
+      }
+      const pixels = n / 4;
+      say(
+        `DIFF ${pixels} pixels: mean |d| ${(sum / pixels).toFixed(2)}/255, max ${max}, ` +
+          `${((over8 / pixels) * 100).toFixed(2)}% over 8, ${((over32 / pixels) * 100).toFixed(2)}% over 32`,
+      );
+      say(`     ${gpu.glin_web_log_errors()} error(s) logged by the module while drawing`);
+      if (worst.length) say(`     worst: ${worst.join(" | ")}`);
+
+      if (cpuLen !== n) {
+        say(`WARNING the CPU surface is ${cpuLen} bytes but the GPU frame is ${n}: the sizes disagree`);
+      }
+
+      // ---- the two pictures, so it can be eyeballed as well as measured ----
+      const view = document.createElement("canvas");
+      view.width = W;
+      view.height = H * 2 + 6;
+      view.style.maxWidth = "100%";
+      view.style.height = "auto";
+      const vc = view.getContext("2d");
+      vc.putImageData(new ImageData(new Uint8ClampedArray(cpuPixels), W, H), 0, 0);
+      vc.putImageData(new ImageData(new Uint8ClampedArray(gpuPixels.slice(0, W * H * 4)), W, H), 0, H + 6);
+      document.getElementById("view").appendChild(view);
+      say("first image = CPU rasterizer, second = the GPU backend");
+    </script>
+  </body>
+</html>

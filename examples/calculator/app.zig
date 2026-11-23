@@ -13,12 +13,6 @@ pub const App = struct {
     // `MaterialTheme`: the Activity picks it. The keypad paints from its own app-local palette, because the components stay theme-neutral.
     theme: glinlandui.theme.Theme = glinlandui.theme.dark,
 
-    // The webapp's embedded font, read by `web/exports.zig` from `glin_web_init`: it MUST be a declaration of the App type, because `Exports(App, App.content)` can only see declarations that belong to `App` — one in the entry-point file would be invisible and the font would silently never install. Empty on native, where the backends resolve a font from the filesystem.
-    pub const embedded_font: []const u8 = if (@import("builtin").cpu.arch.isWasm())
-        @import("font_data").bytes
-    else
-        &.{};
-
     // `onCreate`: nothing to wire — the keypad owns no field and no timer, so the store's instance is the whole screen.
     pub fn start(self: *App) void {
         _ = self.vm();

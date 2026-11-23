@@ -11,8 +11,8 @@ pub const App = struct {
     store: glinlandui.view_model.Store(view_model.LazyViewModel) = .{},
     // `MaterialTheme`: the Activity picks it, and the view reads it.
     theme: glinlandui.theme.Theme = glinlandui.theme.dark,
-    // The clock the meter measures with: a frame time is a fact about this host, so the Activity reads it.
-    io: std.Io,
+    // The clock the meter measures with: a frame time is a fact about this host, so the Activity reads it. Optional, because a host may have no monotonic clock at all; the meter then reads 0 ms and the list still draws and scrolls.
+    io: ?std.Io = null,
     // The window's frame pump. The model decides that an animation needs another frame; only the Activity has a window to ask.
     pump: ?view_model.FramePump = null,
 
@@ -35,7 +35,8 @@ pub const App = struct {
         const self: *App = @ptrCast(@alignCast(ctx.?));
         const model = self.vm();
 
-        const now: i64 = @intCast(std.Io.Clock.awake.now(self.io).nanoseconds);
+        // A host with no clock reports 0 rather than a guess: the meter is a diagnostic, not an input to the layout.
+        const now: i64 = if (self.io) |io| @intCast(std.Io.Clock.awake.now(io).nanoseconds) else 0;
         model.tick(now);
         model.maybeLog(now);
         // The animation advances BEFORE the tree is declared, so this frame draws the position it just moved to.

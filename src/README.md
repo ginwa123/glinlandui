@@ -161,8 +161,9 @@ stating plainly because it is the most-asked question about this layout:
 | | rasterizes the UI | composites the frame | window |
 |---|---|---|---|
 | `linux/` | **on the GPU** (Vulkan) | Vulkan swapchain | Wayland |
-| `mac/` | on the CPU (`core/render_software.zig`) | CoreGraphics bitmap | NSWindow |
+| `mac/` | **on the GPU** (Metal), CPU rasterizer + CoreGraphics as the fallback | CAMetalLayer, else a CoreGraphics bitmap | NSWindow |
 | `windows/` | on the CPU (`core/render_software.zig`) | **D3D11 swapchain** (GDI if the GPU cannot rasterize) | HWND |
+| `web/` | **on the GPU** (WebGPU, else WebGL2) — geometry in `gpu.zig`, or `core/render_software.zig` when the page has neither | canvas `GPUCanvasContext`/`webgl2`, else `putImageData` | `<canvas>` |
 
 So Windows presents through the GPU the way Linux does — a swap chain, a
 texture upload and a shader, the same *role* `linux/present.zig` plays — but

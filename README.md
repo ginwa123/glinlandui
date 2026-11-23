@@ -13,7 +13,9 @@ Consumers write `@import("glinlandui")` and get the same surface everywhere:
 | host | window | renderer | text | status |
 |---|---|---|---|---|
 | Linux | Wayland (`xdg-shell`) | Vulkan | pangocairo | native, tested in CI |
-| macOS | Cocoa | CoreGraphics / shared CPU rasterizer | shared estimator | native, tested in CI |
+| macOS | Cocoa | Metal, with the shared CPU rasterizer + CoreGraphics as the fallback | shared estimator | native, tested in CI |
+| Windows | Win32 | shared CPU rasterizer, composited by D3D11 (GDI fallback) | shared estimator | native, tested in CI |
+| browser (wasm) | `<canvas>` | **WebGPU, else WebGL2, else the shared CPU rasterizer** | embedded face, rasterized in wasm | `zig build web` + `web/smoke.mjs` |
 | anywhere else | — | shared CPU rasterizer (real RGBA8 pixels) | shared estimator | portable fallback |
 | **test builds** | — | shared CPU rasterizer | deterministic estimator | **every OS** |
 
@@ -65,6 +67,13 @@ zig build run-calculator    # the calculator example (needs a Wayland display)
 zig build run-todo          # the MVVM todo example — state, ViewModel, view, setContent
 zig build run-lazy-scroll   # 10,000 virtualised rows, with a live frame-rate meter
 zig build run-catalog       # every component on one screen, in the kit's palette
+
+# Every one of those runs in a BROWSER too: `-Dweb` builds every app for wasm,
+# serves the page and prints the URL. `?app=<name>` picks one.
+zig build -Dweb run-catalog   # -> http://localhost:8080/?app=catalog
+zig build -Dweb run-todo      # -> http://localhost:8080/?app=todo
+zig build -Dweb run           # -> http://localhost:8080/?app=demo
+zig build web                 # build all six modules + the page, serve it yourself
 
 # No display? Both fall back to headless rendering and report painted pixels:
 env WAYLAND_DISPLAY= ./zig-out/bin/glinlandui-calculator
@@ -1350,8 +1359,18 @@ Honest list; each is a reasonable next task.
   the window is real either way and never blank. The example is wired there and
   CI runs the same assertions as on the other two platforms. What it does NOT
   have is a Direct3D *rasterizer*: the shared CPU rasterizer draws, and D3D11
-  composites, exactly as CoreGraphics does on macOS. Only the Linux Vulkan path
-  rasterises on the GPU.
+  composites. The GPU rasterizers are Linux (Vulkan), macOS (Metal) and a browser
+  with WebGPU or WebGL2.
+- **A browser's images come from the build, not the disk.** A page has no
+  filesystem, so `build.zig` embeds the app's `assets/` directory (`asset_data`)
+  and `core/image_store.zig` serves those bytes to the SAME decoder the disk path
+  uses — the catalog's three images draw identically in a page and in a window.
+  An image an app loads from somewhere else (a network URL, a user-chosen file)
+  still has no path into that store.
+- **WebGPU is written against the spec, and verified only where a browser has
+  it.** The WebGL2 path is measured against the CPU rasterizer pixel for pixel
+  (mean 0.00/255, max 1 over 172,800 pixels — see `web/parity.html`); a machine
+  without WebGPU cannot exercise the WGSL path at all.
 - **The Linux clipboard needs a helper installed** (`wl-clipboard`, `xclip` or
   `xsel`) until the Wayland data-device protocol is implemented in the backend
   itself; without one, copy and paste are a no-op there and nowhere else.
