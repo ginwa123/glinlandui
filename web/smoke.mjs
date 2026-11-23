@@ -196,6 +196,7 @@ async function main() {
   );
   eq(ex.glin_web_location(routeScratch, 7), genAfter, `the same address again is not a change`);
 
+
   // ---- 4. the dirty-flag contract (the idle-CPU guarantee) ----
   eq(ex.glin_web_needs_frame(), 1, "a frame is wanted before the first one is drawn");
   ex.glin_web_frame();
@@ -305,6 +306,32 @@ async function main() {
   // than `> 0`, because "the counter increments once per frame" is the property
   // that makes `glin_web_frames` usable as a diagnostic at all.
   eq(ex.glin_web_frames(), 4, "frames are counted across input-driven draws");
+
+  // ---- persistence ----
+  //
+  // IndexedDB is page-only and asynchronous, and this module imports NOTHING, so the two sides
+  // exchange BYTES: the page writes a stored document into a wasm-owned scratch block and adopts
+  // it, and reads back whatever the app stages. `node` has no `indexedDB`, so what this proves is
+  // the ABI contract — a revision that moves on adopt, a dirty flag that is clear until something
+  // is owed, and a scratch block big enough to hold a document. The round trip through the app's
+  // own model is `examples/catalog/app.zig`'s tests, and the database itself is `web/store.js`,
+  // whose absence-in-Node path this same check exercises by never touching it.
+  eq(ex.glin_web_store_dirty(), 0, "a fresh window owes the page no write");
+  eq(ex.glin_web_store_len(), 0, "and stages no document");
+  const storeScratch = ex.glin_web_store_scratch();
+  const storeScratchLen = ex.glin_web_store_scratch_len();
+  check(storeScratch !== 0 && storeScratchLen >= 1024, "there is a scratch block for a stored document", `${storeScratchLen} bytes`);
+  const storeRevBefore = ex.glin_web_store_revision();
+  const storedDocument = new TextEncoder().encode('{"v":2,"e":{"dense":"1","route":"buttons"}}');
+  check(storedDocument.length <= storeScratchLen, "a document fits the block");
+  new Uint8Array(ex.memory.buffer, storeScratch, storeScratchLen).set(storedDocument, 0);
+  const storeRevAfter = ex.glin_web_store_adopt(storeScratch, storedDocument.length);
+  check(storeRevAfter !== storeRevBefore, "adopting a stored document moves the revision");
+  eq(ex.glin_web_store_adopt(0, 0), storeRevAfter, "an empty adopt is `nothing stored`, not a new document");
+  // The adopt asks for a frame, because a page's load lands between frames and the loop is idle.
+  eq(ex.glin_web_needs_frame(), 1, "adopting a document asks for the frame that draws it");
+  ex.glin_web_frame();
+  eq(ex.glin_web_log_errors(), 0, "applying a document logged no errors");
 
   // ---- 7b. the hover cursor reaches the page as a CSS keyword ----
   //
@@ -560,6 +587,39 @@ async function main() {
       eq(ex.glin_web_needs_frame(), 0, "catalog: and the burst is spent, so no further frame is owed");
       ex.glin_web_frame();
       eq(ex.glin_web_frame_hash() >>> 0, burst, "catalog: a frame with no new input does not scroll again");
+    }
+
+    // The catalog is the app that PERSISTS: a nav click is an intent, an intent stages the document,
+    // and the page is what stores it. Walking down the nav finds a row without hard-coding a layout,
+    // and the bytes are checked as the versioned JSON the module encodes — which is the only half
+    // `node` can see, because the database itself lives in the page.
+    if (app.id === "catalog") {
+      let staged = 0;
+      for (let y = 120; y < 460 && staged === 0; y += 18) {
+        ex.glin_web_pointer(1, 0, 100, y);
+        ex.glin_web_pointer(2, 0, 100, y);
+        ex.glin_web_frame();
+        staged = ex.glin_web_store_dirty();
+      }
+      eq(staged, 1, "catalog: a nav click stages the document the page stores");
+      const stagedLen = ex.glin_web_store_len();
+      check(stagedLen > 0, "catalog: and it has bytes", `${stagedLen} bytes`);
+      const stagedText = new TextDecoder().decode(
+        new Uint8Array(ex.memory.buffer, ex.glin_web_store_ptr(), stagedLen),
+      );
+      check(
+        stagedText.startsWith('{"v":2'),
+        "catalog: the document is the versioned JSON the module encodes",
+        stagedText.slice(0, 60),
+      );
+      check(
+        stagedText.includes('"recent"'),
+        "catalog: naming the section the click opened",
+        stagedText.slice(0, 160),
+      );
+      ex.glin_web_store_clean();
+      eq(ex.glin_web_store_dirty(), 0, "catalog: and cleaning it clears the debt");
+      eq(ex.glin_web_log_errors(), 0, "catalog: staging logged no errors");
     }
 
     if (app.id !== "calculator") continue;

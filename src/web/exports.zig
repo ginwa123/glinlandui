@@ -9,6 +9,7 @@ const gpu = @import("gpu.zig");
 const image_store = @import("../core/image_store.zig");
 const renderer = @import("renderer.zig");
 const route = @import("../core/route.zig");
+const store = @import("storage.zig");
 
 /// The face the page draws with, compiled in by `build.zig`'s `-Dfont` option. It lives in the LIBRARY, not in an application: a browser has no font paths, and a toolkit that made every app carry a typeface would be making every app know how it is being hosted.
 const embedded_font: []const u8 = @import("font_data").bytes;
@@ -110,6 +111,9 @@ pub fn ExportsWithAssets(
             const route_scratch = alloc.alloc(u8, route.max_path) catch return 0;
             route_scratch[0] = 0;
             g_route_scratch = route_scratch;
+
+            // A page reloads with the document it stored, so a fresh window starts with nothing adopted and nothing owed.
+            store.reset();
 
             // The images this build carries, registered before the first frame: the renderer looks them up by the same path the app declared.
             image_store.register(assets);
@@ -477,6 +481,55 @@ pub fn ExportsWithAssets(
             // A zero length is an ADDRESS — the root — not "nothing to say": Back to the bare URL has to arrive here too.
             route.adopt(if (path_len == 0) "" else path[0..path_len]);
             return route.generation();
+        }
+
+        // Persistence: the document the app keeps, and the page's way of handing a stored one back.
+
+        /// A block the page writes a stored document into: it belongs to the backend, so it exists before the first frame and costs no allocation.
+        export fn glin_web_store_scratch() u32 {
+            return offsetOf(store.scratch());
+        }
+
+        export fn glin_web_store_scratch_len() u32 {
+            return @intCast(store.scratch().len);
+        }
+
+        /// The document the app wants stored, as an offset into wasm memory (0 when nothing is owed).
+        export fn glin_web_store_ptr() u32 {
+            return offsetOf(store.staged() orelse "");
+        }
+
+        export fn glin_web_store_len() u32 {
+            const bytes = store.staged() orelse return 0;
+            return @intCast(bytes.len);
+        }
+
+        /// Moves on every document the page hands back, so the app can tell an answer arrived without comparing bytes.
+        export fn glin_web_store_revision() u32 {
+            return store.revision();
+        }
+
+        /// The page's stored document, or a zero length when there is none. Returns the revision the page records as answered.
+        export fn glin_web_store_adopt(ptr: u32, len: u32) u32 {
+            // A zero length is "this app has stored nothing yet", not a document: an empty payload would decode to nothing anyway.
+            if (ptr == 0 or len == 0) return store.revision();
+            // A page is not trusted with a length: past the scratch block it is not a document, and slicing it would trap.
+            if (len > store.scratch().len) return store.revision();
+            const p: [*]const u8 = @ptrFromInt(ptr);
+            if (!store.adopt(p[0..len])) return store.revision();
+            // The load is async, so it lands between frames: ask for the one that will draw the restored document.
+            @import("../core/frame.zig").requestFrame();
+            return store.revision();
+        }
+
+        /// 1 while the page still owes a write, so it reads `glin_web_store_ptr/len` once per change rather than per frame.
+        export fn glin_web_store_dirty() u32 {
+            return if (store.staged() != null) 1 else 0;
+        }
+
+        /// The page confirming it wrote what it read: the app is free to stage the next document.
+        export fn glin_web_store_clean() void {
+            store.clean();
         }
     };
 }

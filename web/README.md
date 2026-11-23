@@ -169,6 +169,53 @@ Zooming also changes `devicePixelRatio` **without** necessarily resizing the CSS
 `matchMedia("(resolution: Ndppx)")` and re-arms it on every change: `resize` alone
 misses a zoom on a fixed-size canvas.
 
+## Persistence: IndexedDB, and why the page owns it
+
+An app's settings have to survive a reload, and in a browser the only durable,
+per-origin, structured store is IndexedDB. It is also **asynchronous** and
+**page-only**, while the module imports nothing and every export is synchronous —
+so the two sides exchange BYTES and nothing else:
+
+    Zig   src/core/storage.zig          the document: bounded key/value pairs, a version, a migration
+    Zig   src/web/storage.zig           the slot those bytes sit in, in wasm memory
+    JS    web/store.js                  the database: open, load one string, save one string
+    JS    web/shim.js                   the three calls that move a string across
+
+The split matters because it keeps the decisions on the testable side. The key
+names, the version number, what a setting means, and how an older payload is
+migrated all live in `src/core/storage.zig`, which is in the cross-platform
+parity suite and has no idea a browser exists. `web/store.js` moves one string
+and makes no choices at all — the same rule `gpu.js` and `shim.js` keep.
+
+The loop, per app:
+
+- **boot.** The page reads `indexedDB` → `glinlandui` → store `state`, keyed by
+  `?app=`. The string is written into `glin_web_store_scratch()` and handed to
+  `glin_web_store_adopt(ptr, len)`, which requests a frame — the load lands
+  between frames and the loop is idle by default. The app applies the document
+  before it draws, so a reload paints the restored screen once instead of
+  flashing the default one.
+- **change.** An intent marks the app's document dirty; the next frame re-encodes
+  it and stages the bytes, and `glin_web_store_dirty()` says a write is owed.
+- **write.** The page reads `glin_web_store_ptr()` / `_len`, decodes them into a
+  JS string, calls `glin_web_store_clean()`, and persists the string DEBOUNCED
+  (250 ms) — a slider drag is one write, not one per pixel.
+
+`glin_web_store_revision()` mirrors the router's generation: it moves on every
+document the page hands back, so the page can tell "I already answered this one"
+without comparing bytes.
+
+**Absent is a supported state.** `indexedDB` is undefined in Node (where
+`web/smoke.mjs` runs), in an insecure context, and in some private-browsing
+modes. `createStore` reports `available: false` and every method resolves rather
+than throwing, so the page skips the dance and the app runs with defaults. An app
+that loses its settings is a disappointment; a page that fails to boot because a
+database was missing is a bug.
+
+`examples/catalog/` is the app that uses it: the compact/roomy theme, the address,
+the picked tab/tree row/radio/slider/checkbox/toggle and a bounded "recently
+viewed" list are all in its document, and the nav draws the recent list from it.
+
 ## The hover cursor
 
 A native backend answers the OS with a cursor SHAPE — `glin_cocoa_set_cursor`,

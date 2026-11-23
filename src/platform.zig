@@ -59,6 +59,16 @@ else switch (builtin.os.tag) {
     else => @import("core/clipboard_portable.zig"),
 };
 
+/// The persistence backend: the bytes an app keeps across a reload, kept by the host rather than by the app.
+pub const storage = if (builtin.is_test)
+    @import("core/storage_portable.zig")
+else switch (builtin.os.tag) {
+    // A browser owns the store: IndexedDB is async and page-only, and the module imports nothing, so the page drives it.
+    .freestanding, .wasi => if (builtin.cpu.arch.isWasm()) @import("web/storage.zig") else @import("core/storage_portable.zig"),
+    // No file backend yet, and the port still exists, so an app compiles and its settings live as long as the process does.
+    else => @import("core/storage_portable.zig"),
+};
+
 /// The monotonic millisecond clock: without one a double click is indistinguishable from two clicks and the caret blink steps per frame instead of per.
 pub const clock = if (builtin.is_test)
     @import("core/clock_portable.zig")

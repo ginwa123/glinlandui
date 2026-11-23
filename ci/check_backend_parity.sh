@@ -44,6 +44,9 @@ entries=(
   "clipboard|windows|src/windows/clipboard.zig|max_bytes read write"
   "clipboard|portable|src/core/clipboard_portable.zig|max_bytes read write"
 
+  "storage|web|src/web/storage.zig|Slot max_document_bytes reset adopt takeAdopted stage staged clean revision"
+  "storage|portable|src/core/storage_portable.zig|Slot max_document_bytes reset adopt takeAdopted stage staged clean revision"
+
   "devtools|linux|src/linux/devtools_service.zig|Handle open request socketPath"
   "devtools|portable|src/core/devtools_service_portable.zig|Handle open request"
 

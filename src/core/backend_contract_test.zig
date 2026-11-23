@@ -85,3 +85,21 @@ test "an optional capability is a whole function or absent, never half-declared"
         try std.testing.expect(isFn(platform.window.Window, "setAnimating"));
     }
 }
+
+test "the selected storage backend satisfies the storage contract" {
+    const S = platform.storage;
+    inline for (.{ "Slot", "max_document_bytes" }) |name| {
+        try std.testing.expect(@hasDecl(S, name));
+    }
+    inline for (.{ "reset", "adopt", "takeAdopted", "stage", "staged", "clean", "revision" }) |name| {
+        try std.testing.expect(isFn(S, name));
+    }
+    // The shapes an app and a page both call: one byte range in, one byte range out, one revision counter.
+    try std.testing.expectEqual(@as(usize, 0), arity(S, "reset"));
+    try std.testing.expectEqual(@as(usize, 1), arity(S, "adopt"));
+    try std.testing.expectEqual(@as(usize, 1), arity(S, "takeAdopted"));
+    try std.testing.expectEqual(@as(usize, 1), arity(S, "stage"));
+    try std.testing.expectEqual(@as(usize, 0), arity(S, "staged"));
+    try std.testing.expectEqual(@as(usize, 0), arity(S, "clean"));
+    try std.testing.expectEqual(@as(usize, 0), arity(S, "revision"));
+}

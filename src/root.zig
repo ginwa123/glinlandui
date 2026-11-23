@@ -52,6 +52,12 @@ pub const theme = @import("core/theme.zig");
 // The address the window is showing: navigated by intent, read while declaring, and the same on every backend.
 pub const route = @import("core/route.zig");
 
+// What an app keeps across a reload: a bounded document with a version, and the JSON a host's bytes go through.
+pub const storage = @import("core/storage.zig");
+
+// Where this host keeps those bytes: IndexedDB in a browser, an in-memory slot on every native build and in every test.
+pub const storage_backend = platform.storage;
+
 // Pure utils (geometry / input / EGL / test-frames + legacy helpers).
 pub const Placement = platform.Placement;
 pub const computePlacement = platform.computePlacement;
@@ -136,6 +142,9 @@ test {
     _ = @import("core/view_model.zig");
     _ = @import("core/theme.zig");
     _ = @import("core/route.zig");
+    // Persistence: the document, its version and its migration, and the in-memory slot every non-browser build selects.
+    _ = @import("core/storage.zig");
+    _ = @import("core/storage_portable.zig");
     _ = @import("core/testing/finders.zig");
     _ = @import("core/testing/assertions.zig");
     _ = @import("core/testing/actions.zig");
@@ -209,6 +218,7 @@ test {
     // No tests, imported so they are TYPE-CHECKED on both platforms — the same trick mac/renderer.zig and mac/text.zig use.
     _ = @import("web/renderer.zig");
     _ = @import("web/text.zig");
+    _ = @import("web/storage.zig");
 
     // What a field does with the row it sits in: the weight tests, kept beside the component rather than inside it.
     _ = @import("core/components/input_weight_test.zig");
