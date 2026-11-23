@@ -69,6 +69,16 @@ else switch (builtin.os.tag) {
     else => @import("core/storage_portable.zig"),
 };
 
+/// The transport backend: the requests an app stages and the answers its host settles, exchanged as bytes.
+pub const net = if (builtin.is_test)
+    @import("core/net_portable.zig")
+else switch (builtin.os.tag) {
+    // A browser owns `fetch`: it is async and page-only, and the module imports nothing, so the page drives it.
+    .freestanding, .wasi => if (builtin.cpu.arch.isWasm()) @import("web/net.zig") else @import("core/net_portable.zig"),
+    // No native transport yet, and the port still exists, so an app compiles and its requests go nowhere.
+    else => @import("core/net_portable.zig"),
+};
+
 /// The monotonic millisecond clock: without one a double click is indistinguishable from two clicks and the caret blink steps per frame instead of per.
 pub const clock = if (builtin.is_test)
     @import("core/clock_portable.zig")

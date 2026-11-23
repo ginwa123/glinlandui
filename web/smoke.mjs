@@ -357,6 +357,48 @@ async function main() {
   ex.glin_web_frame();
   eq(ex.glin_web_log_errors(), 0, "applying a document logged no errors");
 
+  // ---- 7a. the network, as bytes ----
+  //
+  // The same shape as persistence and for the same reason: `fetch` is page-only
+  // and asynchronous, and the module imports NOTHING, so the two sides exchange
+  // BYTES. Node has no page driver, so what this proves is the contract the
+  // driver relies on: nothing is owed before the app asks, one request is in
+  // flight at a time, an answer moves the revision and asks for the frame that
+  // applies it, and a meta block that is not a status is refused rather than
+  // read as "no answer". What the app DOES with an answer is
+  // `examples/fokus`'s tests; the driver itself is `web/shim.js`.
+  eq(ex.glin_web_net_request_len(), 0, "a fresh window owes the page no request");
+  const netOrigin = ex.glin_web_net_origin_scratch();
+  const netOriginLen = ex.glin_web_net_origin_scratch_len();
+  const netMeta = ex.glin_web_net_meta_scratch();
+  const netMetaLen = ex.glin_web_net_meta_scratch_len();
+  const netBody = ex.glin_web_net_body_scratch();
+  const netBodyLen = ex.glin_web_net_body_scratch_len();
+  check(netOrigin !== 0 && netOriginLen >= 32, "there is a scratch block for an API origin", `${netOriginLen} bytes`);
+  check(netMeta !== 0 && netMetaLen >= 64, "there is a scratch block for a reply's status and tags", `${netMetaLen} bytes`);
+  check(netBody !== 0 && netBodyLen >= 4096, "there is a scratch block for a reply's body", `${netBodyLen} bytes`);
+  const netEncoder = new TextEncoder();
+  const netMetaBytes = netEncoder.encode('200\n"0123456789abcdef"\nabc123\n');
+  new Uint8Array(ex.memory.buffer, netMeta, netMetaLen).set(netMetaBytes, 0);
+  const netBodyBytes = netEncoder.encode('{"companies":[]}');
+  new Uint8Array(ex.memory.buffer, netBody, netBodyLen).set(netBodyBytes, 0);
+  const netRevBefore = ex.glin_web_net_revision();
+  const netRevAfter = ex.glin_web_net_reply(1, netMetaBytes.length, netBodyBytes.length);
+  check(netRevAfter !== netRevBefore, "settling an answer moves the revision");
+  eq(ex.glin_web_needs_frame(), 1, "a settled answer asks for the frame that applies it");
+  ex.glin_web_frame();
+  eq(ex.glin_web_log_errors(), 0, "applying an answer logged no errors");
+  const heldRevision = ex.glin_web_net_revision();
+  eq(
+    ex.glin_web_net_reply(2, 0, 0),
+    heldRevision,
+    "a meta block that is not a status is refused, not applied",
+  );
+  check(
+    !/uint64_t\s+glin_web_frame_hash/.test(header),
+    "the frame hash is declared at the width the module exports",
+  );
+
   // ---- 7b. the hover cursor reaches the page as a CSS keyword ----
   //
   // A native backend answers the OS with a cursor SHAPE (`glin_cocoa_set_cursor`,

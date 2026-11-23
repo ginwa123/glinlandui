@@ -217,6 +217,12 @@ pub fn build(b: *std.Build) void {
     web_step.dependOn(&install_web.step);
     web_step.dependOn(&install_assets.step);
 
+    // `zig build serve`: what `web/README.md` has always promised — build the page and serve it, with no npm and no second command.
+    const serve_step = b.step("serve", "Build the browser webapp and serve zig-out/web on http://localhost:8080");
+    serve_step.dependOn(&install_web.step);
+    serve_step.dependOn(&install_assets.step);
+    serve_step.dependOn(&serve_and_print(b, "demo").step);
+
     // ---- Native demo executable ---- Skipped entirely for a wasm target: `src/main.zig` is a native `pub fn main` that uses `std.debug.print` and.
     var exe_opt: ?*std.Build.Step.Compile = null;
     if (!is_wasm) {

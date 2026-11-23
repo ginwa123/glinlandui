@@ -61,6 +61,12 @@ pub const storage = @import("core/storage.zig");
 // Where this host keeps those bytes: IndexedDB in a browser, an in-memory slot on every native build and in every test.
 pub const storage_backend = platform.storage;
 
+// A request as a bounded value, and the reply a host settles: the bytes an app sends and reads without an allocator.
+pub const net = @import("core/net.zig");
+
+// Who carries those bytes: `fetch` in a browser, an in-memory slot on every native build and in every test.
+pub const net_backend = platform.net;
+
 // Pure utils (geometry / input / EGL / test-frames + legacy helpers).
 pub const Placement = platform.Placement;
 pub const computePlacement = platform.computePlacement;
@@ -223,6 +229,11 @@ test {
     _ = @import("web/renderer.zig");
     _ = @import("web/text.zig");
     _ = @import("web/storage.zig");
+
+    // The request/reply model every app exchanges with its host, and the in-memory transport every test build selects.
+    _ = @import("core/net.zig");
+    _ = @import("core/net_portable.zig");
+    _ = @import("web/net.zig");
 
     // What a field does with the row it sits in: the weight tests, kept beside the component rather than inside it.
     _ = @import("core/components/input_weight_test.zig");
