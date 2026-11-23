@@ -132,6 +132,53 @@ canvas.pinned {
   text-decoration: none;
 }
 
+/*
+ * The text mirror: one transparent span per run the canvas drew, over the canvas.
+ *
+ * It is what the browser's find-in-page and `window.find()` can see, and it is
+ * deliberately invisible — the pixels on screen are the canvas's. It scrolls
+ * because find scrolls the container a match sits in, and `shim.js` forwards that
+ * to the app's own page; the scrollbar is hidden because a second bar next to the
+ * app's own would be a lie about what is scrollable.
+ */
+.text-layer {
+  position: fixed;
+  overflow-x: hidden;
+  overflow-y: auto;
+  z-index: 5;
+  background: transparent;
+  color: transparent;
+  pointer-events: none;
+  scrollbar-width: none;
+}
+
+.text-layer::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.text-layer-content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.text-layer-fixed {
+  position: fixed;
+  z-index: 5;
+  overflow: clip;
+  background: transparent;
+  color: transparent;
+  pointer-events: none;
+}
+
+.text-layer span,
+.text-layer-fixed span {
+  position: absolute;
+  white-space: pre;
+  color: transparent;
+}
+
 /* A failure is the one thing allowed to cover the app: silence is worse. */
 .error-panel {
   position: fixed;

@@ -145,6 +145,48 @@ uint32_t glin_web_cursor_len(void);
 uint32_t glin_web_cursor_version(void);
 
 /* ---------------------------------------------------------------------------
+ * Text: the frame's drawn runs, so the page can mirror them into the DOM
+ *
+ * A canvas holds pixels, not text, so a browser's own find-in-page sees an empty
+ * document and reports `0/0` on a screen full of words. This is the other half:
+ * every text run the frame drew, with the box it was drawn in, and the page keeps
+ * one transparent `<span>` per run positioned over the canvas. Find then matches,
+ * and a match scrolls the mirror — `glin_web_find_scroll` is what makes the app's
+ * own page follow it.
+ *
+ * The boxes are in CONTENT coordinates of the page scroller: a run does not move
+ * when the page scrolls, so the mirror's own `scrollTop` is the only thing that
+ * changes, and rebuilding the spans is needed only when the text itself changes.
+ *
+ * One entry, `glin_web_text_stride()` bytes (152):
+ *
+ *     float x, y, w, h   the run's box, content pixels, top-left origin
+ *     uint32 len         bytes of text in `chars`
+ *     char chars[128]    UTF-8, NOT NUL-terminated, truncated at a run boundary
+ *
+ * The snapshot is captured lazily on the frame it describes: ask once per drawn
+ * frame, not once per accessor. `glin_web_text_ptr()` is an OFFSET into wasm
+ * memory (0 when the frame drew no text), so the memory rule at the top of this
+ * header applies to it too. */
+
+uint32_t glin_web_text_len(void);
+uint32_t glin_web_text_stride(void);
+uint32_t glin_web_text_ptr(void);
+
+/* Moves only when the runs or their boxes changed, so the page rebuilds its spans
+ * on a real change and scrolls them on every other frame. */
+uint32_t glin_web_text_version(void);
+
+/* The page scroller: how far down its content it is, and how far it can go. 0 when
+ * the frame's page does not scroll, which is when the mirror has nothing to follow. */
+float glin_web_text_page_offset(void);
+float glin_web_text_page_max(void);
+
+/* The page moved the mirror to `y` because its find-in-page landed there: scroll
+ * the app's page to the same place. Clamped to the page's reach; marks the frame dirty. */
+void glin_web_find_scroll(float y);
+
+/* ---------------------------------------------------------------------------
  * Input
  *
  * All synchronous, all non-blocking, all marking the frame dirty. None of them

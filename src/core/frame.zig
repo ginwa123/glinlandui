@@ -148,6 +148,11 @@ pub fn setPixelScale(s: f32) void {
     text.setPixelScale(deviceScale());
 }
 
+// Whether Clay may drop the render commands of the elements it cannot see. A text mirror needs them all.
+pub fn setCullingEnabled(enabled: bool) void {
+    cl.setCullingEnabled(enabled);
+}
+
 // Set the content zoom. The frame keeps declaring in content points: the window simply shows fewer of them.
 pub fn setZoom(factor: f32) void {
     content_zoom = zoom_mod.clamp(factor);
@@ -365,6 +370,13 @@ var last_command_count: usize = 0;
 pub fn lastCommandCount() usize {
     return last_command_count;
 }
+
+// The commands the frame just drawn produced, valid until the next layout: what a text mirror reads instead of a second pass.
+pub fn lastCommands() []const cl.RenderCommand {
+    return last_commands;
+}
+
+var last_commands: []const cl.RenderCommand = &.{};
 var last_commands_digest: u64 = 0;
 var has_last_digest: bool = false;
 
@@ -1016,6 +1028,7 @@ pub fn clayFrameWithOptions(
     text_editor.beginBlinkFrame();
     declare(ctx, lw, lh);
     const commands = cl.endLayout();
+    last_commands = commands;
     // Before the truncated commands are used for anything: this is the only place a frame that overflowed the element ceiling becomes visible.
     checkElementCeiling();
 

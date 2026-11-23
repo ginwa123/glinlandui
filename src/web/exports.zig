@@ -10,6 +10,8 @@ const image_store = @import("../core/image_store.zig");
 const renderer = @import("renderer.zig");
 const route = @import("../core/route.zig");
 const store = @import("storage.zig");
+const text_index = @import("../core/text_index.zig");
+const frame_mod = @import("../core/frame.zig");
 
 /// The face the page draws with, compiled in by `build.zig`'s `-Dfont` option. It lives in the LIBRARY, not in an application: a browser has no font paths, and a toolkit that made every app carry a typeface would be making every app know how it is being hosted.
 const embedded_font: []const u8 = @import("font_data").bytes;
@@ -118,6 +120,9 @@ pub fn ExportsWithAssets(
             // The images this build carries, registered before the first frame: the renderer looks them up by the same path the app declared.
             image_store.register(assets);
 
+            // A page finds text in the DOM, and this module has none, so `glin_web_text_*` mirrors the frame's runs; the runs have to exist even for the part of the page scrolled out of sight.
+            frame_mod.setCullingEnabled(false);
+
             // The engine's own typeface, installed before the first frame, so text is glyphs from the very first draw. A page that wants a different face calls `glin_web_font`.
             if (embedded_font.len > 0) installEmbeddedFont(embedded_font);
 
@@ -205,6 +210,59 @@ pub fn ExportsWithAssets(
         export fn glin_web_cursor_version() u32 {
             const w = window() orelse return 0;
             return w.cursorVersion();
+        }
+
+        // Text: the frame's drawn runs, so a page whose canvas has no DOM text can mirror them.
+
+        var g_text: text_index.Snapshot = .{};
+        var g_text_frame: u32 = std.math.maxInt(u32);
+
+        fn ensureText() ?*text_index.Snapshot {
+            const w = window() orelse return null;
+            if (g_text_frame != w.frames) {
+                g_text_frame = w.frames;
+                text_index.capture(frame_mod.lastCommands(), &g_text);
+            }
+            return &g_text;
+        }
+
+        export fn glin_web_text_len() u32 {
+            const snap = ensureText() orelse return 0;
+            return @intCast(snap.count);
+        }
+
+        export fn glin_web_text_stride() u32 {
+            return @intCast(text_index.stride);
+        }
+
+        export fn glin_web_text_ptr() u32 {
+            const snap = ensureText() orelse return 0;
+            if (snap.count == 0) return 0;
+            return @intCast(@intFromPtr(&snap.entries[0]));
+        }
+
+        export fn glin_web_text_version() u32 {
+            const snap = ensureText() orelse return 0;
+            return snap.version;
+        }
+
+        export fn glin_web_text_page_offset() f32 {
+            const snap = ensureText() orelse return 0;
+            return snap.page_offset;
+        }
+
+        export fn glin_web_text_page_max() f32 {
+            const snap = ensureText() orelse return 0;
+            return snap.page_max;
+        }
+
+        /// The page scrolled the text mirror to `y`, which is where its find-in-page landed: move the app's own page there.
+        export fn glin_web_find_scroll(y: f32) void {
+            const snap = ensureText() orelse return;
+            if (!snap.has_page) return;
+            const data = text_index.scrollOf(snap.page_id) orelse return;
+            data.scroll_position.y = -std.math.clamp(y, 0, snap.page_max);
+            frame_mod.requestFrame();
         }
 
         // GPU

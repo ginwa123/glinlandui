@@ -429,6 +429,115 @@ async function main() {
     blit();
   }
 
+  // ---- the text mirror ----
+  //
+  // A canvas has pixels and no text, so the browser's find-in-page sees an empty
+  // document: `Ctrl+F  text` reads 0/0 over a screen full of words. The mirror is
+  // the fix — one transparent `<span>` per run the frame drew, at the box it drew
+  // it in — and it is also what makes `window.find()` and text selection work.
+  //
+  // The runs arrive in CONTENT coordinates (`src/web/shim.h`), so scrolling the
+  // app does not move a span: only the mirror's own `scrollTop` follows the page.
+  // That is what lets find scroll the mirror, and `glin_web_find_scroll` carry the
+  // landing position back into the app.
+  const TEXT_HEAD = 24; // x, y, w, h, len, flags — the bytes before `chars`
+  const TEXT_SCROLLS = 1; // entry flag: the run scrolls with the page, so its box is a content box
+
+  const textLayer = document.createElement("div");
+  textLayer.className = "text-layer";
+  textLayer.id = "text-layer";
+  textLayer.setAttribute("aria-hidden", "true");
+  const textContent = document.createElement("div");
+  textContent.className = "text-layer-content";
+  textLayer.appendChild(textContent);
+  document.body.appendChild(textLayer);
+
+  const textFixed = document.createElement("div");
+  textFixed.className = "text-layer-fixed";
+  textFixed.id = "text-layer-fixed";
+  textFixed.setAttribute("aria-hidden", "true");
+  document.body.appendChild(textFixed);
+
+  const textDecoder = new TextDecoder();
+  let textSpans = [];
+  let textVersion = 0;
+  let mirroredScroll = 0;
+
+  function rebuildText(ptr, count, stride) {
+    const buffer = memory.buffer;
+    const view = new DataView(buffer, ptr, count * stride);
+    const scale = deviceScale();
+    for (let i = 0; i < count; i++) {
+      const at = i * stride;
+      const len = view.getUint32(at + 16, true);
+      const text = textDecoder.decode(new Uint8Array(buffer, ptr + at + TEXT_HEAD, len));
+      // A run inside the page's scroller moves with it; the app's own chrome (a sidebar,
+      // a title bar) does not, so it goes in the layer that never scrolls.
+      const flags = view.getUint32(at + 20, true);
+      const host = (flags & TEXT_SCROLLS) === TEXT_SCROLLS ? textContent : textFixed;
+      let span = textSpans[i];
+      if (!span) {
+        span = document.createElement("span");
+        textSpans.push(span);
+      }
+      if (span.parentNode !== host) host.appendChild(span);
+      if (span.textContent !== text) span.textContent = text;
+      const h = Math.max(1, Math.round(view.getFloat32(at + 12, true) / scale));
+      span.style.left = `${Math.round(view.getFloat32(at, true) / scale)}px`;
+      span.style.top = `${Math.round(view.getFloat32(at + 4, true) / scale)}px`;
+      span.style.height = `${h}px`;
+      span.style.lineHeight = `${h}px`;
+      span.style.fontSize = `${Math.max(1, Math.round(h * 0.78))}px`;
+    }
+    for (let i = count; i < textSpans.length; i++) textSpans[i].remove();
+    if (textSpans.length > count) textSpans.length = count;
+  }
+
+  function syncText() {
+    const rect = canvas.getBoundingClientRect();
+    const scale = deviceScale();
+    for (const box of [textLayer, textFixed]) {
+      box.style.left = `${rect.left}px`;
+      box.style.top = `${rect.top}px`;
+      box.style.width = `${rect.width}px`;
+      box.style.height = `${rect.height}px`;
+    }
+
+    const count = exports.glin_web_text_len();
+    const version = exports.glin_web_text_version();
+    const ptr = exports.glin_web_text_ptr();
+    if (version !== textVersion) {
+      textVersion = version;
+      if (ptr !== 0 && count > 0) rebuildText(ptr, count, exports.glin_web_text_stride());
+      else rebuildText(0, 0, 0);
+    }
+
+    const reach = exports.glin_web_text_page_max() / scale;
+    const height = Math.round(rect.height + reach);
+    if (textContent.style.height !== `${height}px`) textContent.style.height = `${height}px`;
+
+    const offset = exports.glin_web_text_page_offset() / scale;
+    if (Math.abs(offset - mirroredScroll) > 0.5) {
+      mirroredScroll = offset;
+      textLayer.scrollTop = offset;
+    }
+  }
+
+  // Find landed on a match inside the mirror, so the app's page must go there. The
+  // guard is the app's own offset: a `scrollTop` this file wrote itself is not a
+  // request, and answering it would fight the frame that just set it.
+  textLayer.addEventListener(
+    "scroll",
+    () => {
+      const scale = deviceScale();
+      const target = textLayer.scrollTop * scale;
+      if (Math.abs(target - exports.glin_web_text_page_offset()) <= 0.5) return;
+      exports.glin_web_find_scroll(target);
+      drawNow();
+    },
+    { passive: true },
+  );
+
   // ---- size ----
   function pushSize() {
     const { w, h } = backingSize();
@@ -501,6 +610,7 @@ async function main() {
     present();
     syncRoute();
     syncStore();
+    syncText();
     const t1 = performance.now();
     // Latency instrumentation, off unless the page asks for it. `?perf` in the
     // URL turns it on, so a developer can see the real cost of a click without
@@ -797,6 +907,7 @@ async function main() {
       present();
       syncRoute();
       syncStore();
+      syncText();
       reportOnce();
     }
     requestAnimationFrame(loop);

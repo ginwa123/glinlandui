@@ -107,6 +107,30 @@ function distinctBytes(bytes) {
   return false;
 }
 
+/** The frame's text runs, decoded out of the module: what `web/shim.js` mirrors into the DOM. */
+function textRuns(ex) {
+  const count = ex.glin_web_text_len();
+  const stride = ex.glin_web_text_stride();
+  const ptr = ex.glin_web_text_ptr();
+  const runs = [];
+  if (!ptr || !count || !stride) return runs;
+  const decoder = new TextDecoder();
+  const view = new DataView(ex.memory.buffer, ptr, count * stride);
+  for (let i = 0; i < count; i++) {
+    const at = i * stride;
+    const len = view.getUint32(at + 16, true);
+    runs.push({
+      x: view.getFloat32(at, true),
+      y: view.getFloat32(at + 4, true),
+      w: view.getFloat32(at + 8, true),
+      h: view.getFloat32(at + 12, true),
+      flags: view.getUint32(at + 20, true),
+      text: decoder.decode(new Uint8Array(ex.memory.buffer, ptr + at + 24, len)),
+    });
+  }
+  return runs;
+}
+
 async function main() {
   console.log(`glinlandui web smoke test\n  module: ${wasmPath}\n`);
 
@@ -532,24 +556,22 @@ async function main() {
 
     // Images: `build.zig` embeds an app's `assets/` directory and the ENGINE decodes it, so a page draws
     // what a desktop window draws. The catalog is the app that has them, and its three live near the BOTTOM
-    // of the docs page — so at this size they are culled (a texture nobody can see is not decoded), and
-    // scrolling them into view is what proves the pipeline.
+    // of the docs page. The browser backend turns Clay's culling OFF (the text mirror needs the whole page,
+    // see `src/web/shim.h`), so they decode at boot instead of when they are scrolled into view: the wheels
+    // below only prove the page still scrolls, not that a texture waits for its first pixels.
     if (app.id === "catalog") {
-      eq(ex.glin_web_gpu_image_count(), 0, "catalog: images below the fold are culled, not decoded");
-      // The pointer sits in the middle of the page, and the wheel walks down it until the images arrive.
-      ex.glin_web_pointer(0, 0, app.w >> 1, app.h >> 1);
-      for (let i = 0; i < 800 && ex.glin_web_gpu_image_count() === 0; i++) {
-        ex.glin_web_wheel(0, 60, 0);
-        ex.glin_web_gpu_ready(2);
-        ex.glin_web_frame();
-      }
-      eq(ex.glin_web_gpu_image_count(), 3, "catalog: scrolled into view, it decodes its three assets");
+      eq(ex.glin_web_gpu_image_count(), 3, "catalog: all three assets decode, because the whole page is in the frame");
       const imgW = ex.glin_web_gpu_image_width(0);
       const imgH = ex.glin_web_gpu_image_height(0);
       check(imgW > 0 && imgH > 0, "catalog: the first image has a size", `${imgW}x${imgH}`);
       eq(ex.glin_web_gpu_image_len(0), imgW * imgH * 4, "catalog: and RGBA8 bytes to match");
       check(ex.glin_web_gpu_image_id(0) > 0, "catalog: with an id a segment can name");
       eq(ex.glin_web_gpu_image_id(3), 0, "catalog: an out-of-range index answers 0, not a trap");
+      // The pointer sits in the middle of the page, and a wheel walks it down.
+      ex.glin_web_pointer(0, 0, app.w >> 1, app.h >> 1);
+      ex.glin_web_wheel(0, 60, 0);
+      eq(ex.glin_web_needs_frame(), 1, "catalog: a wheel over the page marks the frame dirty");
+      ex.glin_web_frame();
       ex.glin_web_gpu_ready(0);
       ex.glin_web_frame();
       check(ex.glin_web_surface_ptr() !== 0, "catalog: and the CPU path still presents it");
@@ -558,6 +580,36 @@ async function main() {
       ex.glin_web_frame();
     } else {
       eq(ex.glin_web_gpu_image_count(), 0, `${app.id}: no assets embedded, so no image textures`);
+    }
+
+    // The text mirror: a browser finds text in the DOM, and a canvas has none, so
+    // the page's find-in-page read `0/0` over a screen full of words. Every run
+    // the frame drew is exported for the page to mirror, and the page scroller's
+    // offset travels with it so find can land on a match below the fold.
+    ex.glin_web_frame();
+    const runs = textRuns(ex);
+    check(runs.length > 0, `${app.id}: the frame's text runs are exported for the page's find`, `runs=${runs.length}`);
+    check(
+      runs.every((r) => r.w > 0 && r.h > 0 && r.text.length > 0),
+      `${app.id}: every run has a box and text`,
+    );
+
+    if (app.id === "catalog") {
+      const findable = (needle) => runs.filter((r) => r.text.toLowerCase().includes(needle)).length;
+      check(findable("text field") > 0, `catalog: the page's own words are findable`, `"text field" in ${findable("text field")} run(s)`);
+      const reach = ex.glin_web_text_page_max();
+      check(reach > 0, `catalog: the page reports how far it scrolls`, `reach=${reach}`);
+      // Let the app settle first: a wheel's coast keeps scrolling for a few frames after the burst, and
+      // what is asserted below is the jump, not the gesture that preceded it.
+      for (let i = 0; i < 60 && ex.glin_web_needs_frame() === 1; i++) ex.glin_web_frame();
+      const target = Math.min(reach, 240);
+      ex.glin_web_find_scroll(target);
+      ex.glin_web_frame();
+      check(
+        Math.abs(ex.glin_web_text_page_offset() - target) < 1,
+        `catalog: find scrolling the mirror scrolls the app's page`,
+        `asked ${target}, offset is ${ex.glin_web_text_page_offset()}`,
+      );
     }
     ex.glin_web_gpu_ready(0);
     ex.glin_web_frame();
