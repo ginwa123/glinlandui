@@ -584,9 +584,33 @@ async function main() {
       ex.glin_web_frame();
       const burst = ex.glin_web_frame_hash() >>> 0;
       eq(burst, oneEvent, "catalog: the same total travel lands in the same place as one event of it");
-      eq(ex.glin_web_needs_frame(), 0, "catalog: and the burst is spent, so no further frame is owed");
+      // The burst itself is spent — but a flick leaves a coast behind, and the coast's frames are owed from here on.
+      eq(ex.glin_web_needs_frame(), 1, "catalog: and the burst leaves a coast that owes the next frame");
       ex.glin_web_frame();
-      eq(ex.glin_web_frame_hash() >>> 0, burst, "catalog: a frame with no new input does not scroll again");
+      eq(ex.glin_web_frame_hash() >>> 0, burst, "catalog: the quiet gap before the coast moves nothing yet");
+
+      // ---- momentum: the flick keeps going after the fingers leave ----
+      // A trackpad on a host that animates no flick of its own sends wheel events only while the fingers move, so the
+      // engine owes the coast: after the last event, frames must keep arriving and keep moving the list.
+      const reset = atTop();
+      for (let i = 0; i < 3; i++) ex.glin_web_wheel(0, 20, 0);
+      ex.glin_web_frame();
+      const released = ex.glin_web_frame_hash() >>> 0;
+      check(released !== reset, "catalog: the flick moved the list");
+      let coasted = 0;
+      let frames = 0;
+      let previous = released;
+      while (frames < 400) {
+        if (ex.glin_web_needs_frame() !== 1) break;
+        ex.glin_web_frame();
+        frames += 1;
+        const h = ex.glin_web_frame_hash() >>> 0;
+        if (h !== previous) coasted += 1;
+        previous = h;
+      }
+      check(frames >= 4, "catalog: the coast asks for frames no event will carry", `${frames} frame(s)`);
+      check(coasted >= 3, "catalog: and it moves the list after the last wheel event", `${coasted} changed frame(s)`);
+      eq(ex.glin_web_needs_frame(), 0, "catalog: until the flick is spent and the page is still");
     }
 
     // The catalog is the app that PERSISTS: a nav click is an intent, an intent stages the document,

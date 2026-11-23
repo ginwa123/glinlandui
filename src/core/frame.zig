@@ -891,8 +891,17 @@ fn scaleRadius(r: *cl.CornerRadius, z: f32) void {
     r.bottom_right *= z;
 }
 
+// True when the last frame's wheel delta moved a scroll container: a glide over a list at its end must not ask for frames that change nothing.
+var wheel_moved: bool = false;
+
+/// Whether this frame's wheel delta found a container with room to move.
+pub fn wheelMoved() bool {
+    return wheel_moved;
+}
+
 // The wheel moves the deepest scroll container under the pointer, and once that one is at its end the same gesture keeps moving the page behind it.
 fn applyWheel(dx: f32, dy: f32) void {
+    wheel_moved = false;
     var ids: [8]cl.ElementId = undefined;
     var before: [8]cl.Vector2 = undefined;
     var n: usize = 0;
@@ -913,7 +922,10 @@ fn applyWheel(dx: f32, dy: f32) void {
     for (ids[0..n], 0..) |id, i| {
         const data = cl.getScrollContainerData(id);
         if (!data.found) continue;
-        if (data.scroll_position.x != before[i].x or data.scroll_position.y != before[i].y) return;
+        if (data.scroll_position.x != before[i].x or data.scroll_position.y != before[i].y) {
+            wheel_moved = true;
+            return;
+        }
     }
     // Nothing moved: the container the gesture reached is at its end, so the outermost one under the pointer takes the rest.
     var page: ?cl.ScrollContainerData = null;
@@ -926,7 +938,10 @@ fn applyWheel(dx: f32, dy: f32) void {
         page_area = area;
         page = data;
     }
-    if (page) |data| wheelNudge(data, dx, dy);
+    if (page) |data| {
+        wheel_moved = true;
+        wheelNudge(data, dx, dy);
+    }
 }
 
 // Whether a container still has room in the direction the gesture is going.
