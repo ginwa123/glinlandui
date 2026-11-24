@@ -678,22 +678,38 @@ async function main() {
       ex.glin_web_frame();
       const burst = ex.glin_web_frame_hash() >>> 0;
       eq(burst, oneEvent, "catalog: the same total travel lands in the same place as one event of it");
-      // The burst itself is spent — but a flick leaves a coast behind, and the coast's frames are owed from here on.
-      eq(ex.glin_web_needs_frame(), 1, "catalog: and the burst leaves a coast that owes the next frame");
+      // ---- one detent is an IMPULSE, not a flick ----
+      // A mouse wheel delivers ONE whole notch as ONE event, and the next only when the hand turns the wheel again.
+      // Windows sends exactly this shape — a single `WM_MOUSEWHEEL` worth 60 pt — so there is no velocity in it to hand
+      // over and nothing may move after it. The coast used to invent 784 pt more on the frames that followed.
+      const still = atTop();
+      // Let any earlier gesture fall out of the engine's own window first: a lone event has to actually be alone.
+      for (let i = 0; i < 200; i++) ex.glin_web_frame();
+      ex.glin_web_wheel(0, 60, 0);
       ex.glin_web_frame();
-      eq(ex.glin_web_frame_hash() >>> 0, burst, "catalog: the quiet gap before the coast moves nothing yet");
+      const notched = ex.glin_web_frame_hash() >>> 0;
+      check(notched !== still, "catalog: the notch moved the list");
+      let crept = 0;
+      for (let i = 0; i < 200; i++) {
+        ex.glin_web_frame();
+        if ((ex.glin_web_frame_hash() >>> 0) !== notched) crept += 1;
+      }
+      eq(crept, 0, "catalog: one frame of wheel is an impulse, so no frame after it moves the list");
 
       // ---- momentum: the flick keeps going after the fingers leave ----
-      // A trackpad on a host that animates no flick of its own sends wheel events only while the fingers move, so the
-      // engine owes the coast: after the last event, frames must keep arriving and keep moving the list.
+      // A trackpad on a host that animates no flick of its own sends wheel events only while the fingers move, in a
+      // RUN of frames, and the engine owes the coast after the last one: frames must keep arriving and keep moving.
       const reset = atTop();
-      for (let i = 0; i < 3; i++) ex.glin_web_wheel(0, 20, 0);
-      ex.glin_web_frame();
-      const released = ex.glin_web_frame_hash() >>> 0;
+      let previous = reset;
+      for (let i = 0; i < 4; i++) {
+        for (let j = 0; j < 3; j++) ex.glin_web_wheel(0, 20, 0);
+        ex.glin_web_frame();
+        previous = ex.glin_web_frame_hash() >>> 0;
+      }
+      const released = previous;
       check(released !== reset, "catalog: the flick moved the list");
       let coasted = 0;
       let frames = 0;
-      let previous = released;
       while (frames < 400) {
         if (ex.glin_web_needs_frame() !== 1) break;
         ex.glin_web_frame();

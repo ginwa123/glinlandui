@@ -705,6 +705,59 @@ test "host: a nested scroll at its end hands the wheel to the page behind it" {
     try std.testing.expectApproxEqAbs(@as(f32, 190), scroll_mod.view("host-inner").y, 0.5);
 }
 
+fn hostTallProbeChildren(_: void) void {
+    var i: usize = 0;
+    while (i < 100) : (i += 1) {
+        cl.UI()(.{
+            .layout = .{ .sizing = .{ .w = .grow, .h = .fixed(40) } },
+            .background_color = .{ 100, 100, 100, 255 },
+        })({});
+    }
+}
+
+fn hostTallRoot(_: ?*anyopaque, _: u32, _: u32) void {
+    scroll_mod.scroll(.{ .id = .{ .text = "host-tall" }, .h = .{ .fixed = 100 }, .w = .{ .fixed = 200 } }, {}, hostTallProbeChildren);
+}
+
+test "host: one wheel notch moves the list by the notch and no further" {
+    var h: Host = undefined;
+    try testHost(&h, null, hostTallRoot);
+    // A fixed frame step: the glide is counted in frames, so where it ends does not depend on how fast this machine ran the test.
+    h.clock = null;
+    h.frame(720, 480);
+    const box = cl.getElementData(cl.getElementId("host-tall")).bounding_box;
+    h.onPointerEvent(box.x + box.width * 0.5, box.y + box.height * 0.5, false, 0);
+    // A mouse wheel is a detent: Windows delivers one whole notch (60 pt) in ONE message, and the next one only when the hand turns the wheel again.
+    h.onScrollEvent(0, 60);
+    h.frame(720, 480);
+    try std.testing.expectApproxEqAbs(@as(f32, 60), scroll_mod.view("host-tall").y, 0.5);
+    // Nothing follows a notch, and nothing may: it carries no velocity to hand over, so the list stops where the notch put it.
+    var i: usize = 0;
+    while (i < 120) : (i += 1) h.frame(720, 480);
+    try std.testing.expectApproxEqAbs(@as(f32, 60), scroll_mod.view("host-tall").y, 0.5);
+}
+
+test "host: a flick spread over several frames keeps the list scrolling after the wheel events stop" {
+    var h: Host = undefined;
+    try testHost(&h, null, hostTallRoot);
+    h.clock = null;
+    h.frame(720, 480);
+    const box = cl.getElementData(cl.getElementId("host-tall")).bounding_box;
+    h.onPointerEvent(box.x + box.width * 0.5, box.y + box.height * 0.5, false, 0);
+    // A trackpad reports the fingers on frame after frame; the gesture is the run of frames, not one event in it.
+    var i: usize = 0;
+    while (i < 4) : (i += 1) {
+        h.onScrollEvent(0, 40);
+        h.frame(720, 480);
+    }
+    const released = scroll_mod.view("host-tall").y;
+    try std.testing.expectApproxEqAbs(@as(f32, 160), released, 0.5);
+    // No event arrives, and the list goes on moving: this is the whole defect the glide exists for.
+    i = 0;
+    while (i < 60) : (i += 1) h.frame(720, 480);
+    try std.testing.expect(scroll_mod.view("host-tall").y > released + 20);
+}
+
 fn hostScrollProbeRoot(_: ?*anyopaque, _: u32, _: u32) void {
     scroll_mod.scroll(.{ .id = .{ .text = "host-scroll" }, .h = .{ .fixed = 100 }, .w = .{ .fixed = 200 } }, {}, hostScrollProbeChildren);
 }
@@ -732,9 +785,12 @@ test "host: a flick keeps the list scrolling after the wheel events stop" {
     h.frame(720, 480);
     const box = cl.getElementData(cl.getElementId("host-scroll")).bounding_box;
     h.onPointerEvent(box.x + box.width * 0.5, box.y + box.height * 0.5, false, 0);
-    // One frame of a flick, then silence — the moment the fingers leave the trackpad.
-    h.onScrollEvent(0, 40);
-    h.frame(720, 480);
+    // A trackpad flick: a delta on each of several frames, then silence — the moment the fingers leave the pad.
+    var gesture: usize = 0;
+    while (gesture < 4) : (gesture += 1) {
+        h.onScrollEvent(0, 10);
+        h.frame(720, 480);
+    }
     const released = scroll_mod.view("host-scroll").y;
     try std.testing.expectApproxEqAbs(@as(f32, 40), released, 0.5);
     // No event arrives, and the list goes on moving: this is the whole defect the glide exists for.
@@ -762,8 +818,11 @@ test "host: a coasting list asks for the frames it needs, and stops asking once 
     h.frame(720, 480);
     const box = cl.getElementData(cl.getElementId("host-scroll")).bounding_box;
     h.onPointerEvent(box.x + box.width * 0.5, box.y + box.height * 0.5, false, 0);
-    h.onScrollEvent(0, 40);
-    h.frame(720, 480);
+    var gesture: usize = 0;
+    while (gesture < 4) : (gesture += 1) {
+        h.onScrollEvent(0, 10);
+        h.frame(720, 480);
+    }
     _ = frame_mod.takeRepaintRequest();
     // No event will carry the next frame of a coast, so the coast asks for it, exactly as an animation does.
     var asked: usize = 0;
