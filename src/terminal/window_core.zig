@@ -35,13 +35,31 @@ const key_q: u32 = 16;
 
 const capture_cap: usize = 64 * 1024;
 const Capture = struct {
+    alloc: std.mem.Allocator,
     buf: [capture_cap]u8 = undefined,
     len: usize = 0,
+    overflow: std.ArrayList(u8) = .empty,
+    failed: bool = false,
 
-    fn append(self: *Capture, bytes: []const u8) void {
-        const n = @min(bytes.len, self.buf.len - self.len);
-        @memcpy(self.buf[self.len..][0..n], bytes[0..n]);
-        self.len += n;
+    fn append(self: *Capture, bytes: []const u8) bool {
+        if (self.failed) return false;
+        var rest = bytes;
+        if (self.overflow.items.len == 0) {
+            const n = @min(rest.len, self.buf.len - self.len);
+            @memcpy(self.buf[self.len..][0..n], rest[0..n]);
+            self.len += n;
+            rest = rest[n..];
+            if (rest.len == 0) return true;
+        }
+        self.overflow.appendSlice(self.alloc, rest) catch {
+            self.failed = true;
+            return false;
+        };
+        return true;
+    }
+
+    fn deinit(self: *Capture) void {
+        self.overflow.deinit(self.alloc);
     }
 };
 
@@ -260,7 +278,8 @@ pub fn Window(comptime console: type) type {
             const h = term.layoutHeight(rows);
             text_face.setCellMetrics(.{ .w = @floatFromInt(term.cell_w), .h = @floatFromInt(term.cell_h) });
             defer text_face.setCellMetrics(null);
-            var buf = Capture{};
+            var buf = Capture{ .alloc = self.alloc };
+            defer buf.deinit();
             renderer.attach(.{
                 .sink = .{ .ctx = &buf, .write = appendToBuffer },
                 .cols = cols,
@@ -271,8 +290,12 @@ pub fn Window(comptime console: type) type {
             });
             const d = self.delegate orelse return .{ .width = w, .height = h, .painted_pixels = 0 };
             d.on_frame(d.ptr, w, h);
+            if (buf.failed) return error.OutOfMemory;
             var painted: usize = 0;
             for (buf.buf[0..buf.len]) |b| {
+                if (b > ' ' and b < 0x7f) painted += 1;
+            }
+            for (buf.overflow.items) |b| {
                 if (b > ' ' and b < 0x7f) painted += 1;
             }
             return .{ .width = w, .height = h, .painted_pixels = painted };
@@ -280,12 +303,38 @@ pub fn Window(comptime console: type) type {
     };
 }
 
-test "headless capture stops at its fixed capacity instead of growing" {
-    var capture = Capture{};
+test "headless capture keeps nominal output in fixed storage without allocating" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    var capture = Capture{ .alloc = failing.allocator() };
+    defer capture.deinit();
+    try std.testing.expect(capture.append("hello"));
+    try std.testing.expectEqual(@as(usize, 0), failing.allocations);
+    try std.testing.expectEqualSlices(u8, "hello", capture.buf[0..capture.len]);
+}
+
+test "headless capture spills larger output to the caller allocator and frees it" {
+    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var capture = Capture{ .alloc = counting.allocator() };
+    var released = false;
+    errdefer if (!released) capture.deinit();
     const chunk = [_]u8{'x'} ** 1024;
-    for (0..65) |_| capture.append(&chunk);
+    for (0..65) |_| try std.testing.expect(capture.append(&chunk));
     try std.testing.expectEqual(@as(usize, capture_cap), capture.len);
-    try std.testing.expectEqualSlices(u8, &chunk, capture.buf[capture_cap - chunk.len ..]);
-    capture.append("ignored");
-    try std.testing.expectEqual(@as(usize, capture_cap), capture.len);
+    try std.testing.expectEqual(@as(usize, chunk.len), capture.overflow.items.len);
+    try std.testing.expect(counting.allocations > 0);
+    try std.testing.expectEqualSlices(u8, &chunk, capture.overflow.items);
+    capture.deinit();
+    released = true;
+    try std.testing.expectEqual(counting.allocations, counting.deallocations);
+}
+
+test "headless capture reports overflow allocation failure instead of dropping bytes" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    var capture = Capture{ .alloc = failing.allocator() };
+    defer capture.deinit();
+    const full = [_]u8{'x'} ** capture_cap;
+    try std.testing.expect(capture.append(&full));
+    try std.testing.expect(!capture.append("overflow"));
+    try std.testing.expect(capture.failed);
+    try std.testing.expectEqual(@as(usize, 0), failing.allocations);
 }

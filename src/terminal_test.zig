@@ -28,6 +28,7 @@ test {
     _ = input;
     _ = keymap;
     _ = renderer_mod;
+    _ = @import("terminal/window_core.zig");
 }
 
 const Sink = struct {
