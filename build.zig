@@ -779,6 +779,7 @@ fn serve_and_print(b: *std.Build, app: []const u8) *std.Build.Step.Run {
     // Every app is one page away: `?app=<name>` is the only routing there is, and the dashed spelling is what `web/shim.js` lists.
     const dashed = std.mem.replaceOwned(u8, b.allocator, app, "_", "-") catch @panic("OOM");
     const url = b.fmt("http://localhost:8080/?app={s}", .{dashed});
+    if (b.graph.host.result.os.tag == .windows) return serve_windows(b, "glinlandui", 8080, url);
     const cmd = b.addSystemCommand(&.{
         "bash", "-c",
     });
@@ -787,6 +788,20 @@ fn serve_and_print(b: *std.Build, app: []const u8) *std.Build.Step.Run {
         \\echo "glinlandui: open {s}"
         \\exec python3 -m http.server 8080 --directory zig-out/web
     , .{url}));
+    return cmd;
+}
+
+// Windows has no bash to `exec` in, and `python3` is the POSIX spelling: resolve the interpreter on PATH and let Python print the URL it serves.
+fn serve_windows(b: *std.Build, label: []const u8, port: u16, url: []const u8) *std.Build.Step.Run {
+    const python = b.findProgram(&.{ "py.exe", "python3.exe", "python.exe" }, &.{}) catch @panic("serve needs Python 3 on PATH (py, python3 or python)");
+    const cmd = b.addSystemCommand(&.{ python, "-c" });
+    cmd.addArg(b.fmt(
+        \\import functools, http.server, socketserver
+        \\print("{s}: serving zig-out/web on http://localhost:{d}", flush=True)
+        \\print("{s}: open {s}", flush=True)
+        \\handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory="zig-out/web")
+        \\socketserver.TCPServer(("127.0.0.1", {d}), handler).serve_forever()
+    , .{ label, port, label, url, port }));
     return cmd;
 }
 

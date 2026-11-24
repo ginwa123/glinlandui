@@ -93,17 +93,38 @@ pub fn app(b: *std.Build, o: Options) void {
     web_step.dependOn(&install_page.step);
     web_step.dependOn(&install_apps.step);
 
-    const serve = b.addSystemCommand(&.{ "bash", "-c" });
-    serve.addArg(b.fmt(
-        \\echo "{s}: serving zig-out/web on http://localhost:{d}"
-        \\echo "{s}: open http://localhost:{d}/?app={s}"
-        \\exec python3 -m http.server {d} --directory zig-out/web
-    , .{ o.label, o.port, o.label, o.port, o.id, o.port }));
     const serve_step = b.step("serve", b.fmt("Serve zig-out/web on http://localhost:{d}", .{o.port}));
     serve_step.dependOn(&install_wasm.step);
     serve_step.dependOn(&install_page.step);
     serve_step.dependOn(&install_apps.step);
-    serve_step.dependOn(&serve.step);
+    serve_step.dependOn(&serveCommand(b, o).step);
+}
+
+// The dev server for `zig-out/web`: bash runs python3 on a POSIX host, and Windows gets its own form because it has neither.
+fn serveCommand(b: *std.Build, o: Options) *std.Build.Step.Run {
+    const url = b.fmt("http://localhost:{d}/?app={s}", .{ o.port, o.id });
+    if (b.graph.host.result.os.tag == .windows) return serveWindows(b, o, url);
+    const cmd = b.addSystemCommand(&.{ "bash", "-c" });
+    cmd.addArg(b.fmt(
+        \\echo "{s}: serving zig-out/web on http://localhost:{d}"
+        \\echo "{s}: open {s}"
+        \\exec python3 -m http.server {d} --directory zig-out/web
+    , .{ o.label, o.port, o.label, url, o.port }));
+    return cmd;
+}
+
+// Windows has no bash to `exec` in, and `python3` is the POSIX spelling: resolve the interpreter on PATH and let Python print the URL it serves.
+fn serveWindows(b: *std.Build, o: Options, url: []const u8) *std.Build.Step.Run {
+    const python = b.findProgram(&.{ "py.exe", "python3.exe", "python.exe" }, &.{}) catch @panic("serve needs Python 3 on PATH (py, python3 or python)");
+    const cmd = b.addSystemCommand(&.{ python, "-c" });
+    cmd.addArg(b.fmt(
+        \\import functools, http.server, socketserver
+        \\print("{s}: serving zig-out/web on http://localhost:{d}", flush=True)
+        \\print("{s}: open {s}", flush=True)
+        \\handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory="zig-out/web")
+        \\socketserver.TCPServer(("127.0.0.1", {d}), handler).serve_forever()
+    , .{ o.label, o.port, o.label, url, o.port }));
+    return cmd;
 }
 
 fn dashed(b: *std.Build, id: []const u8) []const u8 {
