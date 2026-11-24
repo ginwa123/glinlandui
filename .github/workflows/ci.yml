@@ -842,6 +842,23 @@ jobs:
         with:
           version: 0.16.0
 
+      # A DESKTOP build of the library needs the platform's own libraries, even
+      # when the consumer is only running tests: the native module links Wayland
+      # and generates the protocol bindings with `wayland-scanner`. The same
+      # install the Linux job does, and for the same reason.
+      - name: Install native Linux dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            libwayland-dev \
+            libvulkan-dev \
+            pkg-config
+          scanner="$(command -v wayland-scanner)"
+          test -n "$scanner"
+          sudo ln -sf "$scanner" /usr/sbin/wayland-scanner
+
       # An example is a CONSUMER of the toolkit, not a block of the root build
       # graph: it has its own build.zig + build.zig.zon, and this job is what keeps
       # that true. If the package loses a helper the root build still passes and
