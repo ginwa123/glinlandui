@@ -831,16 +831,41 @@ jobs:
   # The bench log is uploaded on every outcome, so a red leg can be read without
   # re-running it.
   # ---------------------------------------------------------------------------
-  example-package:
-    name: Example as its own package (todo)
+  example-packages:
+    name: Example as its own package / ${{ matrix.example }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - example: demo
+            wasm: glinlandui.wasm
+          - example: calculator
+            wasm: glinlandui-calculator.wasm
+          - example: todo
+            wasm: glinlandui-todo.wasm
+          - example: catalog
+            wasm: glinlandui-catalog.wasm
+          - example: file_dialog
+            wasm: glinlandui-file-dialog.wasm
+          - example: lazy_scroll
+            wasm: glinlandui-lazy-scroll.wasm
     steps:
       - uses: actions/checkout@v4
 
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
+
+      # One cache per example: a leg must not inherit another app's artifacts.
+      - name: Cache this example's Zig caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/zig
+            examples/${{ matrix.example }}/.zig-cache
+          key: zig-example-${{ matrix.example }}-${{ hashFiles('build.zig.zon', 'examples/${{ matrix.example }}/build.zig.zon') }}
 
       # A DESKTOP build of the library needs the platform's own libraries, even
       # when the consumer is only running tests: the native module links Wayland
@@ -864,21 +889,28 @@ jobs:
       # that true. If the package loses a helper the root build still passes and
       # only this fails, which is the point.
       - name: Formatting
-        run: cd examples/todo && zig fmt --check build.zig
+        run: cd examples/${{ matrix.example }} && zig fmt --check build.zig
+
+      - name: Its own build graph builds the desktop executable
+        run: |
+          set -euo pipefail
+          cd examples/${{ matrix.example }}
+          zig build
+          test -x zig-out/bin/${{ matrix.example }}
 
       - name: Its own build graph runs its own tests
-        run: cd examples/todo && zig build test
+        run: cd examples/${{ matrix.example }} && zig build test
 
       - name: And it installs a page that serves only that app
         run: |
           set -euo pipefail
-          cd examples/todo
+          cd examples/${{ matrix.example }}
           zig build web -Doptimize=ReleaseSafe
-          test -s zig-out/web/glinlandui-todo.wasm
+          test -s zig-out/web/${{ matrix.wasm }}
           test -s zig-out/web/index.html
           test -s zig-out/web/shim.js
-          python3 -c 'import json,sys; apps=json.load(open("zig-out/web/apps.json")); sys.exit(0 if list(apps)==["todo"] else "apps.json names %r" % (apps,))'
-          echo "todo: $(wc -c < zig-out/web/glinlandui-todo.wasm) bytes, page + apps.json installed"
+          python3 -c 'import json,sys; apps=json.load(open("zig-out/web/apps.json")); sys.exit(0 if len(apps)==1 else "apps.json names %r" % (apps,))'
+          echo "${{ matrix.example }}: $(wc -c < zig-out/web/${{ matrix.wasm }}) bytes, page + apps.json installed"
 
   lazy-scroll:
     name: Lazy scroll bench / ${{ matrix.label }}

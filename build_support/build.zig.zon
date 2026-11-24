@@ -1,0 +1,10 @@
+.{
+    .name = .build_support,
+    .version = "0.1.0",
+    .fingerprint = 0xad9196293d591466,
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "app.zig",
+    },
+}

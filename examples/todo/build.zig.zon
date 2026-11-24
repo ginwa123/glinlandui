@@ -6,6 +6,7 @@
     .dependencies = .{
         // An example is a CONSUMER of the toolkit, so it names it as a dependency even when it sits inside the repo.
         .glinlandui = .{ .path = "../.." },
+        .build_support = .{ .path = "../../build_support" },
     },
     .paths = .{
         "build.zig",
