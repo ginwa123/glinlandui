@@ -19,3 +19,8 @@ Thumbs.db
 *.dylib
 *.dll
 *.exe
+
+# An example is its own package: its dependency cache and build output are not ours.
+examples/*/zig-pkg/
+examples/*/zig-out/
+examples/*/.zig-cache/

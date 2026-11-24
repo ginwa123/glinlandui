@@ -831,6 +831,38 @@ jobs:
   # The bench log is uploaded on every outcome, so a red leg can be read without
   # re-running it.
   # ---------------------------------------------------------------------------
+  example-package:
+    name: Example as its own package (todo)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      # An example is a CONSUMER of the toolkit, not a block of the root build
+      # graph: it has its own build.zig + build.zig.zon, and this job is what keeps
+      # that true. If the package loses a helper the root build still passes and
+      # only this fails, which is the point.
+      - name: Formatting
+        run: cd examples/todo && zig fmt --check build.zig
+
+      - name: Its own build graph runs its own tests
+        run: cd examples/todo && zig build test
+
+      - name: And it installs a page that serves only that app
+        run: |
+          set -euo pipefail
+          cd examples/todo
+          zig build web -Doptimize=ReleaseSafe
+          test -s zig-out/web/glinlandui-todo.wasm
+          test -s zig-out/web/index.html
+          test -s zig-out/web/shim.js
+          python3 -c 'import json,sys; apps=json.load(open("zig-out/web/apps.json")); sys.exit(0 if list(apps)==["todo"] else "apps.json names %r" % (apps,))'
+          echo "todo: $(wc -c < zig-out/web/glinlandui-todo.wasm) bytes, page + apps.json installed"
+
   lazy-scroll:
     name: Lazy scroll bench / ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
