@@ -1,0 +1,24 @@
+.{
+    .name = .glinlandui_example_todo,
+    .version = "0.1.0",
+    .fingerprint = 0x305021d8a2e5d41d,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        // An example is a CONSUMER of the toolkit, so it names it as a dependency even when it sits inside the repo.
+        .glinlandui = .{ .path = "../.." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+        "state.zig",
+        "view.zig",
+        "view_model.zig",
+        "app.zig",
+        "main.zig",
+        "web.zig",
+        "todo_test.zig",
+        "web",
+        "README.md",
+    },
+}

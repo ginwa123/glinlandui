@@ -82,35 +82,47 @@ const BUILT_IN_APPS = {
 };
 
 /**
- * The apps this PAGE serves: the built-ins, plus whatever `apps.json` beside the
- * module adds.
+ * The apps this PAGE serves: exactly the ones `apps.json` beside the module
+ * names, or the built-in list when it does not.
  *
- * A toolkit that can only run the modules compiled inside its own repository is a
- * toolkit you cannot ship with: an app in its own repo builds its own wasm module
- * and needs only a name, a file and a label to appear in `?app=`. The file is
- * optional and its absence is normal — the built-in list is what `zig build web`
- * installs, and a page without `apps.json` behaves exactly as before. A malformed
- * entry is skipped for the same reason: a page that cannot read one line of its
- * menu should still boot the apps it carries.
+ * A page that names its apps names ALL of them. Merging would hand every page the
+ * toolkit's six, on a machine where five of the files do not exist — a menu that
+ * 404s, and a `?app=` typo that boots an unrelated app because the demo happened
+ * to be first. So `apps.json` REPLACES the list: an app in its own repository gets
+ * a page that serves its module and nothing else, and the toolkit's own page (no
+ * `apps.json`, six modules installed) keeps all six.
+ *
+ * A file that cannot be read, or that names no valid entry, leaves the built-ins
+ * in place: a page that cannot parse one line of its menu should still boot the
+ * apps it carries.
  */
 async function loadApps() {
-  let extra = null;
+  let declared = null;
   try {
     const response = await fetch("apps.json", { cache: "no-cache" });
-    if (response.ok) extra = await response.json();
+    if (response.ok) declared = await response.json();
   } catch {
-    extra = null;
+    declared = null;
   }
-  if (extra === null || typeof extra !== "object") return BUILT_IN_APPS;
-  const merged = { ...BUILT_IN_APPS };
-  for (const [id, entry] of Object.entries(extra)) {
-    if (!entry || typeof entry.file !== "string" || entry.file.length === 0) continue;
-    merged[id] = { file: entry.file, label: typeof entry.label === "string" ? entry.label : id };
+  if (declared !== null && typeof declared === "object") {
+    const own = {};
+    for (const [id, entry] of Object.entries(declared)) {
+      if (!entry || typeof entry.file !== "string" || entry.file.length === 0) continue;
+      own[id] = { file: entry.file, label: typeof entry.label === "string" ? entry.label : id };
+    }
+    if (Object.keys(own).length > 0) return own;
   }
-  return merged;
+  return BUILT_IN_APPS;
 }
 
 const APPS = await loadApps();
+
+/**
+ * The first app the page serves is its default, so a one-app page opens ITS app
+ * when the URL names none, and a name the page does not serve falls back to that
+ * same app rather than to something it was never given.
+ */
+const DEFAULT_APP = Object.keys(APPS)[0];
 
 /**
  * Which application to load.
@@ -123,8 +135,8 @@ const APPS = await loadApps();
  * identical: one canvas, one status line, one set of event handlers. A second file
  * would be a copy that drifts.
  */
-const APP = (new URLSearchParams(location.search).get("app") ?? "demo").toLowerCase();
-const ENTRY = APPS[APP] ?? APPS.demo;
+const APP = (new URLSearchParams(location.search).get("app") ?? DEFAULT_APP).toLowerCase();
+const ENTRY = APPS[APP] ?? APPS[DEFAULT_APP];
 const WASM_FILE = ENTRY.file;
 
 // Mirrors `present.max_device_scale`. Clamped here as well as in Zig so the

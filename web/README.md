@@ -123,21 +123,31 @@ library, six entry points, one page:
 Add `&w=<px>&h=<px>` to any of those URLs to open the app at its desktop size
 instead of maximised: `?app=calculator&w=360&h=430`.
 
-### An app from another repository
+### An app from another repository, and an example as its own package
 
-The list above is what this repository builds, not what the page will run. A page
-also reads an optional `apps.json` beside the module, so an application built in
-its own repository — its own `build.zig`, its own wasm module, `glinlandui` as a
-dependency — appears in `?app=` without forking a line of this page:
+The list above is what this repository builds, not what a page will run. A page
+also reads an optional `apps.json` beside the module, and that file **replaces**
+the built-in list: `?app=` then offers exactly the apps the page was given, and a
+name it does not serve falls back to the first of those, never to something else.
 
 ```json
 { "fokus": { "file": "glinlandui-fokus.wasm", "label": "fokus" } }
 ```
 
-The file is merged over the built-ins, so a page with no `apps.json` behaves
-exactly as before, an entry missing `file` is skipped, and a page that cannot read
-the file still boots the apps it carries. What an external app must match is the
-ABI (`src/web/shim.h`) and the module's name here; nothing else.
+That is what lets an application live in its own repository — its own
+`build.zig`, its own wasm module, `glinlandui` as a dependency, `apps.json` beside
+the module — and it is how an example here is packaged too: `examples/todo/` has
+its own `build.zig`, `build.zig.zon` and `web/apps.json`, so
+
+```sh
+cd examples/todo && zig build test && zig build web && zig build serve
+```
+
+builds that app's module, installs this page next to it, and serves a page whose
+only app is todo. No `apps.json`, or one with no valid entry, leaves the built-ins
+in place: a page that cannot read its menu still boots the apps it carries. What
+an app must match is the ABI (`src/web/shim.h`) and the file name here — not a
+line of this page.
 
 ```sh
 zig build -Dweb run-todo        # build all modules, serve, print the URL
