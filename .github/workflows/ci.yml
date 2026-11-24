@@ -128,7 +128,7 @@ jobs:
     # Linux job above, driving the same Clay -> rasterizer -> RGBA8 pipeline
     # through CoreGraphics instead of through a Wayland/Vulkan swapchain.
     name: macOS / CPU rasterizer / Cocoa window
-    runs-on: macos-14
+    runs-on: macos-15-intel
     # Deliberately shorter than the Linux job's 25. A capped Cocoa run that
     # stops exiting is the one regression this job is most exposed to, and it
     # used to burn the full 25 minutes before failing. Fail in 10 instead.
