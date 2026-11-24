@@ -1,0 +1,22 @@
+.{
+    .name = .glinlandui_example_lazy_scroll,
+    .version = "0.1.0",
+    .fingerprint = 0x5ceac1a9ec102424,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .glinlandui = .{ .path = "../.." },
+        .build_support = .{ .path = "../../build_support" },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+        "app.zig",
+        "state.zig",
+        "view.zig",
+        "view_model.zig",
+        "main.zig",
+        "web.zig",
+        "web",
+    },
+}

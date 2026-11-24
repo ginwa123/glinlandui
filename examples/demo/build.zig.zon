@@ -1,0 +1,18 @@
+.{
+    .name = .glinlandui_example_demo,
+    .version = "0.1.0",
+    .fingerprint = 0xbc1c48d8e9b51bb0,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .glinlandui = .{ .path = "../.." },
+        .build_support = .{ .path = "../../build_support" },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+        "main.zig",
+        "web.zig",
+        "web",
+    },
+}
