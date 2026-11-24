@@ -22,7 +22,7 @@ Rules for anyone (human or agent) changing this repository.
 
 ```sh
 zig build                  # the library, the demo, and the examples
-zig build test             # the cross-platform parity suite (982 tests on macOS)
+zig build test             # the cross-platform parity suite (1234 tests; tests.lock is the count)
 zig build native-test      # Linux only: the Wayland/Vulkan backend
 zig build run              # the demo window
 zig build run-calculator   # the calculator example
@@ -208,6 +208,16 @@ leaves a speed too low to glide. The gap is measured in frames, so `Glide.pendin
 nothing would ever wake the coast — and a coast that moves nothing (the list is at its end, or no list is under the pointer) ends at once
 rather than drawing a second of identical frames. `ci/check_test_parity.sh` counts the behaviour in `core/momentum.zig` and two `host.zig`
 tests, and `web/smoke.mjs` asserts the coast in the wasm module itself.
+
+**A detent is an impulse, not a gesture, and only a measured gesture may coast.** That same coast was handed to a mouse wheel, where it
+did not belong: a WINDOWS notch is ONE `WM_MOUSEWHEEL` worth 60 points in ONE frame, macOS sends 1-3 the same way, and two notches are
+50-200 ms apart — so the 64 ms gap opens between them and every single notch bought a 3000 pt/s glide, which is 784 points of travel the
+user never asked for (844 for one 60-point notch, measured). The engine now needs `min_samples` = **3** frames of one gesture to carry a
+delta before it may invent motion of its own, with `sample_gap_s` (1/30 s) as the boundary between one gesture and the next: a continuous
+device reports on frame after frame, while a detent, a scrollbar jump and a Home key are each a single frame of delta with no speed in them
+to hand over. Three is what keeps a wheel spun by hand out (three notches inside 33 ms is 90 a second, faster than a hand turns one) while a
+trackpad flick, twenty-odd frames long, is never in doubt. `Glide.pending()` gates on the same count, so a notch no longer asks its backend
+for the four frames it used to spend on a coast that was not there.
 
 ## Dependencies
 
