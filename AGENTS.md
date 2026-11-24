@@ -219,6 +219,29 @@ to hand over. Three is what keeps a wheel spun by hand out (three notches inside
 trackpad flick, twenty-odd frames long, is never in doubt. `Glide.pending()` gates on the same count, so a notch no longer asks its backend
 for the four frames it used to spend on a coast that was not there.
 
+## Allocation discipline
+
+A dynamic allocator is not the default. Before adding or keeping one, name the owner, the lifetime, and the maximum size.
+
+- **Fixed and lifetime-known:** use a value, a static array, or `std.heap.FixedBufferAllocator` over storage that outlives every slice. Reset and reuse scratch between frames; never call the dynamic allocator's `free` on fixed storage.
+- **Configurable but usually bounded:** keep a fixed fast path and fall back to the caller's allocator only above the inline capacity. `core/frame.zig` does this for the duplicate-id set: Clay's default ceiling fits 16,384 inline slots, while a raised ceiling still works.
+- **Unbounded or externally sized:** keep the allocator. App text and undo history, font/glyph caches, image pixels, window surfaces, renderer geometry, file-dialog paths, and terminal image encoders do not have an honest compile-time maximum.
+- **Foreign-owned:** leave C shim objects, system-dialog results, and the wasm C-compat heap to their owner. A Zig fixed buffer cannot replace an API that requires `malloc`/`free`, and freeing such memory with another allocator is a bug.
+
+`FixedBufferAllocator` is a bump allocator with last-allocation reclamation, not a general heap. It is not thread-safe, and interleaved allocations with different lifetimes will exhaust it even when the total live bytes would fit. Use it for one bounded scratch block or one arena-like lifetime, not as a drop-in replacement for `smp_allocator`.
+
+The browser has exactly one UI per page, so `web/exports.zig` keeps the comptime-known `App`, key scratch, and route scratch in static storage. The terminal's nominal 80x24 headless capture uses a fixed 64 KiB buffer; this also removes the old mismatch where bytes were appended with `page_allocator` and freed with the window's allocator.
+
+Prove the boundary, not just the happy path:
+
+```sh
+zig build test --search-prefix /usr --summary all
+zig build test-tui --search-prefix /usr --summary all
+zig build web --summary all && node web/smoke.mjs
+```
+
+A fixed-buffer behavior test should use `std.testing.FailingAllocator` with `fail_index = 0` to prove the normal path performs zero heap allocations, then exercise the exact capacity and the first byte above it. Assert the observable result as well: duplicate ids are still caught, output is still correct, and exhaustion truncates or returns an error instead of panicking.
+
 ## Dependencies
 
 None. The package is std-only apart from the vendored Clay bindings and stb headers under

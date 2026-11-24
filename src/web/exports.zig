@@ -38,8 +38,11 @@ pub fn ExportsWithAssets(
         // ---- process-wide state ---- A page has exactly one UI.
 
         var g_app: ?*App = null;
+        var app_storage: App = undefined;
         var g_host: ?@import("../core/host.zig").Host = null;
         var g_window: ?window_mod.Window = null;
+        var key_scratch_storage: [key_scratch_len]u8 = .{0} ** key_scratch_len;
+        var route_scratch_storage: [route.max_path]u8 = .{0} ** route.max_path;
         var g_key_scratch: []u8 = &.{};
         var g_route_scratch: []u8 = &.{};
 
@@ -80,8 +83,7 @@ pub fn ExportsWithAssets(
             // A window starts with an empty address; the page then says where the app really is (`glin_web_location`).
             route.reset();
 
-            // The app is allocated here rather than declared as a global because its type is only known at comptime.
-            const app_ptr = alloc.create(App) catch return 0;
+            const app_ptr = &app_storage;
             app_ptr.* = .{};
             // `onCreate`: the same call every native `main.zig` makes BEFORE the Host exists, so a browser app starts started. Without it a screen whose `start` seeds the model (todo's focus, catalog's fields, lazy-scroll's pump) would draw an unstarted app.
             if (@hasDecl(App, "start")) App.start(app_ptr);
@@ -107,13 +109,11 @@ pub fn ExportsWithAssets(
             host.win_h = @import("../core/frame.zig").contentHeight(win.state.win_h);
             g_window = win;
 
-            const scratch = alloc.alloc(u8, key_scratch_len) catch return 0;
-            scratch[0] = 0;
-            g_key_scratch = scratch;
+            key_scratch_storage[0] = 0;
+            g_key_scratch = &key_scratch_storage;
 
-            const route_scratch = alloc.alloc(u8, route.max_path) catch return 0;
-            route_scratch[0] = 0;
-            g_route_scratch = route_scratch;
+            route_scratch_storage[0] = 0;
+            g_route_scratch = &route_scratch_storage;
 
             // A page reloads with the document it stored, so a fresh window starts with nothing adopted and nothing owed.
             store.reset();

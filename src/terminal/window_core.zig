@@ -33,9 +33,21 @@ const key_ctrl: u32 = 29;
 const key_c: u32 = 46;
 const key_q: u32 = 16;
 
+const capture_cap: usize = 64 * 1024;
+const Capture = struct {
+    buf: [capture_cap]u8 = undefined,
+    len: usize = 0,
+
+    fn append(self: *Capture, bytes: []const u8) void {
+        const n = @min(bytes.len, self.buf.len - self.len);
+        @memcpy(self.buf[self.len..][0..n], bytes[0..n]);
+        self.len += n;
+    }
+};
+
 fn appendToBuffer(ctx: ?*anyopaque, bytes: []const u8) void {
-    const buf: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx.?));
-    buf.appendSlice(std.heap.page_allocator, bytes) catch {};
+    const buf: *Capture = @ptrCast(@alignCast(ctx.?));
+    buf.append(bytes);
 }
 
 /// A window over one console implementation: `console` must expose open/enableRaw/disableRaw/size/read/write/close.
@@ -248,8 +260,7 @@ pub fn Window(comptime console: type) type {
             const h = term.layoutHeight(rows);
             text_face.setCellMetrics(.{ .w = @floatFromInt(term.cell_w), .h = @floatFromInt(term.cell_h) });
             defer text_face.setCellMetrics(null);
-            var buf = std.ArrayList(u8){};
-            defer buf.deinit(self.alloc);
+            var buf = Capture{};
             renderer.attach(.{
                 .sink = .{ .ctx = &buf, .write = appendToBuffer },
                 .cols = cols,
@@ -261,10 +272,20 @@ pub fn Window(comptime console: type) type {
             const d = self.delegate orelse return .{ .width = w, .height = h, .painted_pixels = 0 };
             d.on_frame(d.ptr, w, h);
             var painted: usize = 0;
-            for (buf.items) |b| {
+            for (buf.buf[0..buf.len]) |b| {
                 if (b > ' ' and b < 0x7f) painted += 1;
             }
             return .{ .width = w, .height = h, .painted_pixels = painted };
         }
     };
+}
+
+test "headless capture stops at its fixed capacity instead of growing" {
+    var capture = Capture{};
+    const chunk = [_]u8{'x'} ** 1024;
+    for (0..65) |_| capture.append(&chunk);
+    try std.testing.expectEqual(@as(usize, capture_cap), capture.len);
+    try std.testing.expectEqualSlices(u8, &chunk, capture.buf[capture_cap - chunk.len ..]);
+    capture.append("ignored");
+    try std.testing.expectEqual(@as(usize, capture_cap), capture.len);
 }

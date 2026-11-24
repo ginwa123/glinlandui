@@ -537,6 +537,9 @@ pub fn checkFrameBudget() void {
 const IdSlot = struct { key: u64 = 0, gen: u32 = 0 };
 
 // Sized from Clay's own element ceiling in `prepareIdSet`: the set used to be a fixed 4096 slots and went blind, silently, one id past it.
+const id_set_inline_cap: usize = 16384;
+var id_set_inline: [id_set_inline_cap]IdSlot = undefined;
+var id_set_inline_alloc: std.heap.FixedBufferAllocator = .init(std.mem.asBytes(&id_set_inline));
 var id_slots: []IdSlot = &.{};
 var id_slot_mask: u64 = 0;
 var id_slot_alloc: ?std.mem.Allocator = null;
@@ -552,11 +555,23 @@ fn idKey(id: cl.ElementId) u64 {
     return if (h == 0) 1 else h;
 }
 
-/// Size the duplicate-id set for a frame that may claim `elements` ids: a power of two above that ceiling, allocated from `alloc` and replaced on every call.
+/// Size the duplicate-id set for a frame that may claim `elements` ids: fixed storage covers Clay's default ceiling, and a larger ceiling falls back to `alloc`.
 pub fn prepareIdSet(alloc: std.mem.Allocator, elements: usize) !void {
     deinitIdSet();
     var cap: usize = 16;
-    while (cap <= elements) cap <<= 1;
+    while (cap <= elements) {
+        if (cap > std.math.maxInt(usize) / 2) return error.OutOfMemory;
+        cap *= 2;
+    }
+    if (cap <= id_set_inline_cap) {
+        id_set_inline_alloc.reset();
+        const slots = id_set_inline_alloc.allocator().alloc(IdSlot, cap) catch @panic("fixed id-set capacity");
+        @memset(slots, .{});
+        id_slots = slots;
+        id_slot_mask = cap - 1;
+        id_gen = 1;
+        return;
+    }
     const slots = try alloc.alloc(IdSlot, cap);
     @memset(slots, .{});
     id_slots = slots;
@@ -570,6 +585,7 @@ pub fn deinitIdSet() void {
     if (id_slot_alloc) |alloc| {
         if (id_slots.len > 0) alloc.free(id_slots);
     }
+    id_set_inline_alloc.reset();
     id_slots = &.{};
     id_slot_mask = 0;
     id_slot_alloc = null;
@@ -649,8 +665,13 @@ test "the duplicate check still names a duplicate past 4096 unique ids" {
     // The shared headless canvas, not one of this test's own: Clay keeps a global context pointer, and a test that frees its arena leaves later tests reading freed memory.
     const headless = @import("testing/headless.zig");
     headless.begin(.{ .x = 99999, .y = 99999 }, false);
-    try prepareIdSet(std.testing.allocator, @intCast(@max(1, cl.getMaxElementCount())));
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    try prepareIdSet(failing.allocator(), @intCast(@max(1, cl.getMaxElementCount())));
     defer deinitIdSet();
+    try std.testing.expectEqual(@as(usize, 0), failing.allocations);
+    deinitIdSet();
+    try prepareIdSet(failing.allocator(), @intCast(@max(1, cl.getMaxElementCount())));
+    try std.testing.expectEqual(@as(usize, 0), failing.allocations);
     cl.on_element = claimId;
     cl.on_begin_frame = resetIds;
     defer {
@@ -669,6 +690,24 @@ test "the duplicate check still names a duplicate past 4096 unique ids" {
     _ = cl.endLayout();
 
     try std.testing.expectEqual(@as(usize, 1), dup_hits);
+}
+
+test "the duplicate-id set falls back to the caller allocator above its fixed capacity" {
+    const headless = @import("testing/headless.zig");
+    headless.begin(.{ .x = 99999, .y = 99999 }, false);
+    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    try prepareIdSet(counting.allocator(), id_set_inline_cap);
+    defer deinitIdSet();
+    try std.testing.expectEqual(@as(usize, 1), counting.allocations);
+    duplicate_id_sink = countDup;
+    defer duplicate_id_sink = null;
+    dup_hits = 0;
+    const id = cl.getElementId("fixed-capacity-fallback");
+    claimId(id);
+    claimId(id);
+    try std.testing.expectEqual(@as(usize, 1), dup_hits);
+    deinitIdSet();
+    try std.testing.expectEqual(@as(usize, 1), counting.deallocations);
 }
 
 var capacity_hits: usize = 0;
